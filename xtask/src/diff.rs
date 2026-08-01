@@ -477,13 +477,23 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
     println!();
     println!("  {passed} passed, {failed} failed, {skipped} skipped");
 
-    if skipped == results.len() {
+    if skipped == results.len() && !results.is_empty() {
         println!();
-        println!(
-            "Everything skipped. That is the expected M0 state: mt_md::dump_state is a\n\
-             stub until M2. The harness itself is running — when the Rust side starts\n\
-             answering, correctness becomes a boolean with no change to this harness."
-        );
+        // Say which side was missing. "Everything skipped" for the wrong
+        // reason is how a harness quietly stops testing anything.
+        if ts_states.is_none() {
+            println!(
+                "Everything skipped because the TypeScript reference engine was not\n\
+                 available — nothing was compared. Pass --require-ts to make that a\n\
+                 failure instead of a skip; CI does."
+            );
+        } else {
+            println!(
+                "Everything skipped. That is the expected M0 state: mt_md::dump_state is a\n\
+                 stub until M2. The harness itself is running — when the Rust side starts\n\
+                 answering, correctness becomes a boolean with no change to this harness."
+            );
+        }
     }
 
     Ok(if failed > 0 { 1 } else { 0 })

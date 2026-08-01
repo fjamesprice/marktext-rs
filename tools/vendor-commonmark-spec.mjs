@@ -43,20 +43,22 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+// An explicitly named directory is authoritative — see the same function in
+// tools/diff/dump-ts-state.mjs for why falling back would be worse than
+// failing.
 function resolveMarktextDir(explicit) {
-    const candidates = [
-        explicit,
-        process.env.MARKTEXT_DIR,
-        path.resolve(repoRoot, '..', 'marktext'),
-    ].filter(Boolean);
+    const named = explicit ?? process.env.MARKTEXT_DIR;
+    const candidate = named ?? path.resolve(repoRoot, '..', 'marktext');
 
-    for (const candidate of candidates) {
-        if (fs.existsSync(path.join(candidate, 'packages', 'muya', 'package.json')))
-            return path.resolve(candidate);
-    }
+    if (fs.existsSync(path.join(candidate, 'packages', 'muya', 'package.json')))
+        return path.resolve(candidate);
+
     throw new Error(
-        `could not find the marktext clone. Tried:\n${candidates.map(c => `  - ${c}`).join('\n')}\n`
-        + 'Set MARKTEXT_DIR or pass --marktext <DIR>.',
+        named
+            ? `${explicit ? '--marktext' : '$MARKTEXT_DIR'} points at ${named}, `
+              + 'which does not contain packages/muya/package.json.'
+            : `could not find the marktext clone at ${candidate}.\n`
+              + 'Set MARKTEXT_DIR or pass --marktext <DIR>.',
     );
 }
 

@@ -105,17 +105,22 @@ function parseArgs(argv) {
 /**
  * Locate the marktext clone.
  *
- * Resolution order is explicit-flag, then $MARKTEXT_DIR, then a sibling
- * directory. The sibling default is what makes `cargo xtask diff` work with
- * no configuration on a developer machine that has both repos checked out
- * next to each other.
+ * `--marktext` beats `$MARKTEXT_DIR` beats a sibling `../marktext`. The
+ * sibling default is what makes `cargo xtask diff` work with no configuration
+ * on a machine that has both repositories checked out next to each other.
+ *
+ * An *explicitly named* directory is authoritative: if it does not contain the
+ * engine, that is an error, not a cue to go looking elsewhere. Falling back
+ * would mean a typo in $MARKTEXT_DIR — or a CI checkout that landed in the
+ * wrong place — silently compares against a different engine than the one
+ * that was asked for, which is worse than failing.
  */
 function resolveMarktextDir(explicit) {
-    const candidates = [
-        explicit,
-        process.env.MARKTEXT_DIR,
-        path.resolve(repoRoot, '..', 'marktext'),
-    ].filter(Boolean);
+    const named = explicit ?? process.env.MARKTEXT_DIR;
+    const source = explicit ? '--marktext' : '$MARKTEXT_DIR';
+    const candidates = named
+        ? [named]
+        : [path.resolve(repoRoot, '..', 'marktext')];
 
     for (const candidate of candidates) {
         const muyaSrc = path.join(candidate, 'packages', 'muya', 'src', 'state', 'markdownToState.ts');
@@ -123,10 +128,12 @@ function resolveMarktextDir(explicit) {
             return path.resolve(candidate);
     }
 
-    const tried = candidates.map(c => `  - ${c}`).join('\n');
     throw new EngineUnavailable(
-        `could not find the marktext clone. Tried:\n${tried}\n`
-        + 'Set MARKTEXT_DIR or pass --marktext <DIR>.',
+        named
+            ? `${source} points at ${named}, which does not contain `
+              + 'packages/muya/src/state/markdownToState.ts.'
+            : `could not find the marktext clone at ${candidates[0]}.\n`
+              + 'Set MARKTEXT_DIR or pass --marktext <DIR>.',
     );
 }
 
