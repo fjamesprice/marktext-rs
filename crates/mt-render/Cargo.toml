@@ -1,0 +1,11 @@
+[package]
+name = "mt-render"
+description = "Display list to pixels: GPU (vello/wgpu) with a CPU (tiny-skia) fallback."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mt-layout.workspace = true

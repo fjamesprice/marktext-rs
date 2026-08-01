@@ -1,0 +1,6 @@
+[toolchain]
+# Pinned to the stable channel rather than a fixed version: the plan's floor is
+# rust-version = "1.85" (edition 2024 + resolver 3), and CI should surface new
+# clippy lints as they land rather than freezing at a known-green compiler.
+channel = "stable"
+components = ["rustfmt", "clippy"]

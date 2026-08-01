@@ -1,0 +1,10 @@
+[package]
+name = "mt-diagram"
+description = "Native diagram subset (flowchart, sequence) plus passthrough encoders."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

@@ -1,0 +1,11 @@
+[package]
+name = "mt-md"
+description = "Markdown to Document and back. Round-trip fidelity is this crate's contract."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mt-doc.workspace = true

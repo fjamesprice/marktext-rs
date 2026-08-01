@@ -1,0 +1,13 @@
+# LF everywhere, in the repository and in the working tree on every platform.
+#
+# This is not a style preference. `bench/corpus/` is byte-exact test data
+# verified by `cargo xtask corpus --check`, `spec/fixtures/` are conformance
+# fixtures whose expected HTML is compared literally, and the differential
+# harness (§11.2) normalises CRLF to LF on both sides because muya normalises
+# to LF internally. A checkout that rewrote line endings on Windows would make
+# all three subtly platform-dependent.
+* text=auto eol=lf
+
+# Generated fixtures: large, and not useful to read in a diff.
+spec/fixtures/*.json linguist-generated=true -diff
+bench/corpus/*.md linguist-generated=true -diff

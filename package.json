@@ -1,0 +1,20 @@
+{
+  "name": "marktext-rs-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Node-side tooling for marktext-rs: the TypeScript half of the differential-test harness (RUST-REWRITE-PLAN.md §11.2) and the CommonMark fixture vendoring step. Not part of the shipped application — the application is the Cargo workspace.",
+  "packageManager": "pnpm@10.33.4",
+  "engines": {
+    "node": ">=20.19.0",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "dump-ts-state": "node --import tsx tools/diff/dump-ts-state.mjs",
+    "vendor-commonmark-spec": "node tools/vendor-commonmark-spec.mjs",
+    "diff": "node tools/diff/compare.mjs"
+  },
+  "devDependencies": {
+    "tsx": "^4.22.4"
+  }
+}

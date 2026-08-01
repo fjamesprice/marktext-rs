@@ -1,0 +1,10 @@
+[package]
+name = "mt-inline"
+description = "Inline tokenizer: a faithful port of muya's inlineRenderer/lexer.ts. Pure."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

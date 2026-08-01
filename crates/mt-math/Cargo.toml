@@ -1,0 +1,10 @@
+[package]
+name = "mt-math"
+description = "TeX layout for inline and block math."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

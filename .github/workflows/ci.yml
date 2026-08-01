@@ -1,0 +1,144 @@
+name: CI
+
+# RUST-REWRITE-PLAN.md §14 step 1: "CI on Windows, macOS, Linux from commit
+# one." The M0 exit gate (§9) is `cargo test` green in CI on all three
+# platforms.
+#
+# The differential harness (§11.2) runs here too, from day one, because that is
+# the whole point of building it at M0 rather than after `mt-inline`.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Note: warnings are denied via `cargo clippy -- -D warnings`, not via a
+  # global RUSTFLAGS. A global `-D warnings` also applies to third-party
+  # dependencies, which turns any new lint in a future compiler into a CI
+  # failure in code this project does not own.
+
+  # The TypeScript reference engine for the differential harness.
+  #
+  # Pinned to a commit rather than a branch so a CI failure is always about
+  # this repository's change, never about the reference engine moving
+  # underneath it. Bump deliberately, in its own commit.
+  #
+  # §13 R9 ("upstream MarkText keeps moving") makes this the parity-freeze
+  # point: at M2 start this becomes the frozen upstream tag, and new upstream
+  # features become post-v1 backlog rather than scope creep.
+  MARKTEXT_REPO: fjamesprice/marktext
+  MARKTEXT_REF: e52106fd1cdcbd33c1258b7b0cdc7013c4c5d86c
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+            # Windows ships first (§9), so it is the platform whose failures
+            # block hardest.
+          - os: macos-latest
+            name: macos
+          - os: ubuntu-latest
+            name: linux
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The muya TypeScript engine, checked out as a sibling so that
+      # tools/diff/dump-ts-state.mjs finds it with no configuration. The
+      # repository is public, so no token is needed.
+      - name: Checkout the TypeScript reference engine
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MARKTEXT_REPO }}
+          ref: ${{ env.MARKTEXT_REF }}
+          path: marktext
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          # rust-toolchain.toml pins the channel; this makes sure the
+          # components it asks for are present on every runner image.
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # ---- the three gates from the definition of done --------------------
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      # ---- the harnesses --------------------------------------------------
+
+      - name: Build mt-cli
+        # `cargo xtask diff` shells out to this binary; building it explicitly
+        # keeps the failure ("mt-cli not found") from looking like a harness bug.
+        run: cargo build -p mt-cli
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install pnpm
+        # `npm install -g` rather than `corepack enable`, which needs write
+        # access to the Node installation directory and is not reliably
+        # available across the three runner images.
+        run: npm install -g pnpm@10.33.4
+
+      - name: Install harness dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install the TypeScript engine's dependencies
+        # Only @muyajs/core, and with scripts off: the full workspace install
+        # pulls Electron (~120 MB) and rebuilds native modules against its ABI,
+        # none of which the differential harness touches.
+        working-directory: marktext
+        run: pnpm install --filter @muyajs/core --ignore-scripts
+
+      - name: Verify the vendored CommonMark fixtures are current
+        # spec/fixtures/commonmark-spec-0.31.json is generated, not copied —
+        # see tools/vendor-commonmark-spec.mjs for why. Drift here silently
+        # changes what the conformance ratchet measures.
+        run: node tools/vendor-commonmark-spec.mjs --check --marktext marktext
+
+      - name: xtask CI (deps, corpus, conformance §11.1, differential §11.2)
+        env:
+          MARKTEXT_DIR: ${{ github.workspace }}/marktext
+        # --require-ts turns a missing reference engine into a hard failure
+        # rather than a silent skip. Without it, a broken checkout step would
+        # quietly reduce the differential harness to a no-op that still
+        # reports green — which is the one failure mode that would make the
+        # whole §11.2 investment worthless.
+        run: cargo xtask ci --require-ts

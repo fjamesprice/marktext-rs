@@ -1,0 +1,10 @@
+[package]
+name = "mt-export"
+description = "HTML and PDF emitters. PDF routes through mt-layout so export matches screen."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

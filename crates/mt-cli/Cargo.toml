@@ -1,0 +1,16 @@
+[package]
+name = "mt-cli"
+description = "Command-line entry point: argv handling, headless convert, --dump-state."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "mt-cli"
+path = "src/main.rs"
+
+[dependencies]
+mt-doc.workspace = true
+mt-md.workspace = true

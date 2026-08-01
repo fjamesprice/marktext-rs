@@ -1,0 +1,12 @@
+[package]
+name = "mt-layout"
+description = "Block flow plus inline layout, producing a positioned display list. No GPU."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mt-doc.workspace = true
+mt-inline.workspace = true

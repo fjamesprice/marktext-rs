@@ -1,0 +1,10 @@
+[package]
+name = "mt-ui"
+description = "Retained-mode widget layer: tabs, sidebar, palette, floats, AccessKit tree."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

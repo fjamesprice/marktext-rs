@@ -1,0 +1,8 @@
+/target/
+node_modules/
+
+# The differential harness checks out the TypeScript engine here in CI.
+/marktext/
+
+*.pdb
+.DS_Store

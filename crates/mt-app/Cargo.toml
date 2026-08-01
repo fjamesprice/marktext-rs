@@ -1,0 +1,10 @@
+[package]
+name = "mt-app"
+description = "winit shell: window, menus, keybindings, preferences, session."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

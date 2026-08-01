@@ -1,0 +1,10 @@
+[package]
+name = "mt-doc"
+description = "Document model, per-block text buffers, invertible edits, undo. No I/O, no UI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
