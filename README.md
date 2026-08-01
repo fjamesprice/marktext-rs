@@ -125,6 +125,7 @@ Node-side: `tsx`, to load muya's TypeScript.
 | [`docs/RUST-REWRITE-PLAN.md`](docs/RUST-REWRITE-PLAN.md) | The build plan. Authoritative. |
 | [`docs/NATIVE-REWRITE-PLAN.md`](docs/NATIVE-REWRITE-PLAN.md) | Rationale record: alternatives considered, why Tauri was rejected, the incremental fallback. Superseded on the stack question. |
 | [`docs/M0.md`](docs/M0.md) | What M0 delivered, and the decisions taken that the plan did not cover. |
+| [`docs/M1.md`](docs/M1.md) | The working plan for M1 — the `mt-inline` tokenizer port. Current. |
 | [`spec/README.md`](spec/README.md) | The conformance ratchet, and how it turns on at M2. |
 | [`bench/corpus/README.md`](bench/corpus/README.md) | Corpus provenance. |
 | [`tools/diff/README.md`](tools/diff/README.md) | The differential harness. |
