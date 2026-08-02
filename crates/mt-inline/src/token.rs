@@ -40,6 +40,13 @@
 //! so it does. `None` serializes as `""` at the wire boundary, which keeps the
 //! comparison against TypeScript exact while retaining information muya throws
 //! away. Groups that always participate are a plain [`Span`].
+//!
+//! **Two fields are exceptions and serialize as `undefined`**, because muya
+//! writes them without the `|| ''`: [`CodeEmojiMath::backlash`]
+//! (`lexer.ts:227`) and [`ReferenceDefinition::left_title_space`]
+//! (`lexer.ts:102`). Both are noted where they are declared. They matter only
+//! at the wire boundary, and S3 found the first of them by diffing token
+//! streams against the running engine.
 
 use std::ops::Range;
 
@@ -453,6 +460,15 @@ pub struct CodeEmojiMath {
     /// Capture 2.
     pub content: Span,
     /// Capture 3 — `inline_math` only.
+    ///
+    /// **The one field whose wire form is `undefined` rather than `""`.**
+    /// This module's header says an absent optional group serializes as `""`,
+    /// because muya writes `to[3] || ''` in a dozen places — but not here:
+    /// `lexer.ts:227` writes a bare `backlash: to[3]`, so an `inline_code` or
+    /// `emoji` token really does carry `undefined`. Found at S3 by diffing
+    /// token streams against the running engine, where a dumper that assumed
+    /// the general rule reported ten false disagreements.
+    /// [`ReferenceDefinition::left_title_space`] is the only other exception.
     pub backlash: Option<Span>,
 }
 

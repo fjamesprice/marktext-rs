@@ -63,13 +63,21 @@
 //! `tests::every_entry_is_skipped_until_the_harness_compares_token_streams`
 //! fails on that day and tells whoever hits it to delete it.
 //!
-//! S2 did the comparison by hand instead — muya's `tokenizer` loaded directly
-//! and its token streams diffed field by field against the port's over 207
-//! inputs — and it widened `emoji-nested-boundary` from two registered inputs
-//! to seven. That is rule 1 working (an unregistered disagreement is a
-//! failure, so a class wider than its entry must widen the entry) and it is
-//! also the argument for building the comparator: a hand-run finds this once,
-//! a harness finds it every time.
+//! S2 and S3 did the comparison by hand instead — muya's `tokenizer` loaded
+//! directly and its token streams diffed field by field against the port's,
+//! over 207 inputs and then 319 — and between them they widened
+//! `emoji-nested-boundary` from two registered inputs to seven and then to
+//! twelve. That is rule 1 working (an unregistered disagreement is a failure,
+//! so a class wider than its entry must widen the entry) and it is also the
+//! argument for building the comparator: a hand-run finds this once, a harness
+//! finds it every time.
+//!
+//! S3's widening makes the argument sharper than S2's did. The five inputs it
+//! added are the **opposite direction** of the same bug — muya keeping an
+//! emoji the port suppresses, rather than losing one it keeps — and one of
+//! them, `*a:smile:*`, was reachable at S2 and missed, because every input the
+//! S2 run tried put a space before the `:` and so only ever probed the losing
+//! direction. A register is only as wide as the inputs someone thought to try.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -781,16 +789,24 @@ mod tests {
             "**:smile:**",
             "<subtitle>",
             "<scripty>",
-            // the same divergence, found wider at S2
+            // the same divergence, found wider at S2 — muya LOSES an emoji
             "__a :smile:__",
             "~~a :smile:~~",
             "**:100:**",
             "**a :smile: b**",
             "**abcdefgh :smile:**",
+            // …and wider again at S3, in the opposite direction: at a rule
+            // whose base is 1 muya reads the `:` itself, so the word-boundary
+            // guard never fires and it KEEPS an emoji the port suppresses.
+            "[a:smile:](u)",
+            "[12:00-14:00](u)",
+            "[x:100:](u)",
+            "*a:smile:*",
+            "[[a:smile:]](u)",
         ] {
             assert!(inputs.contains(expected), "{expected:?} is not registered");
         }
-        assert_eq!(inputs.len(), 9);
+        assert_eq!(inputs.len(), 14);
     }
 
     /// Asserted so that the day it changes is the day someone deliberately

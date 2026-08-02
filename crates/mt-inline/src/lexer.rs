@@ -1,27 +1,29 @@
 //! The tokenizer loop — a port of `inlineRenderer/lexer.ts`.
 //!
-//! # What is here at S2
+//! # What is here at S3
 //!
-//! The loop, `pushPending`, `consumeBeginRules`, the ordered
+//! The loop, `pushPending`, `consumeBeginRules` — both halves of it now,
+//! including [`consume_reference_definition`] — the ordered
 //! [`INLINE_HANDLERS`] array, and thirteen of its sixteen handlers: the nine
 //! plain ones from S1 (`header` `hr` `code_fence` `multiple_math`
 //! `tail_header` `backlash` `html_escape` `soft_line_break`
-//! `hard_line_break`) plus S2's four — [`try_strong_em`], [`try_chunks`],
-//! [`try_super_sub_script`] and [`try_footnote`], which between them produce
-//! eight of the 26 token types. The remaining three ([`try_image`],
-//! [`try_link`] and friends, [`try_html_tag`], the two autolinks) are present,
-//! in their exact precedence positions, and return `false`. Each says which
-//! stage fills it in.
+//! `hard_line_break`), S2's four ([`try_strong_em`], [`try_chunks`],
+//! [`try_super_sub_script`], [`try_footnote`]) and S3's four
+//! ([`try_image`], [`try_link`], [`try_reference_link`],
+//! [`try_reference_image`]). The remaining three ([`try_html_tag`] and the two
+//! autolinks) are present, in their exact precedence positions, and return
+//! `false`. Each says which stage fills it in.
 //!
 //! That is not a placeholder pattern for its own sake. **The array order is
 //! the rule-precedence contract** (`lexer.ts:790`, and the TypeScript carries
 //! a comment saying so), so it is written down once, in full, and stages 3–5
 //! fill in bodies rather than rearranging entries.
 //!
-//! # Nesting starts here
+//! # Nesting
 //!
 //! S2 is the first stage in which [`tokenizer_fac`] calls itself: `strong`,
-//! `em` and `del` tokenize their content group as a child level. Two
+//! `em` and `del` tokenize their content group as a child level, and S3 adds
+//! `link` and `reference_link`, which tokenize their anchor. Two
 //! consequences worth knowing before reading a handler:
 //!
 //! - **Child spans are absolute.** A nested call is given the capture group's
@@ -60,9 +62,13 @@
 //! that is not obvious, which is D3 site 3.
 
 use crate::emphasis::{is_length_even, is_word_character, lower_priority, validate_emphasize};
+use crate::link::{correct_url, encode_backslash_run, parse_src_and_title};
 use crate::rules::{self, RuleId, exec, rule};
-use crate::token::{BeginRule, CodeEmojiMath, Emphasis, Span, Token, TokenKind};
-use crate::{SyntaxOptions, TokenizerOptions};
+use crate::token::{
+    BacklashPair, BeginRule, CodeEmojiMath, Emphasis, Image, ImageAttrs, Link, ReferenceDefinition,
+    ReferenceImage, ReferenceLink, Span, Token, TokenKind,
+};
+use crate::{Labels, SyntaxOptions, TokenizerOptions};
 
 use fancy_regex::Captures;
 
@@ -81,7 +87,6 @@ use fancy_regex::Captures;
 /// - `options` — muya carries the whole options object only so that it can be
 ///   passed down to a nested `tokenizerFac`; the two fields any handler reads
 ///   are `superSubScript` and `footnote`, which are [`syntax`](Self::syntax).
-/// - `labels` — arrives with `tryReferenceLink`, in S3.
 pub(crate) struct LexState<'a> {
     /// The whole top-level block text. Every [`Span`] this crate produces is
     /// an offset into *this*, at every nesting depth.
@@ -133,6 +138,17 @@ pub(crate) struct LexState<'a> {
     /// it, and both gates are load-bearing — `footnote` is `false` by default,
     /// so `[^1]` is plain text unless a caller asks otherwise.
     syntax: SyntaxOptions,
+    /// muya's `state.labels` — the document's reference definitions, keyed
+    /// **lowercase**, threaded down every nested call unchanged.
+    ///
+    /// S1 and S2 left this out rather than carry a dead field, the same way
+    /// [`syntax`](Self::syntax) was left out until S2 needed it. S3 is where
+    /// it starts being read: [`try_reference_link`] and
+    /// [`try_reference_image`] are gated on the label being *defined*, so with
+    /// an empty map — the default — `[text][ref]` is plain text. That is
+    /// CommonMark §6.5 and it is what
+    /// `does_not_emit_reference_link_when_the_label_is_undefined` asserts.
+    labels: &'a Labels,
 }
 
 impl<'a> LexState<'a> {
@@ -315,12 +331,61 @@ fn consume_begin_rules(state: &mut LexState<'_>) {
 
 /// The `reference_definition` half of `consumeBeginRules` (`lexer.ts:90`).
 ///
-/// **S3.** It is gated on `isLengthEven(def[3])` and fills eleven fields, one
-/// per capture group; it lands with the rest of the link machinery rather than
-/// with the four plain begin rules, which is where M1.md §6 puts it. Until
-/// then a definition line tokenizes as text, which tiles correctly and is
-/// exactly what any not-yet-implemented rule does.
-fn consume_reference_definition(_state: &mut LexState<'_>) {}
+/// `[label]: <href> "title"` — eleven capture groups, eleven fields, and the
+/// mapping is one to one. Runs *after* the four-rule loop above and on
+/// whatever that loop left behind, which is muya's order; the five patterns
+/// are mutually exclusive in practice, so nothing turns on it.
+///
+/// Gated on `isLengthEven(def[3])`: an odd run of backslashes before the `]`
+/// escapes it, so the label never closes and the line is not a definition.
+///
+/// # Three groups that always participate, and three that need not
+///
+/// muya writes `def[5] || ''`, `def[7] || ''` and `def[11] || ''`, which reads
+/// as though those groups can be absent. They cannot: `(<?)`, `(>?)` and
+/// `( *)$` all match the empty string rather than failing, so they are plain
+/// [`Span`]s here. The three that really are optional sit inside
+/// `(?:( +)(["'(]?)([^\n"'()]+)\9)?` and are `Option<Span>`.
+///
+/// **`leftTitleSpace` is where `types.ts` is wrong.** It declares
+/// `leftTitleSpace: string`, but capture 8 is inside that optional group and
+/// `lexer.ts:102` reads it with no `|| ''` fallback — so the field really is
+/// `undefined` on every definition without a title. `token.rs` records it as
+/// `Option<Span>` and this keeps the `Option`.
+fn consume_reference_definition(state: &mut LexState<'_>) {
+    let id = RuleId::ReferenceDefinition;
+    let Some(caps) = exec(rule(id), state.rest()) else {
+        return;
+    };
+
+    let backlash = state.required(&caps, 3, id);
+    if !is_length_even(Some(backlash)) {
+        return;
+    }
+
+    let whole = state.required(&caps, 0, id);
+    let definition = ReferenceDefinition {
+        left_bracket: state.required(&caps, 1, id),
+        label: state.required(&caps, 2, id),
+        backlash,
+        right_bracket: state.required(&caps, 4, id),
+        left_href_marker: state.required(&caps, 5, id),
+        href: state.required(&caps, 6, id),
+        right_href_marker: state.required(&caps, 7, id),
+        left_title_space: state.group(&caps, 8),
+        title_marker: state.group(&caps, 9),
+        title: state.group(&caps, 10),
+        right_title_space: state.required(&caps, 11, id),
+    };
+
+    // No `push_pending`: this runs before the loop, so nothing has
+    // accumulated — either at offset 0 or immediately after a begin rule,
+    // which pushes its token directly too.
+    state
+        .tokens
+        .push(leaf(TokenKind::ReferenceDefinition(definition), whole));
+    state.pos = whole.end;
+}
 
 // ---------------------------------------------------------------------------
 // The handlers, in `INLINE_HANDLERS` order
@@ -448,7 +513,7 @@ fn try_strong_em(state: &mut LexState<'_>) -> bool {
         // the pattern ever grew something between them the two would silently
         // disagree and every child span would be shifted.
         debug_assert_eq!(content.start, marker.end);
-        let children = tokenizer_fac(origin, content, false, false, state.syntax);
+        let children = tokenizer_fac(origin, content, false, false, state.labels, state.syntax);
 
         state.emit(
             into_kind(Emphasis {
@@ -522,7 +587,7 @@ fn try_chunks(state: &mut LexState<'_>) -> bool {
             debug_assert_eq!(content.start, marker.end);
             TokenKind::Del(Emphasis {
                 marker,
-                children: tokenizer_fac(origin, content, false, false, state.syntax),
+                children: tokenizer_fac(origin, content, false, false, state.labels, state.syntax),
                 backlash: state.required(&caps, 3, id),
             })
         } else {
@@ -632,25 +697,286 @@ fn try_footnote(state: &mut LexState<'_>) -> bool {
     true
 }
 
-/// `tryImage` (`lexer.ts:315`). **S3** — needs `correctUrl` and
-/// `parseSrcAndTitle`.
-fn try_image(_state: &mut LexState<'_>) -> bool {
-    false
+/// `tryImage` (`lexer.ts:315`) — `![alt](src "title")`.
+///
+/// # `correctUrl` runs before the guard, and rewrites what the guard reads
+///
+/// muya calls `correctUrl(imageTo)` on the line *after* `exec` and *before*
+/// the `if`, and `correctUrl` mutates the match array in place. So
+/// `isLengthEven(imageTo[5])` tests a group that may have been invented a
+/// moment earlier out of the tail of group 4, and `imageTo[0].length` — which
+/// becomes both `raw` and the advance — is the shortened length. That
+/// ordering is reproduced here by correcting first and reading
+/// [`crate::link::Destination`] everywhere afterwards; validating the raw
+/// capture groups instead is the silent version of the bug, because it accepts
+/// exactly the same images and truncates none of them.
+///
+/// # No `lowerPriority` at all — reproduced, and worth a second look upstream
+///
+/// [`try_link`] and [`try_reference_link`] pass `linkValidateRules` to
+/// `lowerPriority`; the two image handlers do not call it. That is muya, and
+/// §3 rule 3 makes muya the definition, so it is reproduced — measured, too:
+/// `![foo`](/uri)`` is an `image` in both engines.
+///
+/// It is worth being precise about *why*, because the obvious justification is
+/// wrong. One might say an image opens with `![`, which no rule in the veto
+/// set can also open with, so there is nothing to defer to. But `lowerPriority`
+/// scans every position **inside** the candidate, not just its first, and
+/// `![foo`](/uri)`` has a code span that starts inside the image and ends past
+/// its closer — exactly the shape CommonMark example 521 refuses for the link
+/// form `[foo`](/uri)``, which muya *does* refuse. So the asymmetry is
+/// observable and it is a deviation from CommonMark §6.6, which says the rules
+/// for links and images are the same here.
+///
+/// Nothing to register: a divergence entry records where the port differs from
+/// muya, and this is the port agreeing with it. It belongs instead on M1.md
+/// §9's list of things worth reporting upstream, beside D3's two sites.
+///
+/// The asymmetry that **is** load-bearing and settled is the other one: which
+/// set the two link handlers pass. Passing `validateRules` there is #4671.
+fn try_image(state: &mut LexState<'_>) -> bool {
+    let id = RuleId::Image;
+    let origin = state.origin;
+    let Some(caps) = exec(rule(id), state.rest()) else {
+        return false;
+    };
+
+    let alt = state.required(&caps, 2, id);
+    let first = state.required(&caps, 3, id);
+    let destination = correct_url(
+        origin,
+        state.required(&caps, 0, id),
+        state.required(&caps, 4, id),
+        state.required(&caps, 5, id),
+    );
+
+    if !(is_length_even(Some(first)) && is_length_even(Some(destination.backlash))) {
+        return false;
+    }
+
+    let (src, title) = parse_src_and_title(origin, destination.url);
+
+    state.emit(
+        TokenKind::Image(Image {
+            marker: state.required(&caps, 1, id),
+            alt,
+            src_and_title: destination.url,
+            src,
+            title,
+            backlash: BacklashPair {
+                first,
+                second: Some(destination.backlash),
+            },
+            // The render-facing copies, percent-encoded. Only the backslash
+            // runs go through `encodeURI`; see `link::encode_backslash_run`
+            // for why that is the whole of it.
+            attrs: ImageAttrs {
+                src: format!(
+                    "{}{}",
+                    src.of(origin),
+                    encode_backslash_run(origin, destination.backlash)
+                ),
+                title: title.map(|t| t.of(origin)).unwrap_or_default().to_string(),
+                alt: format!("{}{}", alt.of(origin), encode_backslash_run(origin, first)),
+            },
+        }),
+        destination.whole,
+        destination.whole.end,
+    );
+    true
 }
 
-/// `tryLink` (`lexer.ts:353`). **S3.**
-fn try_link(_state: &mut LexState<'_>) -> bool {
-    false
+/// `tryLink` (`lexer.ts:353`) — `[anchor](href "title")`.
+///
+/// Same `correctUrl`-before-the-guard shape as [`try_image`], plus the
+/// `lowerPriority` call that image does not have.
+///
+/// # The veto set is `linkValidateRules`, and the difference is #4671
+///
+/// M1.md §5 D5, and `rules.ts:118` carries fourteen lines saying it: only
+/// `inline_code`, `html_tag` and `auto_link` may defer a link. Passing the
+/// wider `validateRules` would let the *extended* autolink rule — a
+/// post-process over plain text, which binds less tightly than a link — veto
+/// `[t](https://x)、`, `[t](https://x)foo` and the first of two links on a
+/// line. `linkFollowedByAutolink.spec.ts` is those three cases.
+///
+/// It is also why CommonMark example 520 goes live at S3 rather than S4:
+/// `linkValidateRules` contains `html_tag`, and `lowerPriority` runs
+/// *regexes*, not handlers. `[foo <bar attr="](baz)">` is refused here whether
+/// or not [`try_html_tag`] exists.
+fn try_link(state: &mut LexState<'_>) -> bool {
+    let id = RuleId::Link;
+    let origin = state.origin;
+    let Some(caps) = exec(rule(id), state.rest()) else {
+        return false;
+    };
+
+    let marker = state.required(&caps, 1, id);
+    let anchor = state.required(&caps, 2, id);
+    let first = state.required(&caps, 3, id);
+    let destination = correct_url(
+        origin,
+        state.required(&caps, 0, id),
+        state.required(&caps, 4, id),
+        state.required(&caps, 5, id),
+    );
+
+    if !(is_length_even(Some(first))
+        && is_length_even(Some(destination.backlash))
+        && lower_priority(
+            state.rest(),
+            destination.whole.len(),
+            rules::LINK_VALIDATE_RULES,
+        ))
+    {
+        return false;
+    }
+
+    let (href, title) = parse_src_and_title(origin, destination.url);
+
+    // muya tokenizes the anchor with the absolute base `pos + linkTo[1].length`
+    // — the same "assert rather than recompute" as `try_strong_em`'s. `marker`
+    // is the `[`, and group 2 begins where it ends.
+    debug_assert_eq!(anchor.start, marker.end);
+    let children = tokenizer_fac(origin, anchor, false, false, state.labels, state.syntax);
+
+    state.emit(
+        TokenKind::Link(Link {
+            marker,
+            anchor,
+            href_and_title: destination.url,
+            href,
+            title,
+            children,
+            backlash: BacklashPair {
+                first,
+                second: Some(destination.backlash),
+            },
+        }),
+        destination.whole,
+        destination.whole.end,
+    );
+    true
 }
 
-/// `tryReferenceLink` (`lexer.ts:407`). **S3.**
-fn try_reference_link(_state: &mut LexState<'_>) -> bool {
-    false
+/// `state.labels.has(label.toLowerCase())` (`lexer.ts:415` and `:462`).
+///
+/// CommonMark §6.5 matches link labels case-insensitively.
+/// `collectReferenceDefinitions` lowercases on the way in — [`crate::Labels`]
+/// records that on the type — and both reference handlers lowercase the
+/// candidate before the lookup.
+///
+/// `str::to_lowercase` and JavaScript's `toLowerCase` are both the Unicode
+/// default lowercase mapping, including the `İ` → `i` + U+0307 expansion and
+/// the final-sigma rule, so they agree on everything a label can contain.
+/// Checked rather than assumed, because a disagreement here is a lookup that
+/// quietly fails rather than a crash: `a_label_is_matched_case_insensitively`
+/// pins the cases where a naive folding would differ, and the S3 differential
+/// run put them through the real engine.
+fn is_defined(labels: &Labels, origin: &str, label: Span) -> bool {
+    labels.contains_key(label.of(origin).to_lowercase().as_str())
 }
 
-/// `tryReferenceImage` (`lexer.ts:457`). **S3.**
-fn try_reference_image(_state: &mut LexState<'_>) -> bool {
-    false
+/// `tryReferenceLink` (`lexer.ts:407`) — `[anchor][label]`, `[anchor][]` or
+/// `[label]`.
+///
+/// # `rLinkTo[3] || rLinkTo[1]` is JavaScript falsiness, not `??`
+///
+/// The `[label]` part is `(?:\[([^\]]*?)(\\*)\])?`, and its inner group can
+/// match the **empty string** — that is the collapsed form `[anchor][]`. An
+/// empty group 3 is falsy, so it falls back to group 1 for the lookup, and
+/// `isFullLink: !!rLinkTo[3]` is `false` for it too. Both readings have to be
+/// "absent *or* empty"; treating the group as `Option` alone would make
+/// `[anchor][]` a full link with an empty label, which resolves nothing.
+///
+/// The label must also be **defined**: see [`is_defined`], which is the only
+/// thing that separates a reference link from plain text.
+///
+/// # The anchor is tokenized from `pos + 1`
+///
+/// Not from a captured marker: `types.ts` declares no `marker` field for this
+/// token, so `token.rs` has none either and muya passes the literal
+/// `state.pos + 1`. Group 1 does begin there — the pattern opens `^\[` — and
+/// that is asserted rather than assumed, the way `try_strong_em` asserts
+/// `content.start == marker.end`.
+fn try_reference_link(state: &mut LexState<'_>) -> bool {
+    let id = RuleId::ReferenceLink;
+    let origin = state.origin;
+    let Some(caps) = exec(rule(id), state.rest()) else {
+        return false;
+    };
+
+    let whole = state.required(&caps, 0, id);
+    let anchor = state.required(&caps, 1, id);
+    let first = state.required(&caps, 2, id);
+    let second = state.group(&caps, 4);
+    let full_label = state.group(&caps, 3).filter(|label| !label.is_empty());
+    let label = full_label.unwrap_or(anchor);
+
+    if !(is_defined(state.labels, origin, label)
+        && is_length_even(Some(first))
+        && is_length_even(second)
+        && lower_priority(state.rest(), whole.len(), rules::LINK_VALIDATE_RULES))
+    {
+        return false;
+    }
+
+    debug_assert_eq!(anchor.start, state.pos + 1);
+    let children = tokenizer_fac(origin, anchor, false, false, state.labels, state.syntax);
+
+    state.emit(
+        TokenKind::ReferenceLink(ReferenceLink {
+            is_full_link: full_label.is_some(),
+            anchor,
+            label,
+            children,
+            backlash: BacklashPair { first, second },
+        }),
+        whole,
+        whole.end,
+    );
+    true
+}
+
+/// `tryReferenceImage` (`lexer.ts:457`) — `![alt][label]`, `![alt][]` or
+/// `![label]`.
+///
+/// [`try_reference_link`] without the anchor tokenization — a reference
+/// image's alt text is not a child level — and without the `lowerPriority`
+/// call, which is [`try_image`]'s asymmetry again and is reproduced for the
+/// same reason.
+fn try_reference_image(state: &mut LexState<'_>) -> bool {
+    let id = RuleId::ReferenceImage;
+    let origin = state.origin;
+    let Some(caps) = exec(rule(id), state.rest()) else {
+        return false;
+    };
+
+    let whole = state.required(&caps, 0, id);
+    let alt = state.required(&caps, 1, id);
+    let first = state.required(&caps, 2, id);
+    let second = state.group(&caps, 4);
+    let full_label = state.group(&caps, 3).filter(|label| !label.is_empty());
+    let label = full_label.unwrap_or(alt);
+
+    if !(is_defined(state.labels, origin, label)
+        && is_length_even(Some(first))
+        && is_length_even(second))
+    {
+        return false;
+    }
+
+    state.emit(
+        TokenKind::ReferenceImage(ReferenceImage {
+            is_full_link: full_label.is_some(),
+            alt,
+            label,
+            backlash: BacklashPair { first, second },
+        }),
+        whole,
+        whole.end,
+    );
+    true
 }
 
 /// `tryHtmlEscape` (`lexer.ts:495`) — one of the 269 named references in
@@ -787,12 +1113,16 @@ const INLINE_HANDLERS: [fn(&mut LexState<'_>) -> bool; 16] = [
 /// S2 is where the nested call first happens — `strong`, `em` and `del`
 /// tokenize their content — and it is what makes the cross-level half of
 /// M1.md §4 C3 live rather than vacuous: [`check_tiling`] now has children to
-/// check against their parents.
-pub(crate) fn tokenizer_fac(
-    origin: &str,
+/// check against their parents. S3 adds `link` and `reference_link`.
+///
+/// `labels` and `syntax` are threaded down every nested call unchanged, as
+/// muya threads `state.labels` and `state.options`.
+pub(crate) fn tokenizer_fac<'a>(
+    origin: &'a str,
     level: Span,
     has_begin_rules: bool,
     top: bool,
+    labels: &'a Labels,
     syntax: SyntaxOptions,
 ) -> Vec<Token> {
     let mut state = LexState {
@@ -803,6 +1133,7 @@ pub(crate) fn tokenizer_fac(
         tokens: Vec::new(),
         top,
         syntax,
+        labels,
     };
 
     // muya: `if (beginRules && state.pos === 0)`. Both halves are kept: the
@@ -936,8 +1267,7 @@ fn check_tiling(origin: &str, level: Span, tokens: &[Token]) {
 
 /// `tokenizer` (`lexer.ts:854`), minus the `highlights` post-pass.
 ///
-/// `options.labels` is not read yet — the handlers that consult it are S3 —
-/// and neither is `options.highlights`, whose post-pass is S6.
+/// `options.highlights` is not read yet — its post-pass is S6.
 /// [`crate::tokenizer`] says so where a caller will see it.
 pub(crate) fn tokenizer(src: &str, options: &TokenizerOptions) -> Vec<Token> {
     tokenizer_fac(
@@ -945,6 +1275,7 @@ pub(crate) fn tokenizer(src: &str, options: &TokenizerOptions) -> Vec<Token> {
         Span::new(0, src.len()),
         options.has_begin_rules,
         true,
+        &options.labels,
         options.syntax,
     )
 }
@@ -988,14 +1319,15 @@ mod tests {
     /// whole thing accumulates. That is the loop's default path and the one
     /// every unimplemented handler relies on.
     ///
-    /// The input is S3–S5 only — links, images, HTML, autolinks. It used to
-    /// include `**bold**` and `` `code` ``, and S2 is what took them out: a
-    /// handler that starts working turns this test red, which is the point of
-    /// keeping it pointed at whatever is *still* unimplemented. Narrow it again
-    /// at S3, S4 and S5 until there is nothing left to put in it.
+    /// The input is S4–S5 only — HTML and autolinks. It used to include
+    /// `**bold**` and `` `code` ``, which S2 took out, and `[link](url)` and
+    /// `![img](src)`, which S3 has just taken out: a handler that starts
+    /// working turns this test red, which is the point of keeping it pointed
+    /// at whatever is *still* unimplemented. Narrow it again at S4 and S5
+    /// until there is nothing left to put in it.
     #[test]
     fn unmatched_constructs_accumulate_as_text_rather_than_being_dropped() {
-        let src = "[link](url) and ![img](src) and <span>x</span> and https://x.y";
+        let src = "<span>x</span> and https://x.y and www.x.y";
         assert_eq!(types(src), ["text"]);
         assert_eq!(raws(src), [src]);
     }
@@ -1384,6 +1716,388 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // The S3 handlers
+    //
+    // Every expectation below was measured against the running TypeScript
+    // engine before it was written down — 319 inputs, of which 296 agree
+    // exactly and the rest are S4/S5 rules or the registered divergence. §3
+    // rule 3: the TypeScript defines correctness.
+    // -----------------------------------------------------------------------
+
+    /// `tokenize` with a labels map, for the reference handlers.
+    fn tokenize_with_labels(src: &str, labels: &[(&str, &str)]) -> Vec<Token> {
+        let labels: crate::Labels = labels
+            .iter()
+            .map(|(label, href)| {
+                (
+                    label.to_lowercase(),
+                    crate::Label {
+                        href: (*href).to_string(),
+                        title: String::new(),
+                    },
+                )
+            })
+            .collect();
+        crate::tokenizer(src, &TokenizerOptions::muya_default().with_labels(labels))
+    }
+
+    #[test]
+    fn an_image_carries_its_parsed_src_title_and_alt() {
+        let src = r#"![alt](http://example.com/x.png "Pic title")"#;
+        let tokens = tokenize(src);
+        assert_eq!(types(src), ["image"]);
+
+        let TokenKind::Image(image) = &tokens[0].kind else {
+            panic!("expected an image");
+        };
+        assert_eq!(image.marker.of(src), "![");
+        assert_eq!(image.alt.of(src), "alt");
+        assert_eq!(
+            image.src_and_title.of(src),
+            r#"http://example.com/x.png "Pic title""#
+        );
+        assert_eq!(image.src.of(src), "http://example.com/x.png");
+        assert_eq!(image.title.map(|t| t.of(src)), Some("Pic title"));
+        assert!(tokens[0].children().is_none(), "an image has no children");
+    }
+
+    /// The percent-encoded `attrs` copies. `encodeURI` is only ever handed a
+    /// backslash run here — see [`crate::link::encode_backslash_run`] — so the
+    /// only way to observe it at all is a destination whose trailing run
+    /// `correctUrl` peels off.
+    #[test]
+    fn image_attrs_percent_encode_the_two_backslash_runs_and_nothing_else() {
+        let src = "![alt](src)";
+        let TokenKind::Image(image) = &tokenize(src)[0].kind else {
+            panic!("expected an image");
+        };
+        assert_eq!(image.attrs.src, "src");
+        assert_eq!(image.attrs.alt, "alt");
+        assert_eq!(image.attrs.title, "", "muya reports a missing title as ''");
+
+        // `b\\` before the closing paren: `correctUrl` splits the run into
+        // group 5, and `attrs.src` is the destination plus `encodeURI` of it.
+        let src = r"![a\\](b\\) c)";
+        let TokenKind::Image(image) = &tokenize(src)[0].kind else {
+            panic!("expected an image");
+        };
+        assert_eq!(image.src.of(src), "b");
+        assert_eq!(image.attrs.src, "b%5C%5C");
+        assert_eq!(image.alt.of(src), "a");
+        assert_eq!(image.attrs.alt, "a%5C%5C");
+    }
+
+    #[test]
+    fn a_link_tokenizes_its_anchor_as_children() {
+        let src = "a [**b** `c`](d 'T') e";
+        let tokens = tokenize(src);
+        assert_eq!(types(src), ["text", "link", "text"]);
+
+        let TokenKind::Link(link) = &tokens[1].kind else {
+            panic!("expected a link");
+        };
+        assert_eq!(link.marker.of(src), "[");
+        assert_eq!(link.anchor.of(src), "**b** `c`");
+        assert_eq!(link.href_and_title.of(src), "d 'T'");
+        assert_eq!(link.href.of(src), "d");
+        assert_eq!(link.title.map(|t| t.of(src)), Some("T"));
+        assert_eq!(types_of(&link.children), ["strong", "text", "inline_code"]);
+        // Absolute spans, like every other child level.
+        assert_eq!(link.children[0].raw.of(src), "**b**");
+        assert_eq!(link.children[0].raw, Span::new(3, 8));
+    }
+
+    /// muya reports a missing title as `''` and an **empty** title the same
+    /// way, and its own `if (title)` then takes the no-title branch — so the
+    /// quotes stay in the destination. Measured, not inferred.
+    #[test]
+    fn an_empty_title_leaves_its_quotes_in_the_destination() {
+        let src = r#"[text](http://example.com "")"#;
+        let TokenKind::Link(link) = &tokenize(src)[0].kind else {
+            panic!("expected a link");
+        };
+        assert_eq!(link.title, None);
+        assert_eq!(link.href.of(src), r#"http://example.com """#);
+    }
+
+    /// #1169 — the greedy `(.*)` runs to the last `)` on the line and
+    /// `correctUrl` pulls it back to the one that closes the destination. The
+    /// truncation is of the **whole match**, so the rest of the line re-enters
+    /// the loop.
+    #[test]
+    fn a_destination_stops_at_the_paren_that_closes_it() {
+        let src = "see ![alt](first.png) and also (parens) here";
+        let tokens = tokenize(src);
+        assert_eq!(types(src), ["text", "image", "text"]);
+        assert_eq!(tokens[1].raw.of(src), "![alt](first.png)");
+        assert_eq!(tokens[2].raw.of(src), " and also (parens) here");
+
+        // Balanced parens inside the destination are not a closer.
+        let src = "[text](path/to/(file).html)";
+        let TokenKind::Link(link) = &tokenize(src)[0].kind else {
+            panic!("expected a link");
+        };
+        assert_eq!(link.href.of(src), "path/to/(file).html");
+    }
+
+    /// The truncation is what makes two links on one line possible at all:
+    /// without it the first link's destination swallows the second.
+    #[test]
+    fn two_links_on_one_line_are_two_links() {
+        let src = "[a](b) and [c](d)";
+        let tokens = tokenize(src);
+        assert_eq!(types(src), ["link", "text", "link"]);
+        assert_eq!(tokens[0].raw.of(src), "[a](b)");
+        assert_eq!(tokens[2].raw.of(src), "[c](d)");
+    }
+
+    /// An odd backslash run before a closing bracket escapes it, at both of
+    /// the two gates. Group 3 is the run before `]`; group 5 is the one
+    /// `correctUrl` peels off the destination.
+    #[test]
+    fn an_odd_backslash_run_at_either_gate_refuses_the_link() {
+        assert_eq!(types(r"[a\](b)"), ["text", "backlash", "text"]);
+        assert_eq!(types(r"[a\\](b)"), ["link"]);
+        // Group 5: `b\` is an odd run once `correctUrl` splits it off.
+        assert_eq!(
+            types(r"[a](b\) c)"),
+            ["link"],
+            "the `)` is escaped, not a closer"
+        );
+        assert_eq!(types(r"[a](b\\) c)"), ["link", "text"]);
+    }
+
+    // --- the reference forms -----------------------------------------------
+
+    #[test]
+    fn a_reference_link_needs_its_label_to_be_defined() {
+        assert_eq!(types("[text][undefined-label]"), ["text"]);
+        assert_eq!(
+            types_of(&tokenize_with_labels("[text][ref]", &[("ref", "u")])),
+            ["reference_link"]
+        );
+    }
+
+    /// `rLinkTo[3] || rLinkTo[1]` and `isFullLink: !!rLinkTo[3]` are both
+    /// JavaScript falsiness, so the **collapsed** form `[anchor][]` — an
+    /// empty group 3 — falls back to the anchor and is not a full link.
+    #[test]
+    fn an_empty_label_part_falls_back_to_the_anchor_and_is_not_a_full_link() {
+        let labels = &[("ref", "u")];
+
+        let src = "[text][ref]";
+        let tokens = tokenize_with_labels(src, labels);
+        let TokenKind::ReferenceLink(link) = &tokens[0].kind else {
+            panic!("expected a reference_link");
+        };
+        assert!(link.is_full_link);
+        assert_eq!(link.label.of(src), "ref");
+        assert_eq!(link.anchor.of(src), "text");
+
+        // Collapsed: group 3 participates and is empty.
+        let src = "[ref][]";
+        let tokens = tokenize_with_labels(src, labels);
+        let TokenKind::ReferenceLink(link) = &tokens[0].kind else {
+            panic!("expected a reference_link");
+        };
+        assert!(!link.is_full_link, "an empty group 3 is falsy");
+        assert_eq!(link.label.of(src), "ref", "…so the label is the anchor");
+        assert_eq!(link.backlash.second.map(|s| s.of(src)), Some(""));
+
+        // Shortcut: group 3 does not participate at all.
+        let src = "[ref]";
+        let tokens = tokenize_with_labels(src, labels);
+        let TokenKind::ReferenceLink(link) = &tokens[0].kind else {
+            panic!("expected a reference_link");
+        };
+        assert!(!link.is_full_link);
+        assert_eq!(link.label.of(src), "ref");
+        assert_eq!(
+            link.backlash.second, None,
+            "the optional group did not participate, which `''` cannot express"
+        );
+    }
+
+    /// CommonMark §6.5 — the lookup is case-insensitive, and the map's keys
+    /// were lowercased on the way in. `to_lowercase` and JavaScript's
+    /// `toLowerCase` are both the Unicode default mapping, including the
+    /// `İ` → `i̇` expansion and final sigma; the two agree, and a disagreement
+    /// here would be a lookup that quietly fails rather than a crash.
+    #[test]
+    fn a_label_is_matched_case_insensitively() {
+        let tokens = tokenize_with_labels("[REF]", &[("ref", "u")]);
+        assert_eq!(types_of(&tokens), ["reference_link"]);
+        let tokens = tokenize_with_labels("[Straße]", &[("STRASSE", "u")]);
+        assert_eq!(
+            types_of(&tokens),
+            ["text"],
+            "`ß` does not fold to `ss` under either engine's toLowerCase"
+        );
+        let tokens = tokenize_with_labels("[Straße]", &[("Straße", "u")]);
+        assert_eq!(types_of(&tokens), ["reference_link"]);
+        // U+0130 lowercases to `i` + U+0307 in both engines.
+        let tokens = tokenize_with_labels("[İ]", &[("i\u{307}", "u")]);
+        assert_eq!(types_of(&tokens), ["reference_link"]);
+    }
+
+    /// #4865, the README-badge pattern: one `reference_link` whose child is
+    /// the image, not a bare image plus an empty reference link.
+    #[test]
+    fn a_reference_link_wrapping_an_image_is_one_token_with_the_image_as_a_child() {
+        let src = "[![alt](https://example.com/badge.svg)][ref]";
+        let tokens = tokenize_with_labels(src, &[("ref", "u")]);
+        assert_eq!(types_of(&tokens), ["reference_link"]);
+        let TokenKind::ReferenceLink(link) = &tokens[0].kind else {
+            panic!("expected a reference_link");
+        };
+        assert_eq!(types_of(&link.children), ["image"]);
+        // The anchor is tokenized from `pos + 1`, so the child span is
+        // absolute and starts one byte in.
+        assert_eq!(link.children[0].raw.start, 1);
+    }
+
+    #[test]
+    fn a_reference_image_has_no_children_and_the_same_label_rules() {
+        let src = "![alt][ref]";
+        let tokens = tokenize_with_labels(src, &[("ref", "u")]);
+        assert_eq!(types_of(&tokens), ["reference_image"]);
+        let TokenKind::ReferenceImage(image) = &tokens[0].kind else {
+            panic!("expected a reference_image");
+        };
+        assert!(image.is_full_link);
+        assert_eq!(image.alt.of(src), "alt");
+        assert_eq!(image.label.of(src), "ref");
+        assert!(
+            tokens[0].children().is_none(),
+            "a reference image's alt text is not tokenized"
+        );
+
+        assert_eq!(
+            types_of(&tokenize_with_labels("![alt][missing]", &[("ref", "u")])),
+            ["text"]
+        );
+    }
+
+    /// The asymmetry, in one pair of inputs. `tryLink` passes
+    /// `linkValidateRules` to `lowerPriority` and is refused; `tryImage` does
+    /// not call it at all, so the identical construct with a `!` in front is
+    /// an image — even though the code span runs past its closer just the
+    /// same. Measured against the engine: both agree, and [`try_image`]
+    /// records that this is a deviation from CommonMark §6.6 reproduced
+    /// deliberately rather than a justified difference.
+    #[test]
+    fn only_the_link_handlers_consult_lower_priority() {
+        // CommonMark example 521: the code span runs past the link's closer.
+        let vetoed = types("[foo`](/uri)`");
+        assert!(!vetoed.contains(&"link"), "tokens: {vetoed:?}");
+        assert!(vetoed.contains(&"inline_code"));
+
+        // The same shape as an image. No `lowerPriority`, so it survives.
+        let src = "![foo`](/uri)`";
+        let tokens = tokenize(src);
+        assert_eq!(types(src), ["image", "text"]);
+        assert_eq!(tokens[0].raw.of(src), "![foo`](/uri)");
+    }
+
+    /// The other half of D5: the veto set is `linkValidateRules`, not
+    /// `validateRules`, so a destination that also matches the *extended*
+    /// autolink rule does not veto its own link. #4671.
+    ///
+    /// `html_tag` is in that set as a **regex**, which is why CommonMark
+    /// example 520 goes live at S3 with `tryHtmlTag` still unimplemented.
+    #[test]
+    fn the_link_veto_set_is_the_narrow_one() {
+        let src = "支持[CommonMark 规范](https://spec.commonmark.org/)、其他";
+        let tokens = tokenize(src);
+        assert_eq!(types(src), ["text", "link", "text"]);
+        assert_eq!(
+            tokens[1].raw.of(src),
+            "[CommonMark 规范](https://spec.commonmark.org/)"
+        );
+
+        // …and an html_tag that spans the closer still wins, from its regex
+        // alone.
+        let types = types(r#"[foo <bar attr="](baz)">"#);
+        assert!(!types.contains(&"link"), "tokens: {types:?}");
+    }
+
+    // --- consumeReferenceDefinition ----------------------------------------
+
+    #[test]
+    fn a_reference_definition_fills_one_field_per_capture_group() {
+        let src = r#"  [label]: <https://example.com> "A title"  "#;
+        let tokens = tokenize(src);
+        assert_eq!(types(src), ["reference_definition"]);
+
+        let TokenKind::ReferenceDefinition(def) = &tokens[0].kind else {
+            panic!("expected a reference_definition");
+        };
+        assert_eq!(def.left_bracket.of(src), "  [");
+        assert_eq!(def.label.of(src), "label");
+        assert_eq!(def.backlash.of(src), "");
+        assert_eq!(def.right_bracket.of(src), "]: ");
+        assert_eq!(def.left_href_marker.of(src), "<");
+        assert_eq!(def.href.of(src), "https://example.com");
+        assert_eq!(def.right_href_marker.of(src), ">");
+        assert_eq!(def.left_title_space.map(|s| s.of(src)), Some(" "));
+        assert_eq!(def.title_marker.map(|s| s.of(src)), Some("\""));
+        assert_eq!(def.title.map(|s| s.of(src)), Some("A title"));
+        assert_eq!(def.right_title_space.of(src), "  ");
+    }
+
+    /// `leftTitleSpace` is capture 8, inside the optional title group, and
+    /// `lexer.ts:102` reads it with **no `|| ''` fallback** — so `types.ts`'s
+    /// `leftTitleSpace: string` is wrong and the field really is absent on a
+    /// definition without a title. The `Option` records that.
+    #[test]
+    fn a_definition_without_a_title_has_no_left_title_space_at_all() {
+        let src = "[label]: https://example.com";
+        let TokenKind::ReferenceDefinition(def) = &tokenize(src)[0].kind else {
+            panic!("expected a reference_definition");
+        };
+        assert_eq!(def.left_title_space, None, "undefined, not ''");
+        assert_eq!(def.title_marker, None);
+        assert_eq!(def.title, None);
+        assert_eq!(def.right_title_space.of(src), "", "outside the group");
+    }
+
+    /// The gate: an odd run of `\` before the `]` escapes it, so the line is
+    /// not a definition. An even run is.
+    #[test]
+    fn an_odd_backslash_run_before_the_bracket_is_not_a_definition() {
+        assert_eq!(
+            types(r"[label\]: https://example.com"),
+            ["text", "backlash", "text"]
+        );
+        let src = r"[label\\]: https://example.com";
+        assert_eq!(types(src), ["reference_definition"]);
+        let TokenKind::ReferenceDefinition(def) = &tokenize(src)[0].kind else {
+            panic!("expected a reference_definition");
+        };
+        assert_eq!(def.backlash.of(src), r"\\");
+    }
+
+    /// A definition is a *begin* rule: offset 0, top level, and only when the
+    /// caller asked for begin rules.
+    #[test]
+    fn a_definition_is_only_recognised_at_the_start_of_a_block() {
+        assert_eq!(types("not a def [label]: https://example.com"), ["text"]);
+        assert_eq!(
+            types("    [label]: https://example.com"),
+            ["text"],
+            "four spaces is a code block, and the rule allows three"
+        );
+        let options = TokenizerOptions {
+            has_begin_rules: false,
+            ..TokenizerOptions::muya_default()
+        };
+        assert_eq!(
+            types_of(&crate::tokenizer("[label]: https://example.com", &options)),
+            ["text"]
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // M1.md §5 D3 site 1 — the nested emoji boundary
     // -----------------------------------------------------------------------
 
@@ -1455,6 +2169,77 @@ mod tests {
                 types_of(children),
                 ["text"],
                 "{src:?} must not produce an emoji"
+            );
+        }
+    }
+
+    /// The **other direction** of the same divergence, registered at S3.
+    ///
+    /// muya reads `originSrc[pos - 1]`, which is `origin[base + pos - 1]` —
+    /// `base` positions too far to the right. At every rule whose base is 1
+    /// (`link`, `reference_link` and, note, `em`) the character it lands on is
+    /// therefore the `:` **itself**, which is never a word character, so
+    /// #1677's guard silently never fires inside them. muya emits an emoji for
+    /// all five of these; the port suppresses them, because there really is a
+    /// word character before the `:`.
+    ///
+    /// This is the reverse of the seven inputs S0 and S2 registered, where
+    /// muya *loses* an emoji the port keeps. It is one divergence with one
+    /// fix; the register's `note` says why the list grew twice.
+    ///
+    /// `*a:smile:*` was reachable at S2 and its 207-input run missed it,
+    /// because every input that run tried put a **space** before the `:` —
+    /// which only ever probes the losing direction.
+    #[test]
+    fn the_boundary_fix_also_suppresses_emoji_muya_wrongly_keeps() {
+        // `[a:smile:](u)` — muya gives the anchor `text, emoji`.
+        for (src, container) in [
+            ("[a:smile:](u)", "link"),
+            ("[12:00-14:00](u)", "link"),
+            ("[x:100:](u)", "link"),
+            ("*a:smile:*", "em"),
+        ] {
+            let tokens = tokenize(src);
+            assert_eq!(tokens[0].type_str(), container, "input {src:?}");
+            let children = tokens[0].children().expect("a container");
+            assert_eq!(
+                types_of(children),
+                ["text"],
+                "{src:?} must not produce an emoji: the `:` is glued to a word \
+                 character at this level"
+            );
+        }
+
+        // Twice nested: the link anchor is itself inside a bracket pair.
+        let tokens = tokenize("[[a:smile:]](u)");
+        let children = tokens[0].children().expect("a link");
+        assert!(
+            !children.iter().any(|t| t.type_str() == "emoji"),
+            "children: {:?}",
+            types_of(children)
+        );
+
+        // The same class through a reference link, which the register cannot
+        // list because it needs a populated `labels` map to reach the handler.
+        let tokens = tokenize_with_labels("[a:smile:][ref]", &[("ref", "u")]);
+        assert_eq!(tokens[0].type_str(), "reference_link");
+        assert_eq!(
+            types_of(tokens[0].children().expect("a reference_link")),
+            ["text"]
+        );
+    }
+
+    /// The other side, at the two new nesting sites: a genuine boundary still
+    /// admits the emoji.
+    #[test]
+    fn a_boundary_inside_a_link_anchor_still_admits_the_emoji() {
+        for src in ["[a :smile:](u)", "[:smile:](u)"] {
+            let tokens = tokenize(src);
+            let children = tokens[0].children().expect("a link");
+            assert!(
+                children.iter().any(|t| t.type_str() == "emoji"),
+                "{src:?}: {:?}",
+                types_of(children)
             );
         }
     }

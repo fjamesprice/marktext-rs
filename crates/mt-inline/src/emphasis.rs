@@ -7,9 +7,9 @@
 //! decides whether a `*`/`_` run may open or close an emphasis span:
 //! `PUNCTUATION_REG`, `CJK_REG`, `UNICODE_WHITESPACE_REG`, `canOpenEmphasis`,
 //! `canCloseEmphasis`, `validateEmphasize` and `lowerPriority`, plus
-//! `isLengthEven` from `utils/index.ts`. The other half — `getAttributes`
-//! (M1.md §5 D2, S4), `parseSrcAndTitle` and `correctUrl` (S3) — belongs to
-//! stages that have not run.
+//! `isLengthEven` from `utils/index.ts`. The other half is
+//! [`crate::link`] — `parseSrcAndTitle` and `correctUrl`, landed in S3 — and
+//! `getAttributes`, which is M1.md §5 D2 and belongs to S4.
 //!
 //! Two functions of `utils.ts` are **deliberately not ported at all**:
 //! `lastCodePointChar` and `codePointCharAt` (lines 104–130). M1.md §5 D1 is
@@ -220,7 +220,15 @@ fn matches(class_: &Regex, ch: Option<char>) -> bool {
 }
 
 /// `UNICODE_WHITESPACE_REG.test(ch)`.
-fn is_unicode_whitespace(ch: Option<char>) -> bool {
+///
+/// `pub(crate)` for one caller outside this module: [`crate::link`]'s
+/// `js_trim`, which needs the same class as a predicate because
+/// `parseSrcAndTitle` calls `String.prototype.trim` three times and
+/// **JavaScript's `trim` and Rust's `str::trim` disagree** — on U+FEFF and
+/// U+0085, in opposite directions, exactly as `\s` does. Sharing this keeps
+/// C2's "one definition of the class" intact, and the two halves of `utils.ts`
+/// sharing a character class is what the TypeScript does too.
+pub(crate) fn is_unicode_whitespace(ch: Option<char>) -> bool {
     matches(&UNICODE_WHITESPACE_REG, ch)
 }
 

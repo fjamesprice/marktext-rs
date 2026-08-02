@@ -94,27 +94,44 @@ fn corpus_files() -> Vec<(String, String)> {
 /// |---|---:|---:|---:|
 /// | S1 | 9 of 16 | ~1.3 s | ~21 s |
 /// | S2 | 13 of 16 | ~4.2 s | **~134 s** |
+/// | S3 | 13 of 16 (+4 rules) | ~3.2 s | **~68 s** |
 ///
-/// Four handlers cost **6.4×**, which is more than the S1 note's "plausibly a
-/// minute or more by S5" allowed for — S2 alone passed that. The jump is not
-/// mysterious: `tryStrongEm` and `tryChunks` run six regexes at every
-/// unmatched position, four of which (`strong`, `em`, `del`, `inline_math`)
-/// carry a lazy `[\s\S]*?` that scans to the end of the level before failing,
-/// and `250kb.md` is one very long level. That is the O(n²) shape M1.md §5 D5
-/// flags for `lowerPriority`, arriving early and from the rule table instead.
+/// S2's four handlers cost **6.4×**, which is more than the S1 note's
+/// "plausibly a minute or more by S5" allowed for — S2 alone passed that. The
+/// jump was not mysterious: `tryStrongEm` and `tryChunks` run six regexes at
+/// every unmatched position, four of which (`strong`, `em`, `del`,
+/// `inline_math`) carry a lazy `[\s\S]*?` that scans to the end of the level
+/// before failing, and `250kb.md` is one very long level. That is the O(n²)
+/// shape M1.md §5 D5 flags for `lowerPriority`, arriving early and from the
+/// rule table instead.
 ///
-/// Two things follow, neither of them "raise the limit":
+/// # S2's prediction for S3 was wrong, and the model behind it was wrong
 ///
-/// - S3–S5 add three more lazy-quantified rules (`link`, `image`,
-///   `reference_link`). Extrapolating the same factor puts the ignored pair
-///   past ten minutes, which is past the point where anyone runs it by hand.
-///   **The `lowerPriority` benchmark D5 asks for before M1 closes should be a
-///   whole-tokenizer benchmark, and it should exist by S3**, not S7.
-/// - The covered run is still ~4 s, which is fine, and that is what the limit
-///   is protecting. Keep it where it is.
+/// S2 reasoned that S3–S5 add three more lazy-quantified rules (`link`,
+/// `image`, `reference_link`) and that extrapolating the same factor puts the
+/// ignored pair past ten minutes. **S3 halved it instead: ~134 s → ~68 s.**
 ///
-/// 256 KiB is chosen to keep `250kb.md` in: it is the largest file whose
-/// content differs *structurally* from the two above it.
+/// The correction is worth more than the number. Cost is not
+/// *rules × characters*, it is *rules × **unmatched** characters*, because a
+/// lazy rule only scans to the end of the level when it **fails**. `1mb.md`
+/// contains 1586 links; at S2 each was ~37 consecutive positions at which six
+/// lazy rules each scanned the rest of a very long paragraph, and at S3 a
+/// single `try_link` consumes the construct and those positions stop existing.
+/// A handler that matches often can pay for itself several times over.
+///
+/// S4's `html_tag` and S5's autolinks match *rarely* in this corpus, so they
+/// should add cost rather than remove it — but the factor to expect is not
+/// S2's.
+///
+/// The one thing S2 asked for that survives unchanged is the benchmark:
+/// `benches/tokenizer.rs` exists as of S3, it covers the whole tokenizer
+/// rather than `lowerPriority` alone, and it carries the release numbers and
+/// the per-file breakdown this comment only summarises. **Re-measure both
+/// tables at S4 and S5.**
+///
+/// The covered run is ~3 s, which is fine, and that is what the limit is
+/// protecting. 256 KiB is chosen to keep `250kb.md` in: it is the largest file
+/// whose content differs *structurally* from the two above it.
 const DEBUG_PROFILE_SIZE_LIMIT: usize = 256 * 1024;
 
 /// Assert that a token list tiles `[start, end)` of `src`, recursively.

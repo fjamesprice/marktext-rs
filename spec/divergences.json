@@ -4,7 +4,7 @@
     {
       "id": "emoji-nested-boundary",
       "site": "lexer.ts:206 tryChunks",
-      "muya": "child substring indexed at an absolute offset — `state.originSrc[state.pos - 1]` reads `originSrc`, which in a nested tokenizerFac call is the CHILD substring, at `pos`, which is an ABSOLUTE offset into the top-level text. The emoji word-boundary check therefore tests the wrong character, or reads off the end. Whether an emoji inside emphasis survives depends on what character happens to sit at that offset: `**a :smile:**` and `**:smile:**` lose the emoji, while `*x :smile:*` and `[a :smile:](u)` keep it by luck.",
+      "muya": "child substring indexed at an absolute offset — `state.originSrc[state.pos - 1]` reads `originSrc`, which in a nested tokenizerFac call is the CHILD substring, at `pos`, which is an ABSOLUTE offset into the top-level text. The emoji word-boundary check therefore tests the wrong character, or reads off the end. The character it lands on is `origin[base + pos - 1]`, where `base` is the child level's absolute base, so it reads `base` positions too far to the right and the error runs BOTH ways. It loses emoji it should keep — `**a :smile:**` and `**:smile:**` produce none, while `*x :smile:*` keeps one by luck — and, at any rule whose base is 1, it KEEPS emoji it should suppress: for `link`, `reference_link` and `em` the character read is the `:` itself, which is never a word character, so #1677's own guard never fires inside them and `[a:smile:](u)`, `*a:smile:*` and even `[12:00-14:00](u)` emit an emoji.",
       "ours": "index relative to the current tokenizer level — read the preceding character at `pos - base - 1`, where `base` is the level's absolute base offset. When `pos == base` there is no preceding character at this level, which counts as a boundary and allows the emoji; that is correct for every call site, because a child level is only ever entered after `*`, `_`, `~`, `[` or a `>`-terminated open tag, none of which are word characters. It is also what the top level already does at `pos == 0`. This makes tryAutoLinkExtension's identical read (lexer.ts:578) safe by construction rather than by the `state.top` gate that saves it by accident. In the Rust port this falls out of the data layout rather than being a special case: a level is `(origin: &str, level: Span)` and there is only ever one string, so `originSrc` and `pos` cannot describe different things (docs/M1.md §5 D4).",
       "inputs": [
         "**a :smile:**",
@@ -13,9 +13,14 @@
         "~~a :smile:~~",
         "**:100:**",
         "**a :smile: b**",
-        "**abcdefgh :smile:**"
+        "**abcdefgh :smile:**",
+        "[a:smile:](u)",
+        "[12:00-14:00](u)",
+        "[x:100:](u)",
+        "*a:smile:*",
+        "[[a:smile:]](u)"
       ],
-      "note": "The first two were registered at S0 from a hand-run of the engine. The other five were found at S2 by diffing token streams over 207 inputs: they are the same fix at the other two container rules (`__`, `~~`), the case where the character muya misreads is a digit rather than a letter (`**:100:**`), and two longer spans. Register rule 1 makes an unregistered disagreement a failure, so a divergence class that is wider than its entry has to widen the entry — this is that, not a second divergence. Nothing about the fix changed.",
+      "note": "Widened twice, both times by diffing token streams against the running engine, and both times because register rule 1 makes an UNREGISTERED disagreement a failure — so a divergence class wider than its entry has to widen the entry. This is one divergence, not three; nothing about the fix has changed. (1) S0 registered the first two from a hand-run. (2) S2 added five more from a 207-input run: the same fix at the other two container rules (`__`, `~~`), the case where the misread character is a digit rather than a letter (`**:100:**`), and two longer spans. (3) S3 added the last five from a 313-input run, and they are the other DIRECTION of the same bug, which the first seven do not show: muya reads `base` positions too far right, so where `base` is 1 it reads the `:` itself, never a word character, and the #1677 guard silently never fires. `[a:smile:](u)` and `[12:00-14:00](u)` therefore emit an emoji in muya that the port suppresses — the reverse of every earlier input. `*a:smile:*` is the uncomfortable one: `em` has base 1 too, so it was reachable at S2 and the S2 run missed it because every input it tried put a SPACE before the `:`, which only probes the losing direction. The same class also covers `[a:smile:][ref]`, `[hello:smile:][ref]` and `[12:00-14:00][ref]`, which are not listed because they need a populated `labels` map to reach `tryReferenceLink` at all and the harness tokenizes registered inputs with default options.",
       "upstream": null
     },
     {

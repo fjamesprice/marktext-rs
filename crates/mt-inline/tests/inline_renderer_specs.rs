@@ -23,9 +23,9 @@
 //!
 //! Most of them fail today, and are supposed to: §14 step 5 wants them
 //! transcribed first and made to pass afterwards, so they are the target to
-//! build against. As of S2, 29 of the 49 are still red — links, images, HTML
-//! and autolinks are S3–S5, and until then anything they would match
-//! tokenizes as plain text.
+//! build against. As of S3, 15 of the 49 are still red, and every one of them
+//! is an autolink case — S5's. HTML is S4 and delists nothing; see
+//! [`PENDING`].
 //!
 //! But a build that is red for months is a build nobody reads, and by the time
 //! a real regression appears in one of the other thirteen crates the signal is
@@ -138,8 +138,8 @@ use mt_inline::{
 /// | example 475 | S2 (`strong`, `em`) | **done** |
 /// | the two emoji word-boundary cases | S2 (`emoji`) | **done** |
 /// | the sup/sub whitespace case | S2 (`super_sub_script`) | **done** |
-/// | example 520 | S3 (`link`, `reference_link`) | pending |
-/// | the undefined reference label | S3 (`reference_link`) | pending |
+/// | example 520 | S3 (`link`, `reference_link`) | **done** |
+/// | the undefined reference label | S3 (`reference_link`) | **done** |
 /// | the intra-word extension autolink | S5 (`auto_link_extension`) | pending |
 ///
 /// — and none of them can be made to pass by *not* implementing the rule,
@@ -155,10 +155,14 @@ use mt_inline::{
 /// not `tryHtmlTag` exists. 520 forbids `link`, so it goes live at S3 for the
 /// same reason, not at S4.
 ///
-/// Six of the nine are now non-vacuous, and the argument survived contact:
-/// `*\u{a0}a\u{a0}*` really does reach `tryStrongEm` and really is refused by
-/// `canOpenEmphasis`, `пристаням__стремятся__` by the run-atomicity guard, and
-/// the two emoji cases by the word-boundary check — none of them by absence.
+/// S3 is where that reading was tested rather than argued, and it held: 520's
+/// `[foo <bar attr="](baz)">` now reaches `tryLink`, and `lowerPriority` with
+/// `linkValidateRules` — which contains `html_tag` — is what refuses it, with
+/// `tryHtmlTag` still returning `false`. The undefined-reference-label row
+/// went live the same way: `[text][undefined-label]` reaches
+/// `tryReferenceLink` and is refused by the *labels* lookup, not by absence.
+/// Eight of the nine are now non-vacuous; only the intra-word extension
+/// autolink is left, and it is S5's.
 ///
 /// # The eleven delisted at S2
 ///
@@ -166,20 +170,22 @@ use mt_inline::{
 /// (`inline_code` outranks a tentative link), the two `super_sub_script`
 /// cases, the two `strong`/`em`-plus-code cases (#1071), the two escaped-dollar
 /// cases (#3778), the two remaining `emojiWordBoundary` cases, and both of
-/// `inlineMathEscape`. What is left is exactly S3, S4 and S5.
+/// `inlineMathEscape`.
+///
+/// # The fourteen delisted at S3
+///
+/// The three `referenceLinkImageAnchor` cases, the three
+/// `linkFollowedByAutolink` cases, and eight of `commonmarkExamples`: the
+/// defined reference label, the four title cases and the three balanced-paren
+/// cases. What is left is exactly S5 — every remaining entry is an autolink.
+/// **S4 delists nothing**, which is not a gap: `html_tag`'s two spec cases
+/// (475 and 520) were already delisted as the rules that forbid them landed,
+/// so S4's gate is its own attribute-scanner tests and the D3 site 2 fix.
 const PENDING: &[&str] = &[
-    // commonmarkExamples.spec.ts — S3 through S5; the file spans every stage
-    "emits_reference_link_when_the_label_is_defined",
+    // commonmarkExamples.spec.ts — S5 now; the file spans every stage
     "parses_an_angle_bracket_autolink_as_auto_link",
     "parses_a_bare_url_as_auto_link_extension",
     "parses_a_bare_www_url_as_auto_link_extension",
-    "extracts_the_title_from_a_link_with_a_double_quoted_title",
-    "extracts_the_title_from_a_link_with_a_single_quoted_title",
-    "extracts_the_title_from_an_image",
-    "leaves_the_title_empty_when_the_destination_has_no_title",
-    "parses_an_image_destination_containing_balanced_parens",
-    "parses_a_link_destination_containing_balanced_parens",
-    "stops_at_the_first_matching_paren_when_more_appear_later_on_the_line",
     // autoLinkTrailingPunct.spec.ts — S5
     "excludes_a_trailing_colon_from_the_link",
     "excludes_a_trailing_period_at_the_end_of_a_sentence",
@@ -191,18 +197,6 @@ const PENDING: &[&str] = &[
     "keeps_a_bare_trailing_semicolon_that_is_not_an_entity",
     "ends_the_link_at_a_less_than_character",
     "applies_the_rules_repeatedly_for_a_trailing_paren_then_period",
-    // linkFollowedByAutolink.spec.ts — S3
-    "recognizes_a_link_whose_closing_paren_is_followed_by_a_cjk_comma",
-    "recognizes_the_first_of_two_links_on_one_line",
-    "recognizes_a_link_whose_destination_url_is_immediately_followed_by_text",
-    // referenceLinkImageAnchor.spec.ts — S3
-    //
-    // The third one is a negative assertion like the nine delisted at S1, but
-    // it stays: it also asserts that the image *is* there, so it is not
-    // vacuous.
-    "tokenizes_a_reference_link_wrapping_an_image_as_a_single_token",
-    "still_tokenizes_a_plain_text_reference_link_unchanged",
-    "does_not_treat_an_image_anchor_as_a_link_when_the_ref_is_undefined",
     // autoLinkEncoding.spec.ts — S5
     "keeps_an_already_encoded_percent_twenty_intact_instead_of_double_encoding_it",
     "does_not_re_encode_reserved_characters_in_a_query_string",
@@ -423,7 +417,7 @@ fn the_pending_list_has_no_duplicates() {
 fn the_pending_list_is_the_expected_length() {
     assert_eq!(
         PENDING.len(),
-        29,
+        15,
         "PENDING changed length. If you fixed a case, decrement the expected \
          number here in the same commit; if it grew, a case regressed and the \
          list must not absorb it."

@@ -159,6 +159,14 @@ pub(crate) const JS_WHITESPACE_CLASS: &str = js_s!();
 /// word-boundary check.
 pub(crate) const JS_WORD_CLASS: &str = concat!("[", js_w!(), "]");
 
+/// JavaScript's `.` as a one-character class — `link.rs`'s `TITLE_REG`, which
+/// is `/^('|")(.*?)\1$/` and is built outside this module because it is a
+/// `utils.ts` regex rather than a `rules.ts` one.
+///
+/// The `.` matters there: a link title may not contain a line terminator, and
+/// Rust's `.` excludes only `\n`. `[a](u "x\rY")` would otherwise be a title.
+pub(crate) const JS_DOT_CLASS: &str = js_dot!();
+
 /// `[\s\S]` — every character, including line terminators.
 ///
 /// The one place a bare `\s` survives the C2 audit, and deliberately: the
