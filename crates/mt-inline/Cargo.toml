@@ -8,3 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# M1.md §4 C1. See the note in the workspace manifest for why this is not
+# `regex`. Pure — no I/O, no windowing, no GPU — so §1 is preserved and
+# `cargo xtask deps` stays green.
+fancy-regex.workspace = true

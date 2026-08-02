@@ -21,9 +21,11 @@
 //!
 //! # The pending ratchet — why these do not fail the build
 //!
-//! All 49 fail today: `mt_inline::tokenizer` is `todo!()` until S1–S5 land.
-//! §14 step 5 wants exactly that — they are the target to build against, and
-//! they are supposed to be red.
+//! Most of them fail today, and are supposed to: §14 step 5 wants them
+//! transcribed first and made to pass afterwards, so they are the target to
+//! build against. As of S1, 40 of the 49 are still red — emphasis, links,
+//! images, HTML and autolinks are S2–S5, and until then anything they would
+//! match tokenizes as plain text.
 //!
 //! But a build that is red for months is a build nobody reads, and by the time
 //! a real regression appears in one of the other thirteen crates the signal is
@@ -110,22 +112,46 @@ use mt_inline::{
 /// one contiguous deletion.
 ///
 /// Empty is the M1 exit gate.
+///
+/// # The nine S1 delisted, and why that is not cheating
+///
+/// S1 implements no rule that any of these 49 cases is *about*. It still
+/// delisted nine, all of them negative assertions — "does not emit a link",
+/// "is not an emoji", "no strong here". They pass **vacuously**: nothing that
+/// could emit the forbidden token exists yet.
+///
+/// The ratchet demanded the delisting (row two of the table above) and the
+/// demand is right, which is the part worth stating. A vacuous pass and a real
+/// pass are the same observation — *this input does not produce that token* —
+/// and the input is the whole point. Leaving them listed would mean the list
+/// no longer measures what is implemented, and, worse, that the moment S2
+/// implements emphasis and `*\u{a0}a\u{a0}*` starts emitting an `em`, the
+/// harness would say "still pending" instead of "regression".
+///
+/// Delisted, they are exactly what they were written to be: live guards that
+/// fail the stage that breaks them. Every one of them names the stage that
+/// will make it non-vacuous —
+///
+/// | Delisted at S1 | Becomes a real test at |
+/// |---|---|
+/// | example 475, example 520 | S4 (`html_tag`) |
+/// | example 353, example 387 | S2 (`strong`, `em`) |
+/// | the two emoji word-boundary cases | S2 (`emoji`) |
+/// | the sup/sub whitespace case | S2 (`super_sub_script`) |
+/// | the undefined reference label | S3 (`reference_link`) |
+/// | the intra-word extension autolink | S5 (`auto_link_extension`) |
+///
+/// — and none of them can be made to pass by *not* implementing the rule,
+/// because each stage's positive cases are still on this list.
 const PENDING: &[&str] = &[
     // commonmarkExamples.spec.ts — S1 through S5; the file spans every stage
-    "example_475_stars_inside_an_html_attribute_do_not_start_strong",
-    "example_353_star_adjacent_to_a_non_breaking_space_does_not_open_em",
-    "example_387_intraword_double_underscore_does_not_open_em_or_strong",
-    "example_520_html_tag_takes_precedence_over_a_tentative_link",
     "example_521_code_span_takes_precedence_over_a_tentative_link",
-    "does_not_emit_reference_link_when_the_label_is_undefined",
     "emits_reference_link_when_the_label_is_defined",
     "parses_caret_wrapped_text_as_super_sub_script_with_a_caret_marker",
     "parses_tilde_wrapped_text_as_super_sub_script_with_a_tilde_marker",
-    "does_not_parse_super_sub_script_when_the_marker_is_surrounded_by_whitespace",
     "parses_an_angle_bracket_autolink_as_auto_link",
     "parses_a_bare_url_as_auto_link_extension",
     "parses_a_bare_www_url_as_auto_link_extension",
-    "does_not_start_an_extension_autolink_inside_a_word",
     "extracts_the_title_from_a_link_with_a_double_quoted_title",
     "extracts_the_title_from_a_link_with_a_single_quoted_title",
     "extracts_the_title_from_an_image",
@@ -149,8 +175,6 @@ const PENDING: &[&str] = &[
     "ends_the_link_at_a_less_than_character",
     "applies_the_rules_repeatedly_for_a_trailing_paren_then_period",
     // emojiWordBoundary.spec.ts — S2
-    "does_not_treat_the_colons_in_a_timestamp_range_as_an_emoji",
-    "does_not_treat_a_colon_glued_to_a_word_as_an_emoji",
     "still_recognises_an_emoji_at_the_start_of_the_text",
     "still_recognises_an_emoji_after_whitespace",
     // linkFollowedByAutolink.spec.ts — S3
@@ -158,6 +182,10 @@ const PENDING: &[&str] = &[
     "recognizes_the_first_of_two_links_on_one_line",
     "recognizes_a_link_whose_destination_url_is_immediately_followed_by_text",
     // referenceLinkImageAnchor.spec.ts — S3
+    //
+    // The third one is a negative assertion like the nine delisted above, but
+    // it stays: it also asserts that the image *is* there, so it is not
+    // vacuous.
     "tokenizes_a_reference_link_wrapping_an_image_as_a_single_token",
     "still_tokenizes_a_plain_text_reference_link_unchanged",
     "does_not_treat_an_image_anchor_as_a_link_when_the_ref_is_undefined",
@@ -384,23 +412,85 @@ fn the_pending_list_has_no_duplicates() {
 fn the_pending_list_is_the_expected_length() {
     assert_eq!(
         PENDING.len(),
-        49,
+        40,
         "PENDING changed length. If you fixed a case, decrement the expected \
          number here in the same commit; if it grew, a case regressed and the \
          list must not absorb it."
     );
 }
 
-/// The S0 gate: the 49 fail because the tokenizer is unimplemented, **not**
-/// because a type is missing or an assertion is wrong.
+/// Whatever a spec case does or does not tokenize to, it tokenizes: every one
+/// of the 49 inputs comes back with tokens that tile it exactly.
 ///
-/// This is the one place that is checked, rather than asserting it 49 times.
-/// It fails the moment S1 replaces the `todo!()` — which is correct, and means
-/// S0 is over. Delete it then.
+/// The 49 assert on token *shape*, so a case can pass while the token stream
+/// around it has a hole in it. §3 rule 1 does not permit a hole, and
+/// [`mt_inline::generator`] is that rule as an equality. Checking it here
+/// means every spec input is also a round-trip fixture, which is what M1.md
+/// §6 asks for by pulling `generator` forward into S1.
 #[test]
-#[should_panic(expected = "M1 S1-S5")]
-fn the_tokenizer_is_unimplemented_at_s0() {
-    mt_inline::tokenize("anything");
+fn every_spec_input_round_trips_through_the_generator() {
+    // The inputs of all 49 cases, in the order the modules below use them.
+    // Labels do not affect tiling, so the reference cases appear once.
+    const INPUTS: &[&str] = &[
+        r#"**<a href="**">"#,
+        "*\u{a0}a\u{a0}*",
+        "пристаням__стремятся__",
+        r#"[foo <bar attr="](baz)">"#,
+        "[foo`](/uri)`",
+        "[text][undefined-label]",
+        "[text][ref]",
+        "text^sup^",
+        "text~sub~",
+        "text ^ foo ^ bar",
+        "<https://example.com>",
+        "https://example.com/path",
+        "www.example.com",
+        "xhttps://example.com",
+        r#"[text](http://example.com "Example title")"#,
+        "[text](http://example.com 'Example title')",
+        r#"![alt](http://example.com/x.png "Pic title")"#,
+        "[text](http://example.com)",
+        "**`word 1`**, **`word 2`**, **`word 3`**",
+        "*`word 1`*, *`word 2`*, *`word 3`*",
+        "![alt](path/to/(file).png)",
+        "[text](path/to/(file).html)",
+        "see ![alt](first.png) and also (parens) here",
+        r"It costs **\$20** to **\$30** online.",
+        r"a *\$1* and *\$2* b",
+        "http://some.domain.name/path/to/resource: rest",
+        "https://example.com/a/b. Next sentence.",
+        "https://example.com/a:b:c! end",
+        "https://example.com/a/b end",
+        "(https://en.wikipedia.org/wiki/Foo_(bar)) end",
+        "https://example.com/foo(bar) end",
+        "https://example.com/foo?bar=1&amp; end",
+        "https://example.com/a;b; end",
+        "https://example.com/a<b end",
+        "(see https://example.com/path). rest",
+        "12:00-14:00",
+        "hello:smile:",
+        ":smile:",
+        "lunch :100: today",
+        "支持[CommonMark 规范](https://spec.commonmark.org/)、其他",
+        "支持[CommonMark 规范](https://spec.commonmark.org/)、 \
+         [GitHub Flavored Markdown 规范](https://github.github.com/gfm/)",
+        "see [docs](https://example.com/path)next",
+        "[![alt](https://example.com/badge.svg)][ref]",
+        "[![alt](https://example.com/badge.svg)][missing]",
+        "<https://www.google.com/search?q=marktext%20foo%20bar>",
+        "<https://example.com/a?b=c&d=e>",
+        r"$y = \$10000$",
+        "$a+b$",
+    ];
+
+    for src in INPUTS {
+        let tokens = tokenize(src);
+        assert_eq!(
+            &mt_inline::generator(src, &tokens),
+            src,
+            "the token stream does not reproduce its input"
+        );
+    }
 }
 
 // ===========================================================================

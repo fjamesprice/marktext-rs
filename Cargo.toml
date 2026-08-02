@@ -34,8 +34,24 @@ opt-level = "s"
 # The only third-party dependency at M0 is `serde_json`, used by `xtask` for
 # the conformance ratchet (§11.1) and the differential harness (§11.2) — both
 # of which read and diff JSON. It is dev tooling, not a shipped dependency.
+#
+# `fancy-regex` is the first third-party dependency of a *shipped* crate, added
+# at M1 S1 for `mt-inline`. It is scheduled by the milestone that needs it, so
+# it is consistent with the policy above rather than an exception to it.
+#
+# §3 asks for the `regex` crate. M1.md §4 C1 corrects that: 16 of `rules.ts`'s
+# 26 regexes need a backreference, a lookahead or a lookbehind, none of which
+# `regex` has by design. `fancy-regex` wraps `regex` and adds exactly those,
+# delegating whole patterns to the non-backtracking engine when they do not
+# need the extra power — so the 10 plain rules keep `regex`'s performance and
+# §3's "port the regexes verbatim, hand-optimize later with the suite as the
+# guard" sequencing survives intact.
+#
+# It satisfies §1's purity constraint for `mt-inline`: no I/O, no windowing,
+# no GPU. Its own tree is `regex` + `bit-set`, both pure.
 # ---------------------------------------------------------------------------
 [workspace.dependencies]
+fancy-regex = "0.19"
 serde_json = "1"
 
 mt-app = { path = "crates/mt-app", version = "0.1.0" }

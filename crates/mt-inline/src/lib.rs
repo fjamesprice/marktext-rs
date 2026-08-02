@@ -88,9 +88,15 @@
 //! §3 says to use `regex` with pre-compiled `LazyLock<Regex>`. M1.md §4 C1
 //! corrects this: 16 of the 26 rules need backreferences, lookahead or
 //! lookbehind, none of which the `regex` crate has by design. `fancy-regex`
-//! is the recommendation, and it delegates to the non-backtracking engine for
-//! the 10 rules that do not need the extra power. That dependency lands in
-//! S1, not here.
+//! is what S1 wired in, and it delegates to the non-backtracking engine for
+//! the 10 rules that do not need the extra power.
+//!
+//! It is a backtracking engine, so the seven patterns `rules.ts` disables the
+//! super-linear-backtracking lint for are super-linear here too. Every rule is
+//! built with an explicit backtrack limit and **exceeding it means the rule
+//! did not match, never a panic** — see `rules::BACKTRACK_LIMIT` for the value
+//! and the three reasons. The tiling invariant is untouched by a rule giving
+//! up: no byte is lost, it just stays text.
 //!
 //! ## Marker reveal (§3.1)
 //!
@@ -109,23 +115,45 @@
 //! *before* it is made. Read that file before changing tokenizer behaviour;
 //! `cargo xtask divergences` is what keeps it honest.
 //!
-//! ## Status: S0
+//! ## Status: S1
 //!
-//! The token types are landed and the 49 specs are transcribed.
-//! [`tokenizer`] is `todo!()`, so all 49 fail — deliberately, per the S0 gate
-//! in M1.md §6. S1 lands the rule table and the tokenizer loop.
+//! Landed: the token types (S0), the 49 transcribed specs (S0), the rule table
+//! with `fancy-regex` behind it, the tokenizer loop with the ordered
+//! `INLINE_HANDLERS` array and `pushPending`, `consumeBeginRules`, the debug
+//! tiling assertion, and [`generator`] — pulled forward from S6 because
+//! `generator(tokenize(s)) == s` is the tiling invariant restated as an
+//! equality, and building it now makes every later stage's handler tested the
+//! moment it is written (M1.md §6).
 //!
-//! They fail without failing the build: every case that does not pass yet is
-//! listed in `PENDING` in `tests/inline_renderer_specs.rs`, and that list only
-//! shrinks — a listed case that starts passing fails CI until it is delisted.
-//! Same ratchet as `spec/expected-failures.json` and `spec/divergences.json`,
-//! for the same reason. **The list emptying is M1's exit gate**, and its
-//! length is the milestone's progress meter.
+//! Implemented handlers: `header` `hr` `code_fence` `multiple_math`
+//! `tail_header` `backlash` `html_escape` `soft_line_break` `hard_line_break`.
+//! **The other eleven are present in their exact precedence positions and
+//! return `false`**, so anything they would match accumulates as text. That is
+//! correct rather than merely tolerable: an unmatched construct is text, the
+//! input still tiles, and the round-trip still holds. Emphasis is S2, links
+//! and images S3, HTML S4, autolinks S5.
+//!
+//! Not yet read by anything: [`TokenizerOptions::labels`] (S3),
+//! [`TokenizerOptions::syntax`] (S2) and [`TokenizerOptions::highlights`]
+//! (S6, the post-pass).
+//!
+//! The remaining spec cases fail without failing the build: every case that
+//! does not pass yet is listed in `PENDING` in
+//! `tests/inline_renderer_specs.rs`, and that list only shrinks — a listed
+//! case that starts passing fails CI until it is delisted. Same ratchet as
+//! `spec/expected-failures.json` and `spec/divergences.json`, for the same
+//! reason. **The list emptying is M1's exit gate**, and its length is the
+//! milestone's progress meter.
 
+mod escape;
+mod generator;
+mod lexer;
+mod rules;
 mod token;
 
 use std::collections::BTreeMap;
 
+pub use generator::{generator, generator_rebuilding_wrappers};
 pub use token::{
     AutoLink, AutoLinkExtension, AutoLinkKind, BacklashPair, BeginRule, CodeEmojiMath, Emphasis,
     Highlight, HtmlTag, HtmlTagName, Image, ImageAttrs, Link, ReferenceDefinition, ReferenceImage,
@@ -226,25 +254,28 @@ impl TokenizerOptions {
 /// The port of `tokenizer()` (`lexer.ts:854`). Spans in the result are UTF-8
 /// byte offsets into `src`; see the crate docs for the convention.
 ///
-/// # Panics
+/// Concatenating every returned token's `raw` reproduces `src` byte for byte
+/// — that is §3 rule 1, and [`generator`] is it as a function.
 ///
-/// Unimplemented until S1–S5 (M1.md §6). Every one of the 49 transcribed
-/// specs fails here, which is the S0 gate.
+/// # What S1 does not do yet
+///
+/// Five of the sixteen rule groups are unimplemented (see the crate docs), so
+/// emphasis, links, images, HTML and autolinks currently tokenize as text.
+/// Three options are consequently ignored, and are documented as ignored
+/// rather than quietly honoured-later:
+///
+/// - `options.labels` — read by the reference-link handlers, S3.
+/// - `options.syntax` — read by the sup/sub and footnote handlers, S2.
+/// - `options.highlights` — the intersection post-pass is S6.
+///
+/// `options.has_begin_rules` is honoured.
 pub fn tokenizer(src: &str, options: &TokenizerOptions) -> Vec<Token> {
-    let _ = (src, options);
-    todo!(
-        "M1 S1-S5: the rule table, the ordered INLINE_HANDLERS loop, and the sixteen handlers. \
-         See docs/M1.md §6."
-    )
+    lexer::tokenizer(src, options)
 }
 
 /// Tokenize with muya's default options.
 ///
 /// A convenience for the common call; `tokenizer(src, &TokenizerOptions::muya_default())`.
-///
-/// # Panics
-///
-/// See [`tokenizer`].
 pub fn tokenize(src: &str) -> Vec<Token> {
     tokenizer(src, &TokenizerOptions::muya_default())
 }

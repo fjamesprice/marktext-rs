@@ -76,7 +76,7 @@ catches a dependency *cycle*, but not a one-way edge.
 
 ---
 
-## What is real at M0, and what is a stub
+## What is real, and what is a stub
 
 **Real, and running:**
 
@@ -84,6 +84,14 @@ catches a dependency *cycle*, but not a one-way edge.
 - `mt_doc::Block` and `mt_doc::Edit` as concrete types, with the four
   round-trip constraints from §2 carried as code comments and a test asserting
   the 1:1 mapping onto muya's `TState` union.
+- **`mt-inline`, in part** — M1 S1. The token types, the 26-rule table, the
+  tokenizer loop with muya's ordered handler list, and `generator`. Nine of the
+  sixteen handlers are implemented (`header` `hr` `code_fence` `multiple_math`
+  `tail_header` `backlash` `html_escape` `soft_line_break` `hard_line_break`);
+  the rest return `false`, so emphasis, links, images, HTML and autolinks still
+  tokenize as plain text. Progress is the `PENDING` list in
+  `crates/mt-inline/tests/inline_renderer_specs.rs`: 40 of the 49 transcribed
+  muya specs still to go.
 - The conformance ratchet, over 1,324 real fixtures.
 - The TypeScript half of the differential harness, over the 22-file corpus.
 - The dependency-direction guard.
@@ -92,8 +100,8 @@ catches a dependency *cycle*, but not a one-way edge.
 
 **Stubs:**
 
-- Every crate body. `mt_md`'s entry points return `Unimplemented`; `mt-cli
-  --dump-state` exits 3.
+- Every other crate body. `mt_md`'s entry points return `Unimplemented`;
+  `mt-cli --dump-state` exits 3.
 - Method bodies in `mt-doc` are `todo!()`, except `Block::name()` and
   `Block::is_leaf()`, which are the 1:1 mapping itself and are therefore
   implemented and tested now.
@@ -106,7 +114,15 @@ no flag to remember and no code to change.
 
 ## Third-party dependencies
 
-One: `serde_json`, in `xtask` only, for reading fixtures and diffing state.
+Two:
+
+- `serde_json`, in `xtask` only, for reading fixtures and diffing state. Dev
+  tooling, not shipped.
+- `fancy-regex`, in `mt-inline` — the first dependency of a shipped crate,
+  added at M1 S1. §3 asks for `regex`; 16 of `rules.ts`'s 26 patterns need a
+  backreference or lookaround, which `regex` does not have by design
+  (docs/M1.md §4 C1). `fancy-regex` wraps it and adds exactly those. Pure: no
+  I/O, no windowing, no GPU, so `mt-inline` stays headless.
 
 The dependency tables in §8 and §12 of the plan (wgpu, vello, parley, swash,
 tree-sitter, pulldown-cmark, winit, accesskit, …) are the plan of record, not

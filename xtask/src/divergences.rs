@@ -36,12 +36,19 @@
 //! `UnexpectedPass` it fails CI, so the register is forced back down instead
 //! of accumulating entries that quietly widen what the harness tolerates.
 //!
-//! # S0 status: skipped-but-present
+//! # Status: skipped-but-present
 //!
-//! Neither engine can produce a token stream yet — `mt_inline::tokenizer` is
-//! `todo!()` until S1–S5, and `diff.rs` compares block state, not tokens — so
-//! [`disagrees`] returns `None` for every input and every entry reports
-//! [`Verdict::Skipped`]. The runner exits 0 with a loud summary.
+//! No comparison can be made yet, so [`disagrees`] returns `None` for every
+//! input and every entry reports [`Verdict::Skipped`]. The runner exits 0 with
+//! a loud summary.
+//!
+//! At S0 that was because neither side could produce a token stream. S1
+//! changed half of it: `mt_inline::tokenizer` is implemented, and the nine
+//! plain handlers are live. What is still missing is the other half —
+//! `diff.rs` compares **block state**, not token streams, so there is no
+//! TypeScript token stream to compare a Rust one against. Both registered
+//! entries are S2 and S4 behaviours in any case, so nothing is being deferred
+//! that could be checked today.
 //!
 //! That is not the same as "not wired up". Running today already checks that
 //! the register parses, that every entry is well-formed and uniquely
@@ -356,12 +363,13 @@ pub fn registered_inputs(entries: &[Divergence]) -> BTreeSet<&str> {
 
 /// Whether the two engines disagree on `input`.
 ///
-/// `None` means the comparison could not be made, which is the whole story at
-/// S0: `mt_inline::tokenizer` is `todo!()` until S1–S5, and `diff.rs` compares
-/// block state rather than token streams, so there is nothing to compare.
+/// `None` means the comparison could not be made, which is still the whole
+/// story: `diff.rs` compares block state rather than token streams, so there
+/// is no TypeScript side to compare against. `mt_inline::tokenizer` itself has
+/// worked since S1.
 ///
-/// When S2 lands the token-stream mode, this is the one call site to point at
-/// it. Everything else in this file already works.
+/// When the harness grows a token-stream mode, this is the one call site to
+/// point at it. Everything else in this file already works.
 fn disagrees(input: &str) -> Option<bool> {
     let _ = input;
     None
@@ -478,11 +486,11 @@ pub fn main(repo_root: &Path) -> Result<i32, String> {
 
     if report.everything_skipped() {
         println!(
-            "All entries skipped: neither engine can produce a token stream yet.\n\
-             mt_inline::tokenizer is todo!() until M1 S1-S5, and the differential harness\n\
-             compares block state rather than tokens. The register is parsed, validated and\n\
-             wired — it begins enforcing on the first run where a comparison can be made.\n\
-             See xtask/src/divergences.rs."
+            "All entries skipped: the differential harness compares block state rather than\n\
+             token streams, so there is no TypeScript token stream to compare against.\n\
+             mt_inline::tokenizer itself has worked since M1 S1. The register is parsed,\n\
+             validated and wired — it begins enforcing on the first run where a comparison\n\
+             can be made. See xtask/src/divergences.rs."
         );
     }
 
@@ -707,10 +715,10 @@ mod tests {
         assert_eq!(inputs.len(), 4);
     }
 
-    /// S0 state, asserted so that the day it changes is the day someone
-    /// deliberately wires the token-stream comparison in.
+    /// Asserted so that the day it changes is the day someone deliberately
+    /// wires the token-stream comparison in.
     #[test]
-    fn every_entry_is_skipped_at_s0() {
+    fn every_entry_is_skipped_until_the_harness_compares_token_streams() {
         let entries = load(&spec_dir()).expect("load");
         let report = run(&entries);
         assert!(

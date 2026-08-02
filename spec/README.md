@@ -133,14 +133,19 @@ change the other two or write down why not.
 
 ### Current status: skipped-but-present
 
-Neither engine can produce a token stream yet — `mt_inline::tokenizer` is
-`todo!()` until M1 S1–S5, and `xtask diff` compares block state rather than
-tokens — so both entries report `Skipped`. Running today still checks that the
-register parses, that every entry is well-formed and uniquely identified, that
-no two entries claim the same input, and (through the runner's unit tests) that
-a stale entry is actually reported. Point `divergences::disagrees` at the
-token-stream comparator when S2 lands it; nothing else needs changing, and
-`divergences::tests::every_entry_is_skipped_at_s0` fails on that day to say so.
+`xtask diff` compares block state rather than token streams, so there is no
+TypeScript token stream to compare a Rust one against and both entries report
+`Skipped`. (`mt_inline::tokenizer` itself has worked since M1 S1; at S0 both
+halves were missing, now only the harness half is. Both registered entries are
+S2 and S4 behaviours in any case.)
+
+Running today still checks that the register parses, that every entry is
+well-formed and uniquely identified, that no two entries claim the same input,
+and (through the runner's unit tests) that a stale entry is actually reported.
+Point `divergences::disagrees` at the token-stream comparator when it exists;
+nothing else needs changing, and
+`divergences::tests::every_entry_is_skipped_until_the_harness_compares_token_streams`
+fails on that day to say so.
 
 ---
 
