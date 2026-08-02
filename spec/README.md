@@ -81,11 +81,75 @@ What *does* need doing, once, on that first run:
 
 ---
 
+## The divergence register
+
+`divergences.json` is the second register in this directory, and it points the
+other way: `expected-failures.json` lists places the engine is **worse** than it
+should be, `divergences.json` lists places it is deliberately **different** from
+muya.
+
+It exists because of docs/M1.md §5 D3. M1's verification strategy is agreement
+with the TypeScript engine, and D3 decides that muya's bugs are *fixed* in the
+port rather than reproduced bug-for-bug — so every fix is a disagreement, and
+without somewhere to record it **a fixed bug and a botched port look identical
+in the differential harness**. Four rules:
+
+1. A differential disagreement on a **registered** input is expected. A
+   disagreement on **any other** input is a failure, exactly as before.
+2. Every entry names concrete inputs, and those inputs become Rust tests
+   asserting the **fixed** behaviour.
+3. An entry with **no failing differential case is stale** — the fix is either
+   unimplemented or the divergence was imaginary — and the runner says so.
+4. `upstream` holds the marktext issue URL once filed. File them.
+
+```sh
+cargo xtask divergences
+```
+
+| State | Verdict | CI |
+|---|---|---|
+| A registered input disagrees | `Confirmed` | green |
+| **Every registered input agrees** | `Stale` | **fails** — implement the fix or delete the entry |
+| Any input could not be compared | `Skipped` | green, and says so |
+| Duplicate id, empty `inputs`, unknown key, shared input | — | **fails** — malformed register |
+
+`Stale` is the analogue of the conformance ratchet's `UnexpectedPass`, and it
+fails for the same reason: a register entry that no longer holds is one that
+silently widens what the harness tolerates. The shape is deliberately the same
+as `expected-failures.json` — one mechanism to keep honest rather than two.
+
+The runner lives in `xtask/src/divergences.rs`.
+
+### A third instance of the same ratchet
+
+`crates/mt-inline/tests/inline_renderer_specs.rs` carries a `PENDING` list with
+the identical decision table, over the 49 transcribed muya inline specs. It is
+not in `spec/` because it has a single consumer — its own test binary — so it
+is a Rust `const` rather than JSON, with no parser and no path resolution. Move
+it here if `xtask` ever needs to report on it.
+
+Three registers, one shape, on purpose. If you change how one of them decides,
+change the other two or write down why not.
+
+### Current status: skipped-but-present
+
+Neither engine can produce a token stream yet — `mt_inline::tokenizer` is
+`todo!()` until M1 S1–S5, and `xtask diff` compares block state rather than
+tokens — so both entries report `Skipped`. Running today still checks that the
+register parses, that every entry is well-formed and uniquely identified, that
+no two entries claim the same input, and (through the runner's unit tests) that
+a stale entry is actually reported. Point `divergences::disagrees` at the
+token-stream comparator when S2 lands it; nothing else needs changing, and
+`divergences::tests::every_entry_is_skipped_at_s0` fails on that day to say so.
+
+---
+
 ## Files
 
 | File | Origin |
 |---|---|
 | `expected-failures.json` | Copied verbatim from muya. The ratchet's floor. |
+| `divergences.json` | **Written here**, not inherited. The register of intentional differences from muya — see above. |
 | `conformance.md` | Copied verbatim. muya's baseline, captured at PR-6a (2026-05-20). |
 | `fixtures/gfm-spec-0.29-gfm.json` | Copied verbatim. 672 examples. |
 | `fixtures/marktext-round-trip/` | Copied verbatim. 11 fixtures backported from marktext's `markdown-basic` tests; also used by the differential harness. |

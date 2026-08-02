@@ -1,0 +1,21 @@
+{
+  "_comment": "Intentional behavioural differences between mt-inline and muya's inlineRenderer. docs/M1.md §5 D3 is the decision: muya's bugs are FIXED in the port, not reproduced bug-for-bug — and every fix is registered here BEFORE it is made, because otherwise a fixed bug and a botched port are indistinguishable in the differential harness. Rules: (1) a differential disagreement on a registered input is expected; a disagreement on any other input is still a failure. (2) Every entry names concrete inputs, and those inputs become Rust tests asserting the FIXED behaviour. (3) An entry with no failing differential case is STALE — the fix is either unimplemented or the divergence was imaginary — and `cargo xtask divergences` says so. (4) `upstream` holds the marktext issue URL once filed; file them. Fields: id (unique, kebab-case), site (file:line and the function), muya (what it does), ours (what we do instead), inputs (non-empty, unique across the whole register), upstream (null or an https URL).",
+  "divergences": [
+    {
+      "id": "emoji-nested-boundary",
+      "site": "lexer.ts:206 tryChunks",
+      "muya": "child substring indexed at an absolute offset — `state.originSrc[state.pos - 1]` reads `originSrc`, which in a nested tokenizerFac call is the CHILD substring, at `pos`, which is an ABSOLUTE offset into the top-level text. The emoji word-boundary check therefore tests the wrong character, or reads off the end. Whether an emoji inside emphasis survives depends on what character happens to sit at that offset: `**a :smile:**` and `**:smile:**` lose the emoji, while `*x :smile:*` and `[a :smile:](u)` keep it by luck.",
+      "ours": "index relative to the current tokenizer level — read the preceding character at `pos - base - 1`, where `base` is the level's absolute base offset. When `pos == base` there is no preceding character at this level, which counts as a boundary and allows the emoji; that is correct for every call site, because a child level is only ever entered after `*`, `_`, `~`, `[` or a `>`-terminated open tag, none of which are word characters. It is also what the top level already does at `pos == 0`. This makes tryAutoLinkExtension's identical read (lexer.ts:578) safe by construction rather than by the `state.top` gate that saves it by accident.",
+      "inputs": ["**a :smile:**", "**:smile:**"],
+      "upstream": null
+    },
+    {
+      "id": "disallowed-html-tag-substring-match",
+      "site": "lexer.ts:21 disallowedHtmlTag",
+      "muya": "unanchored substring match — `/title|textarea|style|xmp|iframe|noembed|noframes|script|plaintext/i` is tested against the captured tag name without anchors, so any tag name CONTAINING one of the nine is rejected. `<subtitle>` is rejected for containing `title`, `<scripty>` for containing `script`, and neither is raw HTML that GFM §6.11 disallows.",
+      "ours": "exact tag-name match, case-insensitive, against the nine names GFM §6.11 lists: title, textarea, style, xmp, iframe, noembed, noframes, script, plaintext.",
+      "inputs": ["<subtitle>", "<scripty>"],
+      "upstream": null
+    }
+  ]
+}

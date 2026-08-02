@@ -10,6 +10,7 @@
 //! |---|---|---|
 //! | `conformance` | CommonMark + GFM ratchet | §11.1 |
 //! | `diff` | Differential test against the TypeScript engine | §11.2 |
+//! | `divergences` | The register of intentional differences from muya | M1 §5 D3 |
 //! | `corpus` | Generate `bench/corpus/` | §14 step 4 |
 //! | `deps` | Enforce the dependency-direction constraints | §1 |
 //! | `ci` | All of the above, in order | §9 M0 exit gate |
@@ -18,6 +19,7 @@ mod conformance;
 mod corpus;
 mod deps;
 mod diff;
+mod divergences;
 mod html;
 
 use std::path::{Path, PathBuf};
@@ -44,10 +46,13 @@ COMMANDS:
                            is unavailable.
         --mt-cli <PATH>    Use a specific mt-cli binary.
         <FILE...>          Compare only these files.
+    divergences          Check spec/divergences.json, the register of
+                         intentional differences from muya (M1 §5 D3).
     corpus [--check]     Generate bench/corpus/ (§14 step 4); --check verifies
                          the committed files match the generator.
     deps                 Enforce the §1 dependency-direction constraints.
-    ci                   deps, corpus --check, conformance, diff — in order.
+    ci                   deps, corpus --check, divergences, conformance, diff —
+                         in order.
 ";
 
 fn main() {
@@ -63,6 +68,7 @@ fn main() {
     let result = match command {
         "conformance" => conformance::main(&root),
         "diff" => diff::main(&root, rest),
+        "divergences" => divergences::main(&root),
         "corpus" => corpus::main(&root, rest),
         "deps" => deps::main(&root),
         "ci" => ci(&root, rest),
@@ -98,6 +104,10 @@ fn ci(root: &Path, rest: &[String]) -> Result<i32, String> {
             "corpus --check",
             Box::new(|| corpus::main(root, &["--check".to_string()])),
         ),
+        // Before the two harnesses that will consult it: a malformed register
+        // is a register that silently widens what `diff` tolerates, so it
+        // should be reported before `diff`'s own output, not after.
+        ("divergences", Box::new(|| divergences::main(root))),
         ("conformance", Box::new(|| conformance::main(root))),
         ("diff", Box::new(|| diff::main(root, rest))),
     ];
