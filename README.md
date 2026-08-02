@@ -84,13 +84,15 @@ catches a dependency *cycle*, but not a one-way edge.
 - `mt_doc::Block` and `mt_doc::Edit` as concrete types, with the four
   round-trip constraints from §2 carried as code comments and a test asserting
   the 1:1 mapping onto muya's `TState` union.
-- **`mt-inline`, in part** — M1 S1. The token types, the 26-rule table, the
-  tokenizer loop with muya's ordered handler list, and `generator`. Nine of the
-  sixteen handlers are implemented (`header` `hr` `code_fence` `multiple_math`
-  `tail_header` `backlash` `html_escape` `soft_line_break` `hard_line_break`);
-  the rest return `false`, so emphasis, links, images, HTML and autolinks still
-  tokenize as plain text. Progress is the `PENDING` list in
-  `crates/mt-inline/tests/inline_renderer_specs.rs`: 40 of the 49 transcribed
+- **`mt-inline`, in part** — M1 S2. The token types, the 26-rule table, the
+  tokenizer loop with muya's ordered handler list, `generator`, and the
+  emphasis-validation half of `utils.ts`. Thirteen of the sixteen handlers are
+  implemented — the nine plain ones plus `strong`/`em`, the four chunk rules
+  (`inline_code` `del` `emoji` `inline_math`), `super_sub_script` and
+  `footnote_identifier` — and nested tokenization runs, so `**a `b` c**` is a
+  tree. The remaining three return `false`, so links, images, HTML and
+  autolinks still tokenize as plain text. Progress is the `PENDING` list in
+  `crates/mt-inline/tests/inline_renderer_specs.rs`: 29 of the 49 transcribed
   muya specs still to go.
 - The conformance ratchet, over 1,324 real fixtures.
 - The TypeScript half of the differential harness, over the 22-file corpus.

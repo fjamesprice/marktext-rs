@@ -58,10 +58,18 @@
 //!
 //! ## Flipping it on
 //!
-//! There is nothing to flip. Point [`disagrees`] at the token-stream
-//! comparator when S2 lands it, and the same run starts enforcing.
-//! `tests::every_entry_is_skipped_at_s0` fails on that day and tells whoever
-//! hits it to delete it.
+//! There is nothing to flip. Point [`disagrees`] at a token-stream comparator
+//! and the same run starts enforcing;
+//! `tests::every_entry_is_skipped_until_the_harness_compares_token_streams`
+//! fails on that day and tells whoever hits it to delete it.
+//!
+//! S2 did the comparison by hand instead — muya's `tokenizer` loaded directly
+//! and its token streams diffed field by field against the port's over 207
+//! inputs — and it widened `emoji-nested-boundary` from two registered inputs
+//! to seven. That is rule 1 working (an unregistered disagreement is a
+//! failure, so a class wider than its entry must widen the entry) and it is
+//! also the argument for building the comparator: a hand-run finds this once,
+//! a harness finds it every time.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -80,6 +88,18 @@ pub struct Divergence {
     /// Concrete inputs on which the two engines disagree. Non-empty, and
     /// unique across the whole register.
     pub inputs: Vec<String>,
+    /// Optional prose about the entry itself rather than about the behaviour —
+    /// in practice, where a widened [`inputs`](Self::inputs) list came from.
+    ///
+    /// Added at M1 S2, when diffing token streams found five more inputs in
+    /// `emoji-nested-boundary`'s class than the entry named. Rule 1 makes an
+    /// unregistered disagreement a failure, so a class wider than its entry has
+    /// to widen the entry — and a reviewer looking at seven inputs where there
+    /// were two deserves to be told that in the register rather than in a
+    /// commit message they would have to go and find.
+    ///
+    /// Not read by the runner. It is data for people.
+    pub note: Option<String>,
     /// The marktext issue URL, once filed.
     pub upstream: Option<String>,
 }
@@ -87,7 +107,7 @@ pub struct Divergence {
 /// The keys an entry may have. Anything else is a typo that would otherwise be
 /// silently ignored — including a misspelled `inputs`, which would empty an
 /// entry without emptying the JSON.
-const ENTRY_KEYS: [&str; 6] = ["id", "site", "muya", "ours", "inputs", "upstream"];
+const ENTRY_KEYS: [&str; 7] = ["id", "site", "muya", "ours", "inputs", "note", "upstream"];
 
 /// What the runner decided about one entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,12 +264,23 @@ pub fn parse(value: &serde_json::Value) -> Result<Vec<Divergence>, String> {
                 }
             };
 
+            let note = match object.get("note") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(s)) => Some(s.clone()),
+                Some(other) => {
+                    return Err(format!(
+                        "entry {i}: \"note\" must be null or a string, got {other}"
+                    ));
+                }
+            };
+
             Ok(Divergence {
                 id: string("id")?,
                 site: string("site")?,
                 muya: string("muya")?,
                 ours: string("ours")?,
                 inputs,
+                note,
                 upstream,
             })
         })
@@ -512,8 +543,36 @@ mod tests {
             muya: "does the wrong thing".to_string(),
             ours: "does the right thing".to_string(),
             inputs: inputs.iter().map(|s| (*s).to_string()).collect(),
+            note: None,
             upstream: None,
         }
+    }
+
+    /// `note` is optional and, unlike `upstream`, may not be a number or an
+    /// array either — it is parsed the same way so a typo cannot become a
+    /// silently-dropped field.
+    #[test]
+    fn note_may_be_absent_null_or_a_string() {
+        let parse_note = |json: &str| {
+            let value: serde_json::Value = serde_json::from_str(json).expect("valid json");
+            parse(&value).map(|entries| entries[0].note.clone())
+        };
+        let with = |note: &str| {
+            format!(
+                r#"{{"divergences":[{{"id":"x","site":"a:1","muya":"m","ours":"o",
+                    "inputs":["a"],{note}"upstream":null}}]}}"#
+            )
+        };
+        assert_eq!(parse_note(&with("")).expect("absent"), None);
+        assert_eq!(parse_note(&with(r#""note":null,"#)).expect("null"), None);
+        assert_eq!(
+            parse_note(&with(r#""note":"why",  "#)).expect("string"),
+            Some("why".to_string())
+        );
+        assert!(
+            parse_note(&with(r#""note":7,"#)).is_err(),
+            "a number is not prose"
+        );
     }
 
     // --- the decision table, against synthetic outcomes --------------------
@@ -704,15 +763,34 @@ mod tests {
 
     /// Rule 2 again, against the real register: the registered inputs are what
     /// become Rust tests asserting the fixed behaviour, so they have to be the
-    /// inputs D3 actually verified against the running engine.
+    /// inputs someone actually ran against the engine.
+    ///
+    /// The four D3 named are still here; the five `emoji-nested-boundary`
+    /// gained at S2 came from diffing token streams over 207 inputs, and every
+    /// one of them has a test in `crates/mt-inline/src/lexer.rs`. **Grow this
+    /// number only alongside those tests** — a registered input with no test is
+    /// a tolerated disagreement nobody is asserting anything about, which is
+    /// the failure mode rule 2 exists to prevent.
     #[test]
-    fn the_registered_inputs_are_the_ones_d3_verified() {
+    fn the_registered_inputs_are_the_ones_someone_verified() {
         let entries = load(&spec_dir()).expect("load");
         let inputs = registered_inputs(&entries);
-        for expected in ["**a :smile:**", "**:smile:**", "<subtitle>", "<scripty>"] {
+        for expected in [
+            // D3, at S0
+            "**a :smile:**",
+            "**:smile:**",
+            "<subtitle>",
+            "<scripty>",
+            // the same divergence, found wider at S2
+            "__a :smile:__",
+            "~~a :smile:~~",
+            "**:100:**",
+            "**a :smile: b**",
+            "**abcdefgh :smile:**",
+        ] {
             assert!(inputs.contains(expected), "{expected:?} is not registered");
         }
-        assert_eq!(inputs.len(), 4);
+        assert_eq!(inputs.len(), 9);
     }
 
     /// Asserted so that the day it changes is the day someone deliberately

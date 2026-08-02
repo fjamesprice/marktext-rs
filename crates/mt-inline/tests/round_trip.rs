@@ -84,16 +84,34 @@ fn corpus_files() -> Vec<(String, String)> {
 ///
 /// The tokenizer runs every unmatched rule at every unmatched character —
 /// what a faithful port of `lexer.ts` does, and what §3 says to keep until the
-/// suite is green enough to guard a hand-written scanner. Measured on the
-/// development machine at S1, in a debug profile: **~1 s for `250kb.md`,
-/// ~21 s for `1mb.md` and `5mb.md` together.**
+/// suite is green enough to guard a hand-written scanner. So the cost of this
+/// file grows with every handler a stage implements, and the doc asks for a
+/// **re-measurement at each stage** rather than a number anyone trusts.
 ///
-/// 21 s is not fatal on its own. What makes it the wrong default is that it
-/// only grows: S1 runs five of the sixteen handlers, and each of S2–S5 adds
-/// more regexes to try at every unmatched position. The same two files are
-/// plausibly a minute or more by S5, on every `cargo test` on three platforms,
-/// for input that is `250kb.md`'s generated prose made longer — scale, not new
-/// structure. **Re-measure at each stage** rather than trusting these numbers.
+/// Measured on the development machine, in a debug profile:
+///
+/// | Stage | Handlers live | This file | `1mb.md` + `5mb.md` |
+/// |---|---:|---:|---:|
+/// | S1 | 9 of 16 | ~1.3 s | ~21 s |
+/// | S2 | 13 of 16 | ~4.2 s | **~134 s** |
+///
+/// Four handlers cost **6.4×**, which is more than the S1 note's "plausibly a
+/// minute or more by S5" allowed for — S2 alone passed that. The jump is not
+/// mysterious: `tryStrongEm` and `tryChunks` run six regexes at every
+/// unmatched position, four of which (`strong`, `em`, `del`, `inline_math`)
+/// carry a lazy `[\s\S]*?` that scans to the end of the level before failing,
+/// and `250kb.md` is one very long level. That is the O(n²) shape M1.md §5 D5
+/// flags for `lowerPriority`, arriving early and from the rule table instead.
+///
+/// Two things follow, neither of them "raise the limit":
+///
+/// - S3–S5 add three more lazy-quantified rules (`link`, `image`,
+///   `reference_link`). Extrapolating the same factor puts the ignored pair
+///   past ten minutes, which is past the point where anyone runs it by hand.
+///   **The `lowerPriority` benchmark D5 asks for before M1 closes should be a
+///   whole-tokenizer benchmark, and it should exist by S3**, not S7.
+/// - The covered run is still ~4 s, which is fine, and that is what the limit
+///   is protecting. Keep it where it is.
 ///
 /// 256 KiB is chosen to keep `250kb.md` in: it is the largest file whose
 /// content differs *structurally* from the two above it.

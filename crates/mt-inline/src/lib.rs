@@ -115,7 +115,7 @@
 //! *before* it is made. Read that file before changing tokenizer behaviour;
 //! `cargo xtask divergences` is what keeps it honest.
 //!
-//! ## Status: S1
+//! ## Status: S2
 //!
 //! Landed: the token types (S0), the 49 transcribed specs (S0), the rule table
 //! with `fancy-regex` behind it, the tokenizer loop with the ordered
@@ -123,19 +123,29 @@
 //! tiling assertion, and [`generator`] — pulled forward from S6 because
 //! `generator(tokenize(s)) == s` is the tiling invariant restated as an
 //! equality, and building it now makes every later stage's handler tested the
-//! moment it is written (M1.md §6).
+//! moment it is written (M1.md §6). Then, in S2, the emphasis half of
+//! `utils.ts` (`emphasis.rs`) and the four handlers that consume it.
 //!
 //! Implemented handlers: `header` `hr` `code_fence` `multiple_math`
-//! `tail_header` `backlash` `html_escape` `soft_line_break` `hard_line_break`.
-//! **The other eleven are present in their exact precedence positions and
-//! return `false`**, so anything they would match accumulates as text. That is
-//! correct rather than merely tolerable: an unmatched construct is text, the
-//! input still tiles, and the round-trip still holds. Emphasis is S2, links
-//! and images S3, HTML S4, autolinks S5.
+//! `tail_header` `backlash` `html_escape` `soft_line_break` `hard_line_break`
+//! `strong`/`em` `inline_code`/`del`/`emoji`/`inline_math` `super_sub_script`
+//! `footnote_identifier`. **The other three are present in their exact
+//! precedence positions and return `false`**, so anything they would match
+//! accumulates as text. That is correct rather than merely tolerable: an
+//! unmatched construct is text, the input still tiles, and the round-trip
+//! still holds. Links and images are S3, HTML S4, autolinks S5.
 //!
-//! Not yet read by anything: [`TokenizerOptions::labels`] (S3),
-//! [`TokenizerOptions::syntax`] (S2) and [`TokenizerOptions::highlights`]
-//! (S6, the post-pass).
+//! **Nested tokenization is live from S2**: `strong`, `em` and `del` tokenize
+//! their content as children, based at an absolute offset into the same
+//! top-level text. So the cross-level half of M1.md §4 C3 — every child span
+//! is contained in its parent's — is now checked against real children rather
+//! than vacuously true.
+//!
+//! Not yet read by anything: [`TokenizerOptions::labels`] (S3) and
+//! [`TokenizerOptions::highlights`] (S6, the post-pass).
+//! [`TokenizerOptions::syntax`] became live in S2 — it gates
+//! `super_sub_script` (on by default) and `footnote_identifier` (**off** by
+//! default, so `[^1]` is plain text unless a caller asks).
 //!
 //! The remaining spec cases fail without failing the build: every case that
 //! does not pass yet is listed in `PENDING` in
@@ -145,6 +155,7 @@
 //! reason. **The list emptying is M1's exit gate**, and its length is the
 //! milestone's progress meter.
 
+mod emphasis;
 mod escape;
 mod generator;
 mod lexer;
@@ -257,18 +268,17 @@ impl TokenizerOptions {
 /// Concatenating every returned token's `raw` reproduces `src` byte for byte
 /// — that is §3 rule 1, and [`generator`] is it as a function.
 ///
-/// # What S1 does not do yet
+/// # What S2 does not do yet
 ///
-/// Five of the sixteen rule groups are unimplemented (see the crate docs), so
-/// emphasis, links, images, HTML and autolinks currently tokenize as text.
-/// Three options are consequently ignored, and are documented as ignored
-/// rather than quietly honoured-later:
+/// Three of the sixteen handlers are unimplemented (see the crate docs), so
+/// links, images, HTML and autolinks currently tokenize as text. Two options
+/// are consequently ignored, and are documented as ignored rather than quietly
+/// honoured-later:
 ///
 /// - `options.labels` — read by the reference-link handlers, S3.
-/// - `options.syntax` — read by the sup/sub and footnote handlers, S2.
 /// - `options.highlights` — the intersection post-pass is S6.
 ///
-/// `options.has_begin_rules` is honoured.
+/// `options.has_begin_rules` and `options.syntax` are honoured.
 pub fn tokenizer(src: &str, options: &TokenizerOptions) -> Vec<Token> {
     lexer::tokenizer(src, options)
 }

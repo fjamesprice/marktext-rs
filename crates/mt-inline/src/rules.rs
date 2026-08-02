@@ -145,6 +145,20 @@ macro_rules! js_dot {
     };
 }
 
+// The two classes another module needs as a *predicate* rather than as part of
+// a rule pattern. `macro_rules!` does not escape its module without
+// `#[macro_use]`, and the C2 classes must have exactly one definition, so they
+// are re-exported as pattern text instead.
+
+/// JavaScript's `\s` as a one-character pattern — `emphasis.rs`'s
+/// `UNICODE_WHITESPACE_REG`, which is `/^\s/` and drives the entire
+/// emphasis-flanking decision.
+pub(crate) const JS_WHITESPACE_CLASS: &str = js_s!();
+
+/// JavaScript's `\w` as a one-character class — `lexer.ts:206`'s emoji
+/// word-boundary check.
+pub(crate) const JS_WORD_CLASS: &str = concat!("[", js_w!(), "]");
+
 /// `[\s\S]` — every character, including line terminators.
 ///
 /// The one place a bare `\s` survives the C2 audit, and deliberately: the
@@ -216,7 +230,7 @@ pub(crate) const BACKTRACK_LIMIT: usize = 1_000_000;
 /// either always panics or never does, and
 /// `every_rule_compiles_and_is_indexed_by_its_own_discriminant` makes sure it
 /// is never. It therefore does not weaken the panic-freedom gate.
-fn compile(name: &str, pattern: &str) -> Regex {
+pub(crate) fn compile(name: &str, pattern: &str) -> Regex {
     RegexBuilder::new(pattern)
         .backtrack_limit(BACKTRACK_LIMIT)
         .build()

@@ -1,18 +1,35 @@
 //! The tokenizer loop — a port of `inlineRenderer/lexer.ts`.
 //!
-//! # What is here at S1
+//! # What is here at S2
 //!
 //! The loop, `pushPending`, `consumeBeginRules`, the ordered
-//! [`INLINE_HANDLERS`] array, and the nine plain handlers M1.md §6 S1 lists:
-//! `header` `hr` `code_fence` `multiple_math` `tail_header` `backlash`
-//! `html_escape` `soft_line_break` `hard_line_break`. The other eleven
-//! handlers are present, in their exact precedence positions, and return
-//! `false`. Each says which stage fills it in.
+//! [`INLINE_HANDLERS`] array, and thirteen of its sixteen handlers: the nine
+//! plain ones from S1 (`header` `hr` `code_fence` `multiple_math`
+//! `tail_header` `backlash` `html_escape` `soft_line_break`
+//! `hard_line_break`) plus S2's four — [`try_strong_em`], [`try_chunks`],
+//! [`try_super_sub_script`] and [`try_footnote`], which between them produce
+//! eight of the 26 token types. The remaining three ([`try_image`],
+//! [`try_link`] and friends, [`try_html_tag`], the two autolinks) are present,
+//! in their exact precedence positions, and return `false`. Each says which
+//! stage fills it in.
 //!
 //! That is not a placeholder pattern for its own sake. **The array order is
 //! the rule-precedence contract** (`lexer.ts:790`, and the TypeScript carries
-//! a comment saying so), so it is written down once, in full, and stages 2–5
+//! a comment saying so), so it is written down once, in full, and stages 3–5
 //! fill in bodies rather than rearranging entries.
+//!
+//! # Nesting starts here
+//!
+//! S2 is the first stage in which [`tokenizer_fac`] calls itself: `strong`,
+//! `em` and `del` tokenize their content group as a child level. Two
+//! consequences worth knowing before reading a handler:
+//!
+//! - **Child spans are absolute.** A nested call is given the capture group's
+//!   [`Span`] and produces offsets into the same top-level text, exactly as
+//!   muya passes `state.pos + to[1].length` as the child's base.
+//! - **[`check_tiling`]'s cross-level half is now live.** Until S2 the "every
+//!   child span is contained in its parent's" assertion was vacuously true
+//!   because nothing had children.
 //!
 //! # No reslicing — M1.md §5 D4
 //!
@@ -42,9 +59,10 @@
 //! `origin[start..pos]`** — see [`LexState::pending`] for the one place where
 //! that is not obvious, which is D3 site 3.
 
-use crate::TokenizerOptions;
-use crate::rules::{RuleId, exec, rule};
-use crate::token::{BeginRule, Span, Token, TokenKind};
+use crate::emphasis::{is_length_even, is_word_character, lower_priority, validate_emphasize};
+use crate::rules::{self, RuleId, exec, rule};
+use crate::token::{BeginRule, CodeEmojiMath, Emphasis, Span, Token, TokenKind};
+use crate::{SyntaxOptions, TokenizerOptions};
 
 use fancy_regex::Captures;
 
@@ -60,9 +78,10 @@ use fancy_regex::Captures;
 ///   [`level`](Self::level). See the module docs.
 /// - `inlineRules` — a constant here, not a parameter. muya threads it so that
 ///   `tokenizerFac` can be called with a different set; nothing ever does.
-/// - `labels`, `options`, `superSubScript`, `footnote` — arrive with the
-///   handlers that read them, in S2 and S3. Adding them now would be eleven
-///   unread fields.
+/// - `options` — muya carries the whole options object only so that it can be
+///   passed down to a nested `tokenizerFac`; the two fields any handler reads
+///   are `superSubScript` and `footnote`, which are [`syntax`](Self::syntax).
+/// - `labels` — arrives with `tryReferenceLink`, in S3.
 pub(crate) struct LexState<'a> {
     /// The whole top-level block text. Every [`Span`] this crate produces is
     /// an offset into *this*, at every nesting depth.
@@ -105,12 +124,68 @@ pub(crate) struct LexState<'a> {
     /// Read by [`try_tail_header`] and, from S5, by
     /// [`try_auto_link_extension`].
     top: bool,
+    /// muya's `state.superSubScript` and `state.footnote`, destructured from
+    /// `options` at `lexer.ts:812` and threaded down every nested call
+    /// unchanged.
+    ///
+    /// S1 left this out rather than carry a dead field. S2 is where it starts
+    /// being read: [`try_super_sub_script`] and [`try_footnote`] are gated on
+    /// it, and both gates are load-bearing — `footnote` is `false` by default,
+    /// so `[^1]` is plain text unless a caller asks otherwise.
+    syntax: SyntaxOptions,
 }
 
 impl<'a> LexState<'a> {
     /// muya's `state.src` — the level's input from the cursor to its end.
     fn rest(&self) -> &'a str {
         &self.origin[self.pos..self.level.end]
+    }
+
+    /// muya's `state.pending` as a string.
+    ///
+    /// `canOpenEmphasis` reads it for the character preceding an opening
+    /// marker, so it has to be materialised at exactly one call site. Empty
+    /// when there is no pending run — muya's `''`, which
+    /// `lastCodePointChar` turns into the `'\n'` default.
+    ///
+    /// **Not "all the text before `pos`".** `pushPending` empties the run
+    /// whenever a token is emitted, so after `` `code`**bold** `` the pending
+    /// run is empty and the `**` is treated as though it began a line. That is
+    /// muya's behaviour and reproducing it is the reason this reads the run
+    /// rather than `origin[level.start..pos]`.
+    fn pending_text(&self) -> &'a str {
+        match self.pending {
+            Some(start) => &self.origin[start..self.pos],
+            None => "",
+        }
+    }
+
+    /// The character before [`pos`](Self::pos) **at this level**, or `None`
+    /// when the cursor is at the level's start.
+    ///
+    /// # This is M1.md §5 D3 site 1, and it is a one-liner because of D4
+    ///
+    /// muya writes `state.originSrc[state.pos - 1]` (`lexer.ts:206`, and again
+    /// at `:578`). In a nested `tokenizerFac` call `originSrc` is the **child
+    /// substring** while `pos` is an **absolute** offset into the top-level
+    /// text, so the two index different strings and the read lands on whatever
+    /// character happens to sit at that offset in the child — or off the end.
+    /// `**a :smile:**` and `**:smile:**` lose their emoji; `*x :smile:*` and
+    /// `[a :smile:](u)` keep theirs, by luck.
+    ///
+    /// Here there is only ever **one string**. A level is `(origin, level)`
+    /// rather than a substring plus a base, so "the character before the
+    /// cursor at this level" cannot disagree with itself. `None` at
+    /// `pos == level.start` is a boundary and allows the emoji, which is
+    /// correct at every call site: a child level is only ever entered after
+    /// `*`, `_`, `~`, `[` or a `>`-terminated open tag, none of which are word
+    /// characters — and it is what the top level already does at `pos == 0`.
+    ///
+    /// Registered as `emoji-nested-boundary` in `spec/divergences.json` before
+    /// it was made, per D3's rule; the two inputs named there are asserted in
+    /// this module's tests.
+    fn preceding_char(&self) -> Option<char> {
+        self.origin[self.level.start..self.pos].chars().next_back()
     }
 
     /// The absolute span of capture group `index`, or `None` if the group did
@@ -284,26 +359,277 @@ fn try_backlash(state: &mut LexState<'_>) -> bool {
     true
 }
 
-/// `tryStrongEm` (`lexer.ts:143`). **S2** — needs `validateEmphasize`,
-/// `lowerPriority` and `isLengthEven`.
-fn try_strong_em(_state: &mut LexState<'_>) -> bool {
+/// `tryStrongEm` (`lexer.ts:143`) — `**bold**` / `__bold__` / `*em*` / `_em_`.
+///
+/// # The `return` that is not a `continue`
+///
+/// muya tries `strong` then `em`, and the inner block ends:
+///
+/// ```js
+/// if (isValid) { … return true }
+/// return false            // lexer.ts:186
+/// ```
+///
+/// That `return` exits the **whole handler**, not the iteration. So when
+/// `strong` matches with an even backslash run and `validateEmphasize` then
+/// rejects it, `em` is never tried at that position. Reading the two-element
+/// array as a loop and writing `continue` is the natural mistake, and it is
+/// reproduced here.
+///
+/// Note where the `return` is *not*: an odd backslash run fails the
+/// `isLengthEven` gate **before** the block is entered, so that case really
+/// does fall through to `em`. `**a\**` is the smallest witness, and it is why
+/// the gate is checked outside the `if` in this port too.
+///
+/// ## …and it appears to be unobservable, which is why this comment exists
+///
+/// Searched for a distinguishing input against the running engine — two
+/// reimplementations of this decision over muya's own rules and its own
+/// `validateEmphasize`, one with the `return` and one with a `continue` —
+/// across every `(src, pending)` pair with `|src| ≤ 6` over the alphabet
+/// ``*_a `$~.,\`` and a structured sweep of longer markers, bodies and tails.
+/// **Two million pairs, zero disagreements.**
+///
+/// Half of that has a proof rather than a sample. `strong`'s pattern carries
+/// `(?=\S)`, so `canOpenEmphasis`'s whitespace test can never be what rejects
+/// it; its punctuation test rejects when `src[2]` is punctuation and the
+/// preceding character is not a flanking boundary; and `em` at the same
+/// position sees `src[1]`, which is the second marker character and therefore
+/// *always* punctuation — so `em` needs the same boundary and fails whenever
+/// `strong` did. The `_` clause and the run-atomicity guard both read only the
+/// marker character and `pending`, which are identical for the two rules. So
+/// `canOpenEmphasis` can never distinguish them. `canCloseEmphasis` and
+/// `lowerPriority` see different offsets and are only covered by the sweep.
+///
+/// The `return` stays because a faithful port is what M1 is for and because
+/// "no counterexample under length 6" is not a theorem. What the paragraph
+/// buys is that nobody has to redo the search: if this is ever rewritten as a
+/// `continue`, **no test will catch it**, and that is worth knowing before
+/// rather than after.
+fn try_strong_em(state: &mut LexState<'_>) -> bool {
+    type IntoKind = fn(Emphasis) -> TokenKind;
+    const EM_RULES: [(RuleId, IntoKind); 2] = [
+        (RuleId::Strong, TokenKind::Strong),
+        (RuleId::Em, TokenKind::Em),
+    ];
+
+    let origin = state.origin;
+
+    for (id, into_kind) in EM_RULES {
+        let Some(caps) = exec(rule(id), state.rest()) else {
+            continue;
+        };
+        let backlash = state.required(&caps, 3, id);
+        if !is_length_even(Some(backlash)) {
+            continue;
+        }
+
+        let whole = state.required(&caps, 0, id);
+        let marker = state.required(&caps, 1, id);
+        let content = state.required(&caps, 2, id);
+
+        // `state.pending` is read *before* the flush, as muya does: the
+        // preceding character comes from the run that `emit` is about to
+        // consume.
+        let is_valid = validate_emphasize(
+            state.rest(),
+            whole.len(),
+            marker.of(origin),
+            state.pending_text(),
+            rules::VALIDATE_RULES,
+        );
+        if !is_valid {
+            return false;
+        }
+
+        // muya tokenizes `to[2]` with the absolute base `pos + to[1].length`.
+        // The lookahead between groups 1 and 2 is zero-width, so that base is
+        // where group 2 starts — asserted rather than recomputed, because if
+        // the pattern ever grew something between them the two would silently
+        // disagree and every child span would be shifted.
+        debug_assert_eq!(content.start, marker.end);
+        let children = tokenizer_fac(origin, content, false, false, state.syntax);
+
+        state.emit(
+            into_kind(Emphasis {
+                marker,
+                children,
+                backlash,
+            }),
+            whole,
+            whole.end,
+        );
+        return true;
+    }
+
     false
 }
 
-/// `tryChunks` (`lexer.ts:194`) — `inline_code`, `del`, `emoji`,
-/// `inline_math`. **S2**, and it carries the D3 site 1 emoji-boundary fix.
-fn try_chunks(_state: &mut LexState<'_>) -> bool {
+/// `tryChunks` (`lexer.ts:194`) — `inline_code`, `del`, `emoji`, `inline_math`,
+/// in that precedence order.
+///
+/// Three of the four are leaves carrying their content verbatim; `del` is the
+/// odd one out and tokenizes its content as children, like `strong` and `em`.
+/// It does **not** go through `validateEmphasize` — `~~` has no flanking rule.
+///
+/// # The emoji word boundary, and the second `return`
+///
+/// `emoji` alone is gated twice more (#1677): the `:` must not be glued to a
+/// word character, and nothing higher-priority may run past the shortcode.
+/// Failing either is another `return false` from the whole handler rather than
+/// a `continue`, so a rejected emoji stops `inline_math` from being tried at
+/// the same position. Same shape as [`try_strong_em`]'s, and reproduced for the
+/// same reason.
+///
+/// The boundary read is M1.md §5 D3 site 1 — see [`LexState::preceding_char`].
+fn try_chunks(state: &mut LexState<'_>) -> bool {
+    const CHUNKS: [RuleId; 4] = [
+        RuleId::InlineCode,
+        RuleId::Del,
+        RuleId::Emoji,
+        RuleId::InlineMath,
+    ];
+
+    let origin = state.origin;
+
+    for id in CHUNKS {
+        let Some(caps) = exec(rule(id), state.rest()) else {
+            continue;
+        };
+        // `inline_code` and `emoji` have only two capture groups, so this is
+        // `isLengthEven(undefined)` — vacuously true. Deliberately kept
+        // vacuous; see `is_length_even`.
+        let backlash = state.group(&caps, 3);
+        if !is_length_even(backlash) {
+            continue;
+        }
+
+        let whole = state.required(&caps, 0, id);
+        let marker = state.required(&caps, 1, id);
+        let content = state.required(&caps, 2, id);
+
+        if id == RuleId::Emoji {
+            // An emoji opener must sit at a word boundary: the `:` in
+            // `12:00-14:00` is not the start of a shortcode (#1677).
+            let preceded_by_word = is_word_character(state.preceding_char());
+            if preceded_by_word || !lower_priority(state.rest(), whole.len(), rules::VALIDATE_RULES)
+            {
+                return false;
+            }
+        }
+
+        let kind = if id == RuleId::Del {
+            debug_assert_eq!(content.start, marker.end);
+            TokenKind::Del(Emphasis {
+                marker,
+                children: tokenizer_fac(origin, content, false, false, state.syntax),
+                backlash: state.required(&caps, 3, id),
+            })
+        } else {
+            let chunk = CodeEmojiMath {
+                marker,
+                content,
+                backlash,
+            };
+            match id {
+                RuleId::InlineCode => TokenKind::InlineCode(chunk),
+                RuleId::Emoji => TokenKind::Emoji(chunk),
+                RuleId::InlineMath => TokenKind::InlineMath(chunk),
+                _ => unreachable!("CHUNKS has exactly four entries"),
+            }
+        };
+
+        state.emit(kind, whole, whole.end);
+        return true;
+    }
+
     false
 }
 
-/// `trySuperSubScript` (`lexer.ts:262`). **S2.**
-fn try_super_sub_script(_state: &mut LexState<'_>) -> bool {
-    false
+/// `trySuperSubScript` (`lexer.ts:262`) — `^sup^` and `~sub~`.
+///
+/// One token type for both, as `types.ts` has it; the marker distinguishes
+/// them. muya writes the rule choice as `superscript.exec(src) ||
+/// subscript.exec(src)`, so `^` is tried first and the two never compete —
+/// their markers are different characters.
+///
+/// Gated on `options.syntax.super_sub_script`, which defaults to `true`.
+fn try_super_sub_script(state: &mut LexState<'_>) -> bool {
+    if !state.syntax.super_sub_script {
+        return false;
+    }
+
+    let Some((id, caps)) = [RuleId::Superscript, RuleId::Subscript]
+        .into_iter()
+        .find_map(|id| exec(rule(id), state.rest()).map(|caps| (id, caps)))
+    else {
+        return false;
+    };
+
+    let whole = state.required(&caps, 0, id);
+    let marker = state.required(&caps, 1, id);
+    let content = state.required(&caps, 2, id);
+
+    state.emit(
+        TokenKind::SuperSubScript { marker, content },
+        whole,
+        whole.end,
+    );
+    true
 }
 
-/// `tryFootnote` (`lexer.ts:289`). **S2.**
-fn try_footnote(_state: &mut LexState<'_>) -> bool {
-    false
+/// `tryFootnote` (`lexer.ts:289`) — `[^note]`.
+///
+/// Gated on `options.syntax.footnote`, which defaults to **`false`**, so
+/// `[^1]` is plain text unless a caller asks for the extension.
+///
+/// # `state.pos === 0` is not a fourth D3 site
+///
+/// It looks like one. `pos` is an absolute offset, so the guard fires at the
+/// start of the block and cannot fire in a nested level, where `pos` is at
+/// least the parent's marker length; a footnote may therefore open at the start
+/// of `**[^1]**`'s content but not at the start of the block. That is the same
+/// *shape* as D3 site 1 — an absolute offset used where a relative one might be
+/// meant — so it was worked out rather than assumed, and it is **reproduced**.
+///
+/// Two reasons, and the first is the decisive one:
+///
+/// - **There is nothing here for the absolute offset to disagree with.** D3
+///   site 1 is a bug because it indexes `originSrc`, the *child* string, at an
+///   *absolute* offset — two things that describe different strings. This
+///   compares `pos` against a literal `0` and reads no string at all, so there
+///   is no second operand to be inconsistent with. `pos == 0` means exactly
+///   what it says: the very beginning of the block text.
+/// - **"The beginning of the block" is the right thing to test.** A `[^…]` in
+///   that position is the label of a footnote *definition* line
+///   (`[^1]: the note`), which belongs to the block layer, not an inline
+///   reference. A nested level is by construction not the beginning of a
+///   block, so the guard correctly does not fire there.
+///
+/// No `spec/divergences.json` entry, then — nothing diverges. Worth the
+/// paragraph because "the other absolute-offset site was a bug" is a
+/// reasonable thing for a later reader to assume, and this is where that
+/// assumption is answered.
+fn try_footnote(state: &mut LexState<'_>) -> bool {
+    if state.pos == 0 || !state.syntax.footnote {
+        return false;
+    }
+
+    let id = RuleId::FootnoteIdentifier;
+    let Some(caps) = exec(rule(id), state.rest()) else {
+        return false;
+    };
+
+    let whole = state.required(&caps, 0, id);
+    let marker = state.required(&caps, 1, id);
+    let content = state.required(&caps, 2, id);
+
+    state.emit(
+        TokenKind::FootnoteIdentifier { marker, content },
+        whole,
+        whole.end,
+    );
+    true
 }
 
 /// `tryImage` (`lexer.ts:315`). **S3** — needs `correctUrl` and
@@ -454,14 +780,20 @@ const INLINE_HANDLERS: [fn(&mut LexState<'_>) -> bool; 16] = [
 /// `tokenizerFac` (`lexer.ts:811`) — tokenize one level.
 ///
 /// `level` is the extent of this level's input within `origin`. For the
-/// top-level call that is the whole string; a nested call (S2 onward) passes
-/// the capture group it is descending into, and every span the call produces
-/// is still an absolute offset into `origin`.
+/// top-level call that is the whole string; a nested call passes the capture
+/// group it is descending into, and every span the call produces is still an
+/// absolute offset into `origin`.
+///
+/// S2 is where the nested call first happens — `strong`, `em` and `del`
+/// tokenize their content — and it is what makes the cross-level half of
+/// M1.md §4 C3 live rather than vacuous: [`check_tiling`] now has children to
+/// check against their parents.
 pub(crate) fn tokenizer_fac(
     origin: &str,
     level: Span,
     has_begin_rules: bool,
     top: bool,
+    syntax: SyntaxOptions,
 ) -> Vec<Token> {
     let mut state = LexState {
         origin,
@@ -470,6 +802,7 @@ pub(crate) fn tokenizer_fac(
         pending: None,
         tokens: Vec::new(),
         top,
+        syntax,
     };
 
     // muya: `if (beginRules && state.pos === 0)`. Both halves are kept: the
@@ -603,11 +936,17 @@ fn check_tiling(origin: &str, level: Span, tokens: &[Token]) {
 
 /// `tokenizer` (`lexer.ts:854`), minus the `highlights` post-pass.
 ///
-/// `options.labels` and `options.syntax` are not read yet — the handlers that
-/// consult them are S2 and S3 — and neither is `options.highlights`, whose
-/// post-pass is S6. [`crate::tokenizer`] says so where a caller will see it.
+/// `options.labels` is not read yet — the handlers that consult it are S3 —
+/// and neither is `options.highlights`, whose post-pass is S6.
+/// [`crate::tokenizer`] says so where a caller will see it.
 pub(crate) fn tokenizer(src: &str, options: &TokenizerOptions) -> Vec<Token> {
-    tokenizer_fac(src, Span::new(0, src.len()), options.has_begin_rules, true)
+    tokenizer_fac(
+        src,
+        Span::new(0, src.len()),
+        options.has_begin_rules,
+        true,
+        options.syntax,
+    )
 }
 
 #[cfg(test)]
@@ -617,6 +956,11 @@ mod tests {
 
     fn types(src: &str) -> Vec<&'static str> {
         tokenize(src).iter().map(Token::type_str).collect()
+    }
+
+    /// The same, for a child level.
+    fn types_of(tokens: &[Token]) -> Vec<&'static str> {
+        tokens.iter().map(Token::type_str).collect()
     }
 
     /// The invariant, applied to the assertion that enforces it: a `text`
@@ -640,12 +984,18 @@ mod tests {
         assert!(tokenize("").is_empty());
     }
 
-    /// Nothing S1 implements can match here, so every rule falls through and
-    /// the whole thing accumulates. That is the loop's default path and the
-    /// one every unimplemented handler relies on.
+    /// Nothing implemented can match here, so every rule falls through and the
+    /// whole thing accumulates. That is the loop's default path and the one
+    /// every unimplemented handler relies on.
+    ///
+    /// The input is S3–S5 only — links, images, HTML, autolinks. It used to
+    /// include `**bold**` and `` `code` ``, and S2 is what took them out: a
+    /// handler that starts working turns this test red, which is the point of
+    /// keeping it pointed at whatever is *still* unimplemented. Narrow it again
+    /// at S3, S4 and S5 until there is nothing left to put in it.
     #[test]
     fn unmatched_constructs_accumulate_as_text_rather_than_being_dropped() {
-        let src = "**bold** and *em* and `code` and [link](url)";
+        let src = "[link](url) and ![img](src) and <span>x</span> and https://x.y";
         assert_eq!(types(src), ["text"]);
         assert_eq!(raws(src), [src]);
     }
@@ -830,6 +1180,296 @@ mod tests {
         assert_eq!(types(src), ["header", "text", "tail_header", "text"]);
         assert_eq!(tokens[2].raw.of(src), " ###");
         assert_eq!(tokens[3].raw.of(src), "  ");
+    }
+
+    // -----------------------------------------------------------------------
+    // The S2 handlers
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn strong_and_em_carry_their_marker_and_tokenize_their_content() {
+        let src = "a **bold** b";
+        let tokens = tokenize(src);
+        assert_eq!(types(src), ["text", "strong", "text"]);
+
+        let TokenKind::Strong(emphasis) = &tokens[1].kind else {
+            panic!("expected a strong");
+        };
+        assert_eq!(emphasis.marker.of(src), "**");
+        assert_eq!(emphasis.backlash.of(src), "");
+        assert_eq!(types_of(&emphasis.children), ["text"]);
+        assert_eq!(emphasis.children[0].raw.of(src), "bold");
+
+        assert_eq!(types("*em*"), ["em"]);
+        assert_eq!(types("__bold__"), ["strong"]);
+        assert_eq!(types("_em_"), ["em"]);
+    }
+
+    /// Children carry **absolute** spans into the top-level text, not offsets
+    /// into the substring they were tokenized from. That is muya's convention
+    /// (`tokenizerFac` takes an absolute base) and it is what makes the
+    /// cross-level tiling check meaningful.
+    #[test]
+    fn child_spans_are_absolute_offsets_into_the_top_level_text() {
+        let src = "xx **a `b` c** yy";
+        let tokens = tokenize(src);
+        let TokenKind::Strong(emphasis) = &tokens[1].kind else {
+            panic!("expected a strong");
+        };
+        let code = &emphasis.children[1];
+        assert_eq!(code.type_str(), "inline_code");
+        assert_eq!(code.raw.of(src), "`b`");
+        // `xx **a ` is seven bytes, so the code span sits at 7..10 of the
+        // top-level text and at 3..6 of the substring it was tokenized from.
+        assert_eq!(code.raw, Span::new(7, 10), "absolute, not 3..6");
+    }
+
+    /// A rejected emphasis leaves its markers in the text rather than emitting
+    /// a half-token, at both markers and at both lengths.
+    ///
+    /// `пристаням__стремятся__` is CommonMark example 387 and is the
+    /// run-atomicity guard in `canOpenEmphasis`, not the `return` at
+    /// `lexer.ts:186` — see [`try_strong_em`], which records why that `return`
+    /// has no known observable consequence. `**` has no intra-word rule, so
+    /// `x**a**y` really is a strong span; only `_` is restricted.
+    #[test]
+    fn a_rejected_emphasis_leaves_its_markers_as_text() {
+        assert_eq!(types("пристаням__стремятся__"), ["text"]);
+        assert_eq!(types("a__b__c"), ["text"], "`_` may not open intra-word");
+        assert_eq!(
+            types("x**a**y"),
+            ["text", "strong", "text"],
+            "`*` may, and does"
+        );
+    }
+
+    /// The `isLengthEven` gate sits **outside** the block that returns, so an
+    /// odd backslash run really does fall through to the next rule — where, in
+    /// this input, `em` cannot match either, and the `\*` ends up as a
+    /// `backlash` token instead.
+    ///
+    /// Measured: muya gives `text("**a") backlash("\") text("*")`.
+    #[test]
+    fn an_odd_backslash_run_is_not_stopped_by_the_return() {
+        let src = r"**a\**";
+        assert_eq!(types(src), ["text", "backlash", "text"]);
+        assert_eq!(raws(src), ["**a", "\\", "**"]);
+
+        // An even run closes the span, and the run is reported on the token.
+        let src = r"**a\\**";
+        let tokens = tokenize(src);
+        assert_eq!(types(src), ["strong"]);
+        let TokenKind::Strong(emphasis) = &tokens[0].kind else {
+            panic!("expected a strong");
+        };
+        assert_eq!(emphasis.backlash.of(src), r"\\");
+    }
+
+    #[test]
+    fn the_four_chunk_rules_have_the_precedence_of_their_array() {
+        assert_eq!(types("`code`"), ["inline_code"]);
+        assert_eq!(types("~~struck~~"), ["del"]);
+        assert_eq!(types(":smile:"), ["emoji"]);
+        assert_eq!(types("$a+b$"), ["inline_math"]);
+    }
+
+    /// `del` is the only chunk with children; the other three carry content
+    /// verbatim.
+    #[test]
+    fn del_tokenizes_its_content_and_the_other_three_do_not() {
+        let src = "~~a `b` c~~";
+        let tokens = tokenize(src);
+        let TokenKind::Del(emphasis) = &tokens[0].kind else {
+            panic!("expected a del");
+        };
+        assert_eq!(
+            types_of(&emphasis.children),
+            ["text", "inline_code", "text"]
+        );
+
+        let src = "`a *b* c`";
+        let tokens = tokenize(src);
+        let TokenKind::InlineCode(chunk) = &tokens[0].kind else {
+            panic!("expected an inline_code");
+        };
+        assert_eq!(chunk.content.of(src), "a *b* c");
+        assert!(tokens[0].children().is_none());
+    }
+
+    /// `inline_code` and `emoji` have no third capture group, so their
+    /// `isLengthEven` gate is `isLengthEven(undefined)` — vacuously true. Kept
+    /// vacuous rather than "fixed" into something that can fail.
+    #[test]
+    fn the_backlash_gate_is_vacuous_for_the_two_rules_without_a_third_group() {
+        let src = "`a\\`";
+        let tokens = tokenize(src);
+        let TokenKind::InlineCode(chunk) = &tokens[0].kind else {
+            panic!("expected an inline_code even though the content ends in a backslash");
+        };
+        assert_eq!(chunk.backlash, None, "no third group to report");
+        assert_eq!(chunk.content.of(src), "a\\");
+    }
+
+    #[test]
+    fn super_sub_script_is_one_token_type_distinguished_by_its_marker() {
+        for (src, marker, content) in [("x^2^", "^", "2"), ("H~2~O", "~", "2")] {
+            let tokens = tokenize(src);
+            let token = tokens
+                .iter()
+                .find(|t| t.type_str() == "super_sub_script")
+                .unwrap_or_else(|| panic!("no super_sub_script in {src:?}"));
+            let TokenKind::SuperSubScript {
+                marker: m,
+                content: c,
+            } = token.kind
+            else {
+                unreachable!()
+            };
+            assert_eq!(m.of(src), marker);
+            assert_eq!(c.of(src), content);
+        }
+    }
+
+    #[test]
+    fn super_sub_script_can_be_switched_off() {
+        let options = TokenizerOptions {
+            syntax: crate::SyntaxOptions {
+                super_sub_script: false,
+                ..crate::SyntaxOptions::default()
+            },
+            ..TokenizerOptions::muya_default()
+        };
+        let tokens = crate::tokenizer("x^2^", &options);
+        assert_eq!(
+            tokens.iter().map(Token::type_str).collect::<Vec<_>>(),
+            ["text"]
+        );
+    }
+
+    /// Footnotes are **off** by default, and even switched on they may not open
+    /// at offset 0 of the block. See [`try_footnote`] for why that is not a
+    /// fourth D3 site.
+    #[test]
+    fn footnotes_are_off_by_default_and_never_open_at_offset_zero() {
+        assert_eq!(types("a [^1] b"), ["text"], "off by default");
+
+        let with_footnotes = TokenizerOptions {
+            syntax: crate::SyntaxOptions {
+                footnote: true,
+                ..crate::SyntaxOptions::default()
+            },
+            ..TokenizerOptions::muya_default()
+        };
+        let kinds = |src| {
+            crate::tokenizer(src, &with_footnotes)
+                .iter()
+                .map(Token::type_str)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(kinds("a [^1] b"), ["text", "footnote_identifier", "text"]);
+        assert_eq!(
+            kinds("[^1] b"),
+            ["text"],
+            "pos == 0: not an inline footnote"
+        );
+        // …and in a nested level `pos` is never 0, so one may open at the very
+        // start of the content. `pos` is absolute in both engines, so this is
+        // muya's behaviour and not a consequence of the port's layout.
+        assert_eq!(kinds("**[^1]**"), ["strong"]);
+        let tokens = crate::tokenizer("**[^1]**", &with_footnotes);
+        let TokenKind::Strong(emphasis) = &tokens[0].kind else {
+            panic!("expected a strong");
+        };
+        assert_eq!(types_of(&emphasis.children), ["footnote_identifier"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // M1.md §5 D3 site 1 — the nested emoji boundary
+    // -----------------------------------------------------------------------
+
+    /// The registered fix, on the two inputs `spec/divergences.json` names.
+    ///
+    /// muya emits **no emoji** for either: `tryChunks` reads
+    /// `state.originSrc[state.pos - 1]`, and in a nested call `originSrc` is
+    /// the child substring while `pos` is an absolute offset, so the
+    /// word-boundary test lands on the wrong character. Measured against the
+    /// running engine — `**a :smile:**` gives one `text` child and
+    /// `**:smile:**` gives one `text` child.
+    ///
+    /// Register rule 2: *"every entry names concrete inputs, and those inputs
+    /// become Rust tests asserting the FIXED behaviour."* This is that test.
+    #[test]
+    fn a_nested_emoji_survives_the_registered_boundary_fix() {
+        let src = "**a :smile:**";
+        let tokens = tokenize(src);
+        let TokenKind::Strong(emphasis) = &tokens[0].kind else {
+            panic!("expected a strong");
+        };
+        assert_eq!(types_of(&emphasis.children), ["text", "emoji"]);
+        assert_eq!(emphasis.children[1].raw.of(src), ":smile:");
+
+        let src = "**:smile:**";
+        let tokens = tokenize(src);
+        let TokenKind::Strong(emphasis) = &tokens[0].kind else {
+            panic!("expected a strong");
+        };
+        assert_eq!(
+            types_of(&emphasis.children),
+            ["emoji"],
+            "at pos == level.start there is no preceding character at this \
+             level, which counts as a boundary"
+        );
+    }
+
+    /// The rest of the registered class: the same fix at the other three
+    /// container rules, and the case where muya's misread character is a digit
+    /// rather than a letter.
+    #[test]
+    fn the_boundary_fix_applies_at_every_nesting_site() {
+        for src in ["__a :smile:__", "~~a :smile:~~", "**a :smile: b**"] {
+            let tokens = tokenize(src);
+            let children = tokens[0].children().expect("a container");
+            assert!(
+                children.iter().any(|t| t.type_str() == "emoji"),
+                "no emoji in {src:?}: {:?}",
+                types_of(children)
+            );
+        }
+
+        // `**:100:**` — muya reads `originSrc[1]`, which is `1`, a word
+        // character, and suppresses the emoji. Nothing at this level precedes
+        // the `:`.
+        let tokens = tokenize("**:100:**");
+        assert_eq!(types_of(tokens[0].children().expect("a strong")), ["emoji"]);
+    }
+
+    /// The other side of the fix: a *genuine* word boundary still suppresses
+    /// the emoji, at every level. The four `emojiWordBoundary` spec cases are
+    /// all top level; these are the nested equivalents.
+    #[test]
+    fn a_real_word_character_still_suppresses_a_nested_emoji() {
+        for src in ["**a:smile:**", "**12:00-14:00**", "*hello:smile:*"] {
+            let tokens = tokenize(src);
+            let children = tokens[0].children().expect("a container");
+            assert_eq!(
+                types_of(children),
+                ["text"],
+                "{src:?} must not produce an emoji"
+            );
+        }
+    }
+
+    /// D3's note that `*x :smile:*` and `[a :smile:](u)` "survive by luck" in
+    /// muya: they agree with the port today, and they must keep agreeing, so
+    /// they are pinned as ordinary tests rather than left to the register.
+    #[test]
+    fn the_inputs_muya_gets_right_by_luck_are_unchanged_by_the_fix() {
+        let src = "*x :smile:*";
+        let tokens = tokenize(src);
+        let TokenKind::Em(emphasis) = &tokens[0].kind else {
+            panic!("expected an em");
+        };
+        assert_eq!(types_of(&emphasis.children), ["text", "emoji"]);
     }
 
     // -----------------------------------------------------------------------

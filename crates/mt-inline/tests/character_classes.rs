@@ -54,14 +54,25 @@
 //!
 //! | Class | Reached through |
 //! |---|---|
-//! | `\s` | `header`'s `(\s+|$)` and `tail_header`'s `^(\s+#+)(\s*)$` |
+//! | `\s` | `header`'s `(\s+\|$)` and `tail_header`'s `^(\s+#+)(\s*)$` |
 //! | `(?i)` | `html_escape`'s alternation |
-//! | `.` | not reachable at S1 — `image`, `link`, `inline_code`, `inline_math` are S2/S3 |
-//! | `\w`, `\d` | not reachable at S1 — `emoji` and the autolinks are S2/S5 |
+//! | `.` | **S2** — `inline_code`'s `.{2,}` and `inline_math`'s `\\.` |
+//! | `\w` | **S2** — the emoji word boundary at `lexer.ts:206` |
+//! | `\d` | **S2** — `emoji`'s content class `[a-z_\d+-]` |
+//! | `\s` (again) | **S2** — `UNICODE_WHITESPACE_REG`, the flanking decision |
 //!
-//! The last two rows are the ones to extend when those stages land; the two
-//! rules that use `\w` and `\d` are the emoji word boundary and the autolink
-//! host, which is where C2 says the damage would be.
+//! S1's version of this table said the last three were unreachable and named
+//! this file as the place to extend when they became reachable. S2 is that
+//! stage: `emoji` reaches `\w` and `\d`, and `inline_code` and `inline_math`
+//! reach `.`. The remaining unreached user of `\w` and `\d` is the autolink
+//! host, which is S5.
+//!
+//! Every S2 row below was measured the same way as the S1 rows — muya's
+//! `tokenizer` run over the input at the pinned reference commit, with the
+//! `type` of each token recorded. The S2 sweep covered 207 inputs; 194 agreed
+//! exactly on type, `raw`, every field and `range`, six differ only because
+//! muya reaches an S3–S5 rule the port has not written, and the remaining
+//! seven are the registered `emoji-nested-boundary` divergence.
 
 use mt_inline::{Token, tokenize};
 
@@ -167,11 +178,159 @@ fn line_break_spaces_are_literal_and_agree_with_muya() {
     }
 }
 
+// ===========================================================================
+// S2 — the three classes S1 could not reach
+// ===========================================================================
+
+/// `\w`, through the emoji word boundary (`lexer.ts:206`).
+///
+/// JavaScript's `\w` is `[A-Za-z0-9_]`, always. Rust's is Unicode-aware, so
+/// under a bare `\w` every one of the six non-ASCII rows below would suppress
+/// an emoji that muya emits — and five of them are ordinary prose characters.
+/// This is the row M1.md §4 C2 calls out by name.
+#[test]
+fn the_word_class_agrees_with_muya_at_the_emoji_boundary() {
+    const CASES: &[(&str, &[&str])] = &[
+        // ASCII word characters suppress the emoji. This is #1677 itself.
+        ("12:00-14:00", &["text"]),
+        ("hello:smile:", &["text"]),
+        ("_:smile:", &["text"]),
+        // Non-word ASCII does not.
+        ("-:smile:", &["text", "emoji"]),
+        (".:smile:", &["text", "emoji"]),
+        ("(:smile:)", &["text", "emoji", "text"]),
+        // …and neither does anything non-ASCII, because JavaScript's \w is
+        // ASCII-only. Rust's default would swallow every one of these.
+        ("д:smile:", &["text", "emoji"]),         // Cyrillic
+        ("буква:smile:", &["text", "emoji"]),     // a whole Cyrillic word
+        ("中:smile:", &["text", "emoji"]),        // CJK
+        ("é:smile:", &["text", "emoji"]),         // Latin-1 letter
+        ("ÿ:smile:", &["text", "emoji"]),         // Latin-1 letter
+        ("\u{1f642}:smile:", &["text", "emoji"]), // an astral emoji
+        ("。:smile:", &["text", "emoji"]),        // CJK full stop
+    ];
+
+    for (src, expected) in CASES {
+        assert_eq!(&types(src), expected, "input: {src:?}");
+    }
+}
+
+/// `\d`, through `emoji`'s content class `[a-z_\d+-]`.
+///
+/// JavaScript's `\d` is `[0-9]`. Rust's is `\p{Nd}` — every decimal-digit
+/// script — so a bare `\d` would admit Arabic-Indic and Devanagari digits into
+/// a shortcode that muya rejects.
+#[test]
+fn the_digit_class_agrees_with_muya_inside_a_shortcode() {
+    const CASES: &[(&str, &[&str])] = &[
+        // ASCII digits are shortcode characters.
+        (":1:", &["emoji"]),
+        (":a1:", &["emoji"]),
+        (":a7:", &["emoji"]),
+        // Other decimal-digit scripts are not.
+        (":\u{664}:", &["text"]),  // ARABIC-INDIC FOUR
+        (":a\u{664}:", &["text"]), // …not even after an ASCII letter
+        (":a\u{96d}:", &["text"]), // DEVANAGARI SEVEN
+        // …and the class is `[a-z…]`, so a non-ASCII letter is out too.
+        (":д:", &["text"]),
+    ];
+
+    for (src, expected) in CASES {
+        assert_eq!(&types(src), expected, "input: {src:?}");
+    }
+}
+
+/// `.`, through `inline_code`'s `.{2,}` and `inline_math`'s `\\.`.
+///
+/// JavaScript's `.` excludes **all four** line terminators — `\n`, `\r`,
+/// U+2028 and U+2029. Rust's excludes `\n` alone, so under a bare `.` every
+/// `\r`/U+2028/U+2029 row below would produce a *longer* code span or a math
+/// span where muya produces none.
+///
+/// The extents matter as much as the types here, so this checks `raw` rather
+/// than the type sequence alone: `` ``x`\ry`` `` is `inline_code("``x`")` in
+/// muya — a **one**-backtick marker, reached by backtracking `` (`{1,3}) `` —
+/// and would be the whole eight-character span if `.` crossed the `\r`.
+#[test]
+fn the_dot_class_agrees_with_muya_at_every_line_terminator() {
+    const CASES: &[(&str, &[&str], &[&str])] = &[
+        // inline_code, through `.{2,}`. An ordinary character is crossed…
+        ("``x`zy``", &["inline_code"], &["``x`zy``"]),
+        // …and each of the three terminators JavaScript excludes is not.
+        ("``x`\ry``", &["inline_code", "text"], &["``x`", "\ry``"]),
+        (
+            "``x`\u{2028}y``",
+            &["inline_code", "text"],
+            &["``x`", "\u{2028}y``"],
+        ),
+        (
+            "``x`\u{2029}y``",
+            &["inline_code", "text"],
+            &["``x`", "\u{2029}y``"],
+        ),
+        // `\n` is excluded by both engines, so this row is the control: it
+        // would look the same however `.` were written.
+        (
+            "``x`\ny``",
+            &["inline_code", "soft_line_break", "text"],
+            &["``x`", "\n", "y``"],
+        ),
+        // inline_math, through `\\.`. An ordinary character is crossed…
+        ("$a\\.b$", &["inline_math"], &["$a\\.b$"]),
+        // …and a terminator is not, so the whole expression stays text.
+        ("$a\\\rb$", &["text"], &["$a\\\rb$"]),
+        ("$a\\\u{2028}b$", &["text"], &["$a\\\u{2028}b$"]),
+        ("$a\\\u{2029}b$", &["text"], &["$a\\\u{2029}b$"]),
+        (
+            "$a\\\nb$",
+            &["text", "soft_line_break", "text"],
+            &["$a\\", "\n", "b$"],
+        ),
+    ];
+
+    for (src, expected_types, expected_raws) in CASES {
+        assert_eq!(&types(src), expected_types, "input: {src:?}");
+        let raws: Vec<&str> = tokenize(src).iter().map(|t| t.raw.of(src)).collect();
+        assert_eq!(&raws, expected_raws, "input: {src:?}");
+    }
+}
+
+/// `\s` again, now that it drives the emphasis-flanking decision as well as
+/// `header` and `tail_header`.
+///
+/// `UNICODE_WHITESPACE_REG` is `/^\s/` and `canOpenEmphasis` tests it against
+/// the character after an opener. U+FEFF is whitespace to JavaScript and not
+/// to Rust, so a bare `\p{White_Space}` would *open* an emphasis span muya
+/// refuses; U+0085 is whitespace to Rust and not to JavaScript, so it would
+/// *refuse* one muya opens. The corpus has a BOM case, which is what makes the
+/// first of those a real input rather than a hypothetical.
+#[test]
+fn the_whitespace_class_agrees_with_muya_in_the_flanking_decision() {
+    const CASES: &[(&str, &[&str])] = &[
+        // U+00A0 — whitespace to both. CommonMark example 353.
+        ("*\u{a0}a\u{a0}*", &["text"]),
+        // U+FEFF — whitespace to JavaScript only. `**` is followed by a BOM,
+        // so `(?=\S)` fails and there is no strong span.
+        ("**\u{feff}a\u{feff}**", &["text"]),
+        // U+0085 — whitespace to Rust only. muya opens the span; a
+        // `\p{White_Space}` port would not.
+        ("**\u{85}a\u{85}**", &["strong"]),
+        // The plain forms, for contrast.
+        ("** a **", &["text"]),
+        ("**a**", &["strong"]),
+    ];
+
+    for (src, expected) in CASES {
+        assert_eq!(&types(src), expected, "input: {src:?}");
+    }
+}
+
 /// Every input above also tiles. A class disagreement that produced the right
 /// token types but the wrong extents would slip past the assertions above.
 #[test]
 fn every_class_case_still_tiles() {
     const INPUTS: &[&str] = &[
+        // S1
         "#\u{85}x",
         "#\u{feff}x",
         "#\u{2028}x",
@@ -194,6 +353,38 @@ fn every_class_case_still_tiles() {
         "a\u{2029}b",
         "a  \u{feff}\nb",
         "a \u{85}\nb",
+        // S2 — \w
+        "12:00-14:00",
+        "hello:smile:",
+        "_:smile:",
+        "-:smile:",
+        "д:smile:",
+        "буква:smile:",
+        "中:smile:",
+        "\u{1f642}:smile:",
+        "。:smile:",
+        // S2 — \d
+        ":1:",
+        ":\u{664}:",
+        ":a\u{96d}:",
+        ":д:",
+        // S2 — .
+        "``x`zy``",
+        "``x`\ry``",
+        "``x`\u{2028}y``",
+        "``x`\u{2029}y``",
+        "``x`\ny``",
+        "$a\\.b$",
+        "$a\\\rb$",
+        "$a\\\u{2028}b$",
+        "$a\\\u{2029}b$",
+        "$a\\\nb$",
+        // S2 — \s in the flanking decision
+        "*\u{a0}a\u{a0}*",
+        "**\u{feff}a\u{feff}**",
+        "**\u{85}a\u{85}**",
+        "** a **",
+        "**a**",
     ];
 
     for src in INPUTS {
@@ -202,5 +393,112 @@ fn every_class_case_still_tiles() {
             src,
             "input: {src:?}"
         );
+    }
+}
+
+// ===========================================================================
+// S2 — the CJK flanking cases the M1.md §6 gate names
+// ===========================================================================
+
+/// `bench/corpus/cjk.md`'s flanking cases, tokenized identically to the
+/// TypeScript.
+///
+/// M1.md §6's S2 gate: *"CJK flanking cases in `bench/corpus/cjk.md` tokenize
+/// identically to TypeScript."* `round_trip.rs` already runs the whole file
+/// for the tiling property; what that cannot check is *which* tokens come out,
+/// because tiling holds just as well when a `**粗体**` stays text. These are
+/// the file's flanking lines, with the token types muya produced for each.
+///
+/// The widening is `CJK_REG` in `emphasis.rs` and it is deliberately
+/// non-standard — CommonMark §6.2 counts only whitespace and punctuation as
+/// boundaries, CJK ideographs are `Lo` and so are neither, and a literal
+/// reading denies emphasis to nearly every CJK paragraph. muya widens it,
+/// Typora/markdownlint/Joplin widen it, and marktext/marktext#4307 tracks it.
+#[test]
+fn the_cjk_flanking_lines_of_the_corpus_agree_with_muya() {
+    const CASES: &[(&str, &[&str])] = &[
+        // The file's headline case: `**` glued to CJK on both sides, no space.
+        (
+            "中文**粗体**紧邻中文字符，没有空格——这是 CJK flanking 的关键用例。",
+            &["text", "strong", "text"],
+        ),
+        (
+            "这是一段中文文本，包含**粗体**和*斜体*，以及一个 `代码片段`。",
+            &[
+                "text",
+                "strong",
+                "text",
+                "em",
+                "text",
+                "inline_code",
+                "text",
+            ],
+        ),
+        (
+            "日本語の文章です。**太字**と*斜体*、そして`コード`を含みます。",
+            &[
+                "text",
+                "strong",
+                "text",
+                "em",
+                "text",
+                "inline_code",
+                "text",
+            ],
+        ),
+        (
+            "한국어 문장입니다. **굵게**와 *기울임*, 그리고 `코드`를 포함합니다.",
+            &[
+                "text",
+                "strong",
+                "text",
+                "em",
+                "text",
+                "inline_code",
+                "text",
+            ],
+        ),
+        // `_` needs a boundary on both sides, and CJK provides one.
+        ("中文__粗体__紧邻", &["text", "strong", "text"]),
+        // A CJK quotation mark is punctuation, so this would work without the
+        // widening — kept because it is the case the utils.ts comment names.
+        ("中文“**加粗**”中文", &["text", "strong", "text"]),
+    ];
+
+    for (src, expected) in CASES {
+        assert_eq!(&types(src), expected, "input: {src:?}");
+    }
+}
+
+/// The widening is **additive**, which is the load-bearing half of the
+/// `CJK_REG` comment: CJK is only ever an extra way to *accept* a boundary,
+/// never a way to reject something CommonMark accepts. So a Latin input with
+/// the same shape is unchanged — `a__b__c` stays text — and every CJK block
+/// the regex covers behaves alike.
+#[test]
+fn the_cjk_widening_only_ever_adds_a_boundary() {
+    const CASES: &[(&str, &[&str])] = &[
+        // Latin intra-word `_`: refused, exactly as CommonMark says.
+        ("a__b__c", &["text"]),
+        // One representative from each range of CJK_REG, at both edges.
+        ("\u{3040}**a**\u{30ff}", &["text", "strong", "text"]), // Kana
+        ("\u{3400}**a**\u{4dbf}", &["text", "strong", "text"]), // Ext A
+        ("\u{4e00}**a**\u{9fff}", &["text", "strong", "text"]), // Unified
+        ("\u{f900}**a**\u{faff}", &["text", "strong", "text"]), // Compatibility
+        ("\u{ac00}**a**\u{d7af}", &["text", "strong", "text"]), // Hangul
+        ("\u{ff66}**a**\u{ff9d}", &["text", "strong", "text"]), // Halfwidth kana
+        // Plane 2, which the regex covers in full even though its own comment
+        // claims to stop at U+2A6DF. Port the regex, not the comment.
+        ("\u{20000}**a**\u{20000}", &["text", "strong", "text"]),
+        ("\u{2a6e0}**a**\u{2a6e0}", &["text", "strong", "text"]),
+        ("\u{2ffff}**a**\u{2ffff}", &["text", "strong", "text"]),
+        // …and one code point past the end of plane 2, which is not CJK. `**`
+        // has no intra-word rule so the span still forms; `__` is the probe.
+        ("\u{30000}__a__\u{30000}", &["text"]),
+        ("\u{20000}__a__\u{20000}", &["text", "strong", "text"]),
+    ];
+
+    for (src, expected) in CASES {
+        assert_eq!(&types(src), expected, "input: {src:?}");
     }
 }

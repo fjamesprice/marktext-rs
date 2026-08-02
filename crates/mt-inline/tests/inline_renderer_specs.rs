@@ -23,9 +23,9 @@
 //!
 //! Most of them fail today, and are supposed to: §14 step 5 wants them
 //! transcribed first and made to pass afterwards, so they are the target to
-//! build against. As of S1, 40 of the 49 are still red — emphasis, links,
-//! images, HTML and autolinks are S2–S5, and until then anything they would
-//! match tokenizes as plain text.
+//! build against. As of S2, 29 of the 49 are still red — links, images, HTML
+//! and autolinks are S3–S5, and until then anything they would match
+//! tokenizes as plain text.
 //!
 //! But a build that is red for months is a build nobody reads, and by the time
 //! a real regression appears in one of the other thirteen crates the signal is
@@ -132,23 +132,44 @@ use mt_inline::{
 /// fail the stage that breaks them. Every one of them names the stage that
 /// will make it non-vacuous —
 ///
-/// | Delisted at S1 | Becomes a real test at |
-/// |---|---|
-/// | example 475, example 520 | S4 (`html_tag`) |
-/// | example 353, example 387 | S2 (`strong`, `em`) |
-/// | the two emoji word-boundary cases | S2 (`emoji`) |
-/// | the sup/sub whitespace case | S2 (`super_sub_script`) |
-/// | the undefined reference label | S3 (`reference_link`) |
-/// | the intra-word extension autolink | S5 (`auto_link_extension`) |
+/// | Delisted at S1 | Becomes a real test at | |
+/// |---|---|---|
+/// | example 353, example 387 | S2 (`strong`, `em`) | **done** |
+/// | example 475 | S2 (`strong`, `em`) | **done** |
+/// | the two emoji word-boundary cases | S2 (`emoji`) | **done** |
+/// | the sup/sub whitespace case | S2 (`super_sub_script`) | **done** |
+/// | example 520 | S3 (`link`, `reference_link`) | pending |
+/// | the undefined reference label | S3 (`reference_link`) | pending |
+/// | the intra-word extension autolink | S5 (`auto_link_extension`) | pending |
 ///
 /// — and none of them can be made to pass by *not* implementing the rule,
 /// because each stage's positive cases are still on this list.
+///
+/// **The stage in that column is the one that implements what the assertion
+/// forbids, not the one that implements what the input contains.** S1's
+/// version of this table put examples 475 and 520 at S4 because both inputs
+/// hold an HTML tag; that is the wrong reading and S2 caught it. 475 forbids
+/// `strong` and `em`, so it went live the moment `tryStrongEm` did — and it is
+/// a real assertion now: `**<a href="**">` reaches the handler and is refused
+/// by `lowerPriority`, whose rule set contains `html_tag`'s *regex* whether or
+/// not `tryHtmlTag` exists. 520 forbids `link`, so it goes live at S3 for the
+/// same reason, not at S4.
+///
+/// Six of the nine are now non-vacuous, and the argument survived contact:
+/// `*\u{a0}a\u{a0}*` really does reach `tryStrongEm` and really is refused by
+/// `canOpenEmphasis`, `пристаням__стремятся__` by the run-atomicity guard, and
+/// the two emoji cases by the word-boundary check — none of them by absence.
+///
+/// # The eleven delisted at S2
+///
+/// All eleven are positive assertions and none is vacuous: `example_521`
+/// (`inline_code` outranks a tentative link), the two `super_sub_script`
+/// cases, the two `strong`/`em`-plus-code cases (#1071), the two escaped-dollar
+/// cases (#3778), the two remaining `emojiWordBoundary` cases, and both of
+/// `inlineMathEscape`. What is left is exactly S3, S4 and S5.
 const PENDING: &[&str] = &[
-    // commonmarkExamples.spec.ts — S1 through S5; the file spans every stage
-    "example_521_code_span_takes_precedence_over_a_tentative_link",
+    // commonmarkExamples.spec.ts — S3 through S5; the file spans every stage
     "emits_reference_link_when_the_label_is_defined",
-    "parses_caret_wrapped_text_as_super_sub_script_with_a_caret_marker",
-    "parses_tilde_wrapped_text_as_super_sub_script_with_a_tilde_marker",
     "parses_an_angle_bracket_autolink_as_auto_link",
     "parses_a_bare_url_as_auto_link_extension",
     "parses_a_bare_www_url_as_auto_link_extension",
@@ -156,13 +177,9 @@ const PENDING: &[&str] = &[
     "extracts_the_title_from_a_link_with_a_single_quoted_title",
     "extracts_the_title_from_an_image",
     "leaves_the_title_empty_when_the_destination_has_no_title",
-    "emits_a_strong_token_for_every_double_star_wrapped_code_span_in_a_sequence",
-    "does_not_flip_the_same_bug_to_em_with_a_single_star_and_code",
     "parses_an_image_destination_containing_balanced_parens",
     "parses_a_link_destination_containing_balanced_parens",
     "stops_at_the_first_matching_paren_when_more_appear_later_on_the_line",
-    "emits_a_strong_token_for_every_span_containing_an_escaped_dollar",
-    "still_emits_em_for_star_wrapped_spans_containing_an_escaped_dollar",
     // autoLinkTrailingPunct.spec.ts — S5
     "excludes_a_trailing_colon_from_the_link",
     "excludes_a_trailing_period_at_the_end_of_a_sentence",
@@ -174,16 +191,13 @@ const PENDING: &[&str] = &[
     "keeps_a_bare_trailing_semicolon_that_is_not_an_entity",
     "ends_the_link_at_a_less_than_character",
     "applies_the_rules_repeatedly_for_a_trailing_paren_then_period",
-    // emojiWordBoundary.spec.ts — S2
-    "still_recognises_an_emoji_at_the_start_of_the_text",
-    "still_recognises_an_emoji_after_whitespace",
     // linkFollowedByAutolink.spec.ts — S3
     "recognizes_a_link_whose_closing_paren_is_followed_by_a_cjk_comma",
     "recognizes_the_first_of_two_links_on_one_line",
     "recognizes_a_link_whose_destination_url_is_immediately_followed_by_text",
     // referenceLinkImageAnchor.spec.ts — S3
     //
-    // The third one is a negative assertion like the nine delisted above, but
+    // The third one is a negative assertion like the nine delisted at S1, but
     // it stays: it also asserts that the image *is* there, so it is not
     // vacuous.
     "tokenizes_a_reference_link_wrapping_an_image_as_a_single_token",
@@ -192,9 +206,6 @@ const PENDING: &[&str] = &[
     // autoLinkEncoding.spec.ts — S5
     "keeps_an_already_encoded_percent_twenty_intact_instead_of_double_encoding_it",
     "does_not_re_encode_reserved_characters_in_a_query_string",
-    // inlineMathEscape.spec.ts — S2
-    "keeps_an_escaped_dollar_inside_the_math_expression",
-    "still_tokenizes_a_plain_expression_unchanged",
 ];
 
 /// Run one transcribed spec case under the ratchet.
@@ -412,7 +423,7 @@ fn the_pending_list_has_no_duplicates() {
 fn the_pending_list_is_the_expected_length() {
     assert_eq!(
         PENDING.len(),
-        40,
+        29,
         "PENDING changed length. If you fixed a case, decrement the expected \
          number here in the same commit; if it grew, a case regressed and the \
          list must not absorb it."
