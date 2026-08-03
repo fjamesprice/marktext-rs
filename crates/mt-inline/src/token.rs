@@ -248,6 +248,21 @@ impl Token {
             _ => None,
         }
     }
+
+    /// [`Token::children`], for a walk that writes.
+    ///
+    /// Added at S6 for the `highlights` post-pass (`lexer.ts:885`), which is
+    /// the only thing in the crate that mutates a finished tree. Same three
+    /// states, same `None`/`Some(&mut [])` distinction.
+    pub fn children_mut(&mut self) -> Option<&mut [Token]> {
+        match &mut self.kind {
+            TokenKind::Strong(e) | TokenKind::Em(e) | TokenKind::Del(e) => Some(&mut e.children),
+            TokenKind::Link(l) => Some(&mut l.children),
+            TokenKind::ReferenceLink(l) => Some(&mut l.children),
+            TokenKind::HtmlTag(t) => t.children.as_deref_mut(),
+            _ => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

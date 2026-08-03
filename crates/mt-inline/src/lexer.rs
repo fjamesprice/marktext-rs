@@ -1716,19 +1716,26 @@ fn check_tiling(origin: &str, level: Span, tokens: &[Token]) {
 // Entry point
 // ---------------------------------------------------------------------------
 
-/// `tokenizer` (`lexer.ts:854`), minus the `highlights` post-pass.
+/// `tokenizer` (`lexer.ts:854`) — tokenize, then attach highlights.
 ///
-/// `options.highlights` is not read yet — its post-pass is S6.
-/// [`crate::tokenizer`] says so where a caller will see it.
+/// The post-pass runs **only when `options.highlights` is non-empty**, which is
+/// `lexer.ts:890`'s own guard and M1.md §5 D7's reason for keeping the field
+/// empty by default. See [`crate::highlight`].
 pub(crate) fn tokenizer(src: &str, options: &TokenizerOptions) -> Vec<Token> {
-    tokenizer_fac(
+    let mut tokens = tokenizer_fac(
         src,
         Span::new(0, src.len()),
         options.has_begin_rules,
         true,
         &options.labels,
         options.syntax,
-    )
+    );
+
+    if !options.highlights.is_empty() {
+        crate::highlight::post_tokenizer(&mut tokens, &options.highlights);
+    }
+
+    tokens
 }
 
 #[cfg(test)]

@@ -90,7 +90,7 @@ catches a dependency *cycle*, but not a one-way edge.
 - `mt_doc::Block` and `mt_doc::Edit` as concrete types, with the four
   round-trip constraints from §2 carried as code comments and a test asserting
   the 1:1 mapping onto muya's `TState` union.
-- **`mt-inline`, the whole tokenizer** — M1 S5. The token types, the 26-rule
+- **`mt-inline`, the whole tokenizer** — M1 S6. The token types, the 26-rule
   table, the tokenizer loop with muya's ordered handler list, `generator`, and
   all of `utils.ts` — emphasis validation, link/destination parsing, and
   `getAttributes` reimplemented **without a DOM**, which is where the HTML5
@@ -100,11 +100,18 @@ catches a dependency *cycle*, but not a one-way edge.
   tokenization runs, so ``[**a** `b`](c)`` and `<div>**a**</div>` are trees.
   `cargo bench -p mt-inline` is the per-stage cost number.
 
-  What M1 still owes is not tokenization: S6 is `tokensToPlainText`, the
-  `highlights` post-pass and the marker-reveal predicate; S7 is proptest, the
-  24-hour fuzz soak, and pointing `cargo xtask divergences` at a real
-  token-stream comparator — which today reports `SKIPPED` for every entry, so
-  the divergence register is **not** machine-checked yet.
+  S6 added the three things that *read* a finished token tree rather than
+  producing one: `tokens_to_plain_text` (the reader-facing text a heading slug
+  comes from), the `highlights` intersection post-pass, and `marker_state` —
+  the rule that reveals a token's markers when the caret is on it, which is what
+  makes MarkText feel like MarkText. The round-trip property
+  `generator(tokenize(s)) == s` now runs over `bench/corpus/`, the 1,324
+  CommonMark and GFM examples and the eleven `marktext-round-trip` fixtures.
+
+  What M1 still owes is S7: proptest, the 24-hour fuzz soak, tiling over the
+  large corpus files in release, and pointing `cargo xtask divergences` at a
+  real token-stream comparator — which today reports `SKIPPED` for every entry,
+  so the divergence register is **not** machine-checked yet.
 - The conformance ratchet, over 1,324 real fixtures.
 - The TypeScript half of the differential harness, over the 22-file corpus.
 - The dependency-direction guard.

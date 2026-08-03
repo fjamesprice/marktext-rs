@@ -40,8 +40,32 @@
 //! [`the_large_corpus_files_also_tile`]. Nothing is silently skipped — the
 //! covered run prints what it covered and the ignored test names what it does
 //! not.
+//!
+//! # S6 widened it to `spec/fixtures/`, and the deferral's reason had expired
+//!
+//! This header used to record that `spec/fixtures/` was deliberately left out:
+//!
+//! > §7 puts it under "free smoke test from S2 onward" and it gates M2, not
+//! > M1; adding it before the handlers exist would only assert that 1324
+//! > fixtures tokenize to one text token each.
+//!
+//! That was true while handlers were missing and stopped being true at S5,
+//! when the sixteenth landed. So S6's gate row widens the round-trip property
+//! to the 1324 CommonMark and GFM examples and to the eleven
+//! `spec/fixtures/marktext-round-trip/` files.
+//!
+//! **What that is and is not.** §7 calls it a *smoke test*, and the wording
+//! matters: these fixtures are whole multi-line markdown **documents**, and
+//! `mt-inline` tokenizes one leaf block's text. Feeding a document to it is not
+//! parsing the document — a fenced code block's contents are inline-tokenized
+//! like anything else, a list marker is just text, and nothing here claims
+//! otherwise. What it does check is exactly what §3 rule 1 asks for on the
+//! widest input set the repository has: **every byte is accounted for by some
+//! token, no span lands off a `char` boundary, and nothing panics.** That is a
+//! tiling and panic-freedom check over 1335 real-world documents, and it is
+//! worth having under that description rather than a grander one.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use mt_inline::{Token, generator, tokenize};
 
@@ -90,13 +114,23 @@ fn corpus_files() -> Vec<(String, String)> {
 ///
 /// Measured on the development machine, in a debug profile:
 ///
-/// | Stage | Handlers live | This file | `1mb.md` + `5mb.md` |
+/// | Stage | Handlers live | The corpus test | `1mb.md` + `5mb.md` |
 /// |---|---:|---:|---:|
 /// | S1 | 9 of 16 | ~1.3 s | ~21 s |
 /// | S2 | 13 of 16 | ~4.2 s | **~134 s** |
 /// | S3 | 13 of 16 (+4 rules) | ~3.2 s | **~68 s** |
 /// | S4 | 14 of 16 | ~4.3 s | **~229 s** |
 /// | S5 | **16 of 16** | ~5.7 s | **~245 s** |
+/// | S6 | 16 of 16 | ~5.7 s | **~248 s** |
+///
+/// The S6 row is the point of having the table at all by now: a stage that adds
+/// no rule and no nesting level should not move a debug profile, and it did
+/// not. What S6 *does* add to this file is two more tests —
+/// [`every_spec_fixture_tiles_and_round_trips`] at ~0.51 s and
+/// [`every_marktext_round_trip_fixture_tiles_and_round_trips`] at ~0.20 s — so
+/// the whole file is ~6.4 s where the corpus test alone is ~5.7 s. Those are
+/// listed separately rather than folded into the column, because folding them
+/// in would have made a stage that changed nothing look like a 12% regression.
 ///
 /// S2's four handlers cost **6.4×**, which is more than the S1 note's
 /// "plausibly a minute or more by S5" allowed for — S2 alone passed that. The
@@ -179,9 +213,25 @@ fn corpus_files() -> Vec<(String, String)> {
 /// The covered run is what the limit is protecting, and it is still seconds
 /// rather than minutes. 256 KiB is chosen to keep `250kb.md` in: it is the
 /// largest file whose content differs *structurally* from the two above it.
-/// **Re-measure both tables at S6 and S7** — S6 adds a post-pass over every
-/// token rather than a rule, so it should move these numbers in a way neither
-/// of the three shapes predicts.
+///
+/// # S6: the fourth shape is not one, and the S5 caution was the useful part
+///
+/// S5 predicted that *"S6 adds a post-pass over every token rather than a rule,
+/// so it should move these numbers in a way neither of the three shapes
+/// predicts"*. **It moved them by nothing: ~5.7 s and ~248 s, against ~5.7 s
+/// and ~245 s.** The reason is that the post-pass does not run here — the
+/// tokenizer skips it entirely when the highlight list is empty
+/// (`lexer.ts:890`, M1.md §5 D7), and this file never passes one. So there is
+/// no fourth cost shape to add to the model; there is a guard that works.
+///
+/// What S5 asked for that *was* worth doing is the A/B rather than the
+/// subtraction, and `benches/tokenizer.rs` has it: the S6 tree against a
+/// worktree at S5's commit, alternated in one session, with the difference
+/// smaller than the within-binary spread in both directions. Where the
+/// post-pass *does* cost something — 1024 highlights, ~0.5–0.8 ns per `union`
+/// — is a section of that file too.
+///
+/// **Re-measure at S7.**
 const DEBUG_PROFILE_SIZE_LIMIT: usize = 256 * 1024;
 
 /// Assert that a token list tiles `[start, end)` of `src`, recursively.
@@ -313,6 +363,113 @@ fn the_large_corpus_files_also_tile() {
         }
         check(&name, &src);
     }
+}
+
+/// `spec/fixtures/`, resolved the same way as [`corpus_dir`].
+fn fixtures_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("spec")
+        .join("fixtures")
+}
+
+/// The `markdown` field of every example in a CommonMark/GFM spec fixture.
+///
+/// The same two files `xtask/src/conformance.rs` reads for the M2 ratchet, in
+/// the same shape: an array of `{markdown, html, section, number}`.
+fn spec_examples(file: &str) -> Vec<(String, String)> {
+    let path = fixtures_dir().join(file);
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let examples: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+
+    examples
+        .as_array()
+        .unwrap_or_else(|| panic!("{}: not a JSON array", path.display()))
+        .iter()
+        .map(|example| {
+            let number = example["number"].as_u64().unwrap_or_default();
+            let markdown = example["markdown"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{}: example {number} has no `markdown`", file))
+                .to_string();
+            (format!("{file}#{number}"), markdown)
+        })
+        .collect()
+}
+
+/// Every `.md` under `spec/fixtures/marktext-round-trip/`, as `(name, text)`.
+fn round_trip_fixtures() -> Vec<(String, String)> {
+    fn walk(dir: &Path, out: &mut Vec<(String, String)>) {
+        let entries =
+            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry.expect("a readable directory entry").path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "md") {
+                let name = path
+                    .strip_prefix(dir.parent().unwrap_or(dir))
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let text = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+                out.push((name, text));
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    walk(&fixtures_dir().join("marktext-round-trip"), &mut files);
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files
+}
+
+/// **The S6 gate, first half.** `generator(tokenize(s)) == s` for every
+/// CommonMark and GFM example.
+///
+/// Deferred since S1 on the ground that it would only assert that 1324
+/// fixtures tokenize to one text token each. Sixteen handlers later that is no
+/// longer what it asserts — see this file's header for what it does and does
+/// not claim.
+#[test]
+fn every_spec_fixture_tiles_and_round_trips() {
+    let mut checked = 0;
+    for file in ["commonmark-spec-0.31.json", "gfm-spec-0.29-gfm.json"] {
+        for (name, markdown) in spec_examples(file) {
+            check(&name, &markdown);
+            checked += 1;
+        }
+    }
+    assert!(
+        checked >= 1324,
+        "the fixture suites lost examples: only {checked} checked"
+    );
+    println!("tiling: {checked} CommonMark + GFM examples checked");
+}
+
+/// **The S6 gate, second half.** The eleven `marktext-round-trip/` fixtures —
+/// whole files rather than single examples, which is the multi-line shape the
+/// spec examples mostly are not.
+#[test]
+fn every_marktext_round_trip_fixture_tiles_and_round_trips() {
+    let files = round_trip_fixtures();
+    assert_eq!(
+        files.len(),
+        11,
+        "spec/fixtures/marktext-round-trip/ holds eleven files; found {:?}",
+        files.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
+    for (name, text) in &files {
+        check(name, text);
+    }
+    println!(
+        "tiling: {} marktext round-trip fixtures checked",
+        files.len()
+    );
 }
 
 /// The corpus is committed, so a file silently disappearing would quietly

@@ -41,7 +41,7 @@
 //! `test = false` in the manifest keeps `cargo test --workspace` from running
 //! a benchmark as a test; `cargo clippy --all-targets` still builds it.
 //!
-//! # Measured — S3, S4, S5
+//! # Measured — S3, S4, S5, S6
 //!
 //! Development machine (Windows 11, x86-64). Add a row per stage; the point of
 //! the table is that a 6× jump like S2's shows up as a jump rather than as a
@@ -52,6 +52,7 @@
 //! | S3 | 13 of 16 | **6.1 s** (1.03 MiB/s) | 71.6 s (0.09 MiB/s) | 200 ms |
 //! | S4 | 14 of 16 | **14.9 s** (0.42 MiB/s) | 243.4 s (0.03 MiB/s) | 472 ms |
 //! | S5 | 16 of 16 | **16.3 s** (0.38 MiB/s) | 265.6 s (0.02 MiB/s) | 488 ms |
+//! | S6 | 16 of 16 + 3 post-passes | **16.3 s** (0.38 MiB/s) | 260.1 s (0.02 MiB/s) | 501 ms |
 //!
 //! S5's release rise over S4 is 1.09× as the table reads, but that comparison
 //! is across sessions and this is a wall clock. The trustworthy number is an
@@ -60,9 +61,67 @@
 //! table row is a separate clean run; 16.3 against 16.6 is this benchmark's
 //! run-to-run noise (~1.5%), and the stubbed 13.9 against S4's recorded 14.9
 //! is ordinary session variation — which is the reason the A/B was done at all
-//! rather than trusting the cross-stage subtraction. **Do the same at S6**: by
-//! now the stage-over-stage deltas are small enough that session drift is a
-//! comparable size.
+//! rather than trusting the cross-stage subtraction.
+//!
+//! # What S6 changed — nothing, and that was the prediction
+//!
+//! **Predicted before running: no measurable change on any row.** S6 adds no
+//! rule, so it touches none of the model's three terms. The only thing
+//! `tokenize()` gains is `if !options.highlights.is_empty()` in `tokenizer()`,
+//! once per call, and every call in this file uses the default options — so the
+//! post-pass never runs at all.
+//!
+//! S5 asked S6 to do an A/B rather than a cross-stage subtraction, because by
+//! S5 the stage delta had shrunk to the size of session drift. Done, and the
+//! form is different from S5's: there is no flag to stub, so it is **two
+//! binaries alternated in one session** — the S6 tree against a `git worktree`
+//! at `f9fea3e`.
+//!
+//! | Section | S5 r1 | S6 r1 | S5 r2 | S6 r2 | S5 mean | S6 mean | |
+//! |---|---:|---:|---:|---:|---:|---:|---|
+//! | `bench/corpus/` | 16.23 s | 16.20 s | 16.55 s | 16.37 s | 16.39 s | 16.29 s | 0.99× |
+//! | `lowerPriority` | 490 ms | 497 ms | 475 ms | 505 ms | 483 ms | 501 ms | 1.04× |
+//! | autolink | 53.3 ms | 53.1 ms | 52.5 ms | 53.5 ms | 52.9 ms | 53.3 ms | 1.01× |
+//!
+//! The corpus is nominally *faster* and the `lowerPriority` set nominally
+//! slower, both by less than the within-binary spread (2% and 3%), and the
+//! signs disagreeing is the tell. There is nothing to attribute.
+//!
+//! Debug agrees: 265.6 s → **260.1 s**, 2% down and in the same direction as
+//! release, which is what session variation looks like when nothing changed.
+//! The debug/release ratio is 260.1 / 16.3 = **16.0×**, the same as S4's and
+//! S5's. That ratio has moved exactly once in the milestone — at S4, which
+//! added a container and so charged `check_tiling` and an extra nesting level
+//! twice. S6 adds neither, and it did not move.
+//!
+//! ## Where the post-pass does cost something
+//!
+//! The `s6_inputs` section below measures it, and it needed 1024 highlights to
+//! become visible at all. Release:
+//!
+//! | Input | 1 | 8 | 64 | 1024 highlights |
+//! |---|---:|---:|---:|---:|
+//! | `10kb.md`, 338 tokens (27.6 ms to tokenize) | — | — | — | +0.17 ms |
+//! | marker-dense prose, 2601 tokens (57.4 ms) | — | — | — | +2.20 ms |
+//!
+//! The dashes are not zeroes — they are **below this benchmark's noise floor**,
+//! which is the result rather than a failure of the method. At 1024 the delta
+//! resolves to about **0.5–0.8 ns per `union` call**: two integer comparisons, a
+//! `max` and a `min`. A realistic search is tens of matches in a block, so the
+//! post-pass is unmeasurable against the tokenize it follows, and M1.md §5 D7's
+//! guard earns its place for the memory reason it was decided on rather than
+//! for time.
+//!
+//! In debug the same rows are noisier still — the 64-highlight delta comes back
+//! *negative* against a 424 ms baseline — so read the release figures. Running
+//! this section in a debug profile is worth it only to confirm that.
+//!
+//! The other two post-passes are measurable directly, over an already-tokenized
+//! tree: `tokensToPlainText` is **0.005 ms** for `10kb.md` (338 tokens) and
+//! **0.026 ms** for 2601 tokens, and `marker_state` over every top-level token
+//! is under a microsecond. Both are ~5000× cheaper than the tokenize that
+//! produced their input — worth remembering when M3 asks whether the table of
+//! contents should cache anything. It should not.
 //!
 //! Three things worth carrying forward:
 //!
@@ -192,11 +251,19 @@
 //! unobservable — so hoisting the guard would skip the rule in every nested
 //! level for nothing. Like the first-byte pre-check above it is a change to
 //! *when a rule is run*, so it belongs with the rule-table work at M3.
+//!
+//! **S6 implements neither and adds no third**, because it adds no rule. Both
+//! remain M3's, and both remain measurements rather than hunches: the
+//! first-byte pre-check is worth most of S4's 2.4×, and the `state.top` hoist
+//! is worth whatever fraction of `auto_link_extension`'s cost falls in nested
+//! levels.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use mt_inline::tokenize;
+use mt_inline::{
+    Highlight, Span, TokenizerOptions, marker_state, tokenize, tokenizer, tokens_to_plain_text,
+};
 
 /// Inputs aimed at [`mt_inline`]'s known hot spot rather than at real prose.
 ///
@@ -292,6 +359,82 @@ fn autolink_inputs() -> Vec<(String, String)> {
     ]
 }
 
+/// How many times an S6 post-pass row is repeated. These are cheap, so the
+/// count is high enough that the timer resolution is not the measurement.
+const S6_RUNS: u32 = 20;
+
+/// One caret, planted a third of the way in, for the `marker_state` row.
+const CARET: mt_inline::Cursor = mt_inline::Cursor::collapsed(1024);
+
+/// Inputs for the S6 section: the three post-passes cost per **token**, not per
+/// character, so what matters is a realistic token density rather than a
+/// pathological rule shape. Prose from the corpus is the realistic one; the
+/// marker-heavy row is what a document full of inline syntax looks like.
+fn s6_inputs() -> Vec<(String, String)> {
+    let mut out = vec![(
+        "marker-dense prose".to_string(),
+        "A **bold** and *em* run with `code`, a [link](https://example.com) and an \
+         entity &amp; too. "
+            .repeat(200),
+    )];
+    let path = corpus_dir().join("10kb.md");
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        out.insert(0, ("10kb.md".to_string(), text));
+    }
+    out
+}
+
+/// A run of `count` highlights spread across `src`, on `char` boundaries.
+fn highlights(src: &str, count: usize) -> Vec<Highlight> {
+    let step = (src.len() / (count + 1)).max(1);
+    (0..count)
+        .map(|i| {
+            let start = src
+                .char_indices()
+                .map(|(at, _)| at)
+                .find(|at| *at >= (i + 1) * step)
+                .unwrap_or(0);
+            let end = src
+                .char_indices()
+                .map(|(at, _)| at)
+                .find(|at| *at >= start + 32)
+                .unwrap_or(src.len());
+            Highlight {
+                span: Span::new(start, end),
+                active: (i == 0).then_some(true),
+            }
+        })
+        .collect()
+}
+
+/// Time `f` over an already-tokenized tree, so the row is the post-pass alone
+/// rather than the post-pass plus another tokenize.
+fn time_over<F: Fn(&[mt_inline::Token])>(tokens: &[mt_inline::Token], f: F) -> Duration {
+    f(tokens);
+    let start = Instant::now();
+    for _ in 0..S6_RUNS {
+        f(tokens);
+    }
+    start.elapsed() / S6_RUNS
+}
+
+/// [`time`], for a call that needs non-default options.
+fn time_tokenizer(src: &str, options: &TokenizerOptions) -> Duration {
+    let _ = tokenizer(src, options);
+    let start = Instant::now();
+    for _ in 0..S6_RUNS {
+        std::hint::black_box(tokenizer(src, options));
+    }
+    start.elapsed() / S6_RUNS
+}
+
+fn count_tokens(tokens: &[mt_inline::Token]) -> usize {
+    tokens
+        .iter()
+        .map(|token| 1 + token.children().map_or(0, count_tokens))
+        .sum()
+}
+
 fn corpus_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -376,7 +519,7 @@ fn main() {
 
     println!("mt-inline whole-tokenizer benchmark — M1.md §5 D5");
     println!("profile: {profile}");
-    println!("stage:   M1 S5 — 16 of 16 handlers\n");
+    println!("stage:   M1 S6 — 16 of 16 handlers, plus the three post-passes\n");
 
     println!("bench/corpus/ — one file is one leaf block:");
     let mut total_bytes = 0usize;
@@ -418,4 +561,53 @@ fn main() {
         total += elapsed;
     }
     row("TOTAL", total_bytes, total);
+
+    println!("\nS6's three post-passes, against the tokenize they follow:");
+    for (name, src) in s6_inputs() {
+        let tokens = tokenize(&src);
+        let token_count = count_tokens(&tokens);
+        println!("  {name} — {} B, {token_count} tokens", src.len());
+
+        row(
+            "    tokensToPlainText",
+            src.len(),
+            time_over(&tokens, |tokens| {
+                std::hint::black_box(tokens_to_plain_text(&src, tokens));
+            }),
+        );
+        row(
+            "    marker_state, every token",
+            src.len(),
+            time_over(&tokens, |tokens| {
+                for token in tokens {
+                    std::hint::black_box(marker_state(token, Some(CARET)));
+                }
+            }),
+        );
+
+        // The post-pass is not separately callable — muya has no such entry
+        // point and neither does the port — so it is measured as the difference
+        // between two `tokenizer` calls that differ only in the highlight list.
+        // At realistic counts that difference is **below this benchmark's own
+        // noise**, which is the finding rather than a failure of the method;
+        // the last row exists to show where it does become visible.
+        let baseline = time_tokenizer(&src, &TokenizerOptions::muya_default());
+        row(
+            "    tokenize, no highlights (baseline)",
+            src.len(),
+            baseline,
+        );
+        for count in [1usize, 8, 64, 1024] {
+            let options = TokenizerOptions::muya_default().with_highlights(highlights(&src, count));
+            let with = time_tokenizer(&src, &options);
+            let delta = with.saturating_sub(baseline);
+            println!(
+                "    + post-pass, {count:>4} highlights          {:>11.3} ms   \
+                 delta {:>9.3} ms   {:>10.1} ns/union",
+                with.as_secs_f64() * 1000.0,
+                delta.as_secs_f64() * 1000.0,
+                delta.as_secs_f64() * 1e9 / (token_count * count) as f64,
+            );
+        }
+    }
 }

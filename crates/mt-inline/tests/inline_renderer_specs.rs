@@ -456,19 +456,26 @@ fn the_pending_list_has_no_duplicates() {
 
 /// **The M1 exit gate, as one number.**
 ///
-/// It went 49 → 40 (S1) → 29 (S2) → 15 (S3) → 15 (S4) → **0** (S5), and zero is
-/// where §6's *"S7's gate is `PENDING` is empty"* lands. The assertion stays
-/// rather than being deleted along with the list: it is now the thing that
-/// fails if a later stage tries to park a regression on the list instead of
-/// fixing it.
+/// It went 49 → 40 (S1) → 29 (S2) → 15 (S3) → 15 (S4) → **0** (S5) → 0 (S6),
+/// and zero is where §6's *"S7's gate is `PENDING` is empty"* lands. The
+/// assertion stays rather than being deleted along with the list: it is now the
+/// thing that fails if a later stage tries to park a regression on the list
+/// instead of fixing it.
+///
+/// **S6 delists nothing and adds nothing**, which is the state to expect from
+/// here on. S6's work is `tokensToPlainText`, the `highlights` post-pass and
+/// the marker-reveal predicate — three consumers of a finished token tree, none
+/// of which any of the 49 spec cases asserts on. So the number moving *at all*
+/// after S5 means a case regressed.
 #[test]
 fn the_pending_list_is_the_expected_length() {
     assert_eq!(
         PENDING.len(),
         0,
-        "PENDING is empty as of M1 S5, and that is the milestone's exit gate. \
-         A case that starts failing must be fixed, not listed — listing it \
-         would mean M1 no longer holds."
+        "PENDING has been empty since M1 S5, and that is the milestone's exit \
+         gate. Nothing after S5 adds spec cases, so a case appearing on this \
+         list is a regression, not progress: it must be fixed rather than \
+         listed, because listing it would mean M1 no longer holds."
     );
 }
 

@@ -16,10 +16,18 @@
 //!   href="&ouml;&ouml;.html">` gives `href` the value `öö.html`, and
 //!   `&ouml;` is not in marktext's list.
 //!
-//! Using `escape.rs` here would be wrong in a way that is hard to see: its
-//! keys are not distinct (`&nbsp;`, `&lt;`, `&gt;`, `&amp;` and `&quot;` each
-//! appear more than once, mapped to different characters at different indices)
-//! because it is a *rule alternation*, not a decode map.
+//! Using `escape.rs` here would be wrong in a way that is hard to see: it is a
+//! *rule alternation* rather than a decode map, so it is ordered and its 269
+//! entries hold only 252 distinct keys — and, more to the point, it is
+//! **marktext's** list of what markdown treats as an entity, which is neither a
+//! subset nor a superset of HTML5's.
+//!
+//! *Corrected at S6, which is the stage that actually built the decode
+//! direction.* This paragraph used to add that the repeated keys are "mapped to
+//! different characters at different indices". They are not — every repeat
+//! pairs with the same character, measured against the running module. The
+//! claim was decoration on an argument that never needed it; see
+//! [`crate::escape`]'s header for the enumeration.
 //!
 //! # Provenance
 //!

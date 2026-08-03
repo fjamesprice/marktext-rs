@@ -67,11 +67,11 @@
 //! S7's rather than M2's: M1's exit gate is where "the port agrees with the
 //! TypeScript engine except where registered" is finally claimed, and a
 //! register that has never been machine-checked would carry that claim into M2
-//! unverified; and the work is nearly done already — S2, S3, S4 and S5 each
-//! built a token-stream comparator as a throwaway script (49,751 inputs at
-//! S5), so what S7 has to do is make one of them permanent and point
-//! [`disagrees`] at it, not invent it. See "What S5 leaves for whoever builds
-//! it" below.
+//! unverified; and the work is nearly done already — S2, S3, S4, S5 and S6 each
+//! built a comparator as a throwaway script (49,751 inputs at S5; 5586 inputs
+//! and 41,007 highlight runs at S6), so what S7 has to do is make one of them
+//! permanent and point [`disagrees`] at it, not invent it. See "What S5 leaves
+//! for whoever builds it" and S6's addition to it below.
 //!
 //! That is not the same as "not wired up". Running today already checks that
 //! the register parses, that every entry is well-formed and uniquely
@@ -141,6 +141,37 @@
 //!   S3 lost a run to this; the fields that differ are listed on `token.rs`.
 //! - **Sweep, do not sample.** Every finding at S3, S4 and S5 came from a
 //!   combination nobody would have written by hand.
+//!
+//! ## What S6 adds to that list
+//!
+//! S6's script was the **fifth** throwaway, and ownership stayed here again,
+//! deliberately and for S5's reasons: the permanent harness has to decide how a
+//! Rust build invokes Node with `tsx` and `happy-dom`, what happens on a
+//! machine with no marktext clone, and whether CI runs it — none of which is
+//! `tokensToPlainText` work, and all of which would have landed in the same
+//! commit with no test able to tell the two apart. Three additions:
+//!
+//! - **Run a negative control, every time.** S6's main sweep agreed on all 5586
+//!   inputs — and *not one of them reaches a registered divergence*, so on its
+//!   own that number is worth nothing. Feeding the register's own 27 inputs
+//!   through the same comparator is what makes it evidence: 16 of 16
+//!   `emoji-nested-boundary` and 7 of 7
+//!   `disallowed-html-tag-substring-match` disagree, in both directions. A
+//!   comparator that has never produced a disagreement has not been shown to be
+//!   able to.
+//! - **Compare fields, not rendered text.** The negative control also showed
+//!   the limit of a text-level comparison:
+//!   `html-tag-attrs-from-a-foster-parented-element` **agrees on all four of
+//!   its inputs**, because that divergence lives in `attrs` and
+//!   `tokensToPlainText` never reads `attrs`. One of the three entries is
+//!   invisible to a comparator built the easy way. [`disagrees`] must compare
+//!   the token, field by field.
+//! - **`highlights` is a per-field `undefined`/`[]` normalisation**, alongside
+//!   the `|| ''` sites above. muya creates `token.highlights` on the first
+//!   push, so a token that intersects nothing has **no key**; the port gives
+//!   every token an empty `Vec`. That is M1.md §5 D7 working as decided, not a
+//!   divergence — but a comparator that treats "absent" and "empty" as
+//!   different will report every token in every document.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

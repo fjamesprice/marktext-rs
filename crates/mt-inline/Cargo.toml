@@ -23,3 +23,12 @@ test = false
 # `regex`. Pure — no I/O, no windowing, no GPU — so §1 is preserved and
 # `cargo xtask deps` stays green.
 fancy-regex.workspace = true
+
+[dev-dependencies]
+# S6 widened the round-trip gate to `spec/fixtures/`, whose CommonMark and GFM
+# example sets are JSON. `xtask` already reads the same two files with the same
+# crate (see `xtask/src/conformance.rs`), so this adds nothing to the lockfile
+# and nothing to what ships: `[dev-dependencies]` do not reach `mt-inline`'s
+# own build, and §1's purity constraint is about `src/`, which `cargo xtask
+# deps` is what scans.
+serde_json.workspace = true

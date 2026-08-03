@@ -86,6 +86,7 @@ name = "mt-inline"
 version = "0.1.0"
 dependencies = [
  "fancy-regex",
+ "serde_json",
 ]
 
 [[package]]

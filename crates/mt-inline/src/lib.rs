@@ -98,15 +98,20 @@
 //! and the three reasons. The tiling invariant is untouched by a rule giving
 //! up: no byte is lost, it just stays text.
 //!
-//! ## Marker reveal (§3.1)
+//! ## Marker reveal (§3.1) — landed in S6, and §3.1 was wrong
 //!
 //! The rule that makes MarkText feel like MarkText: a token's markers reveal
-//! when the caret is inside `token.range` (inclusive of edges) or the
-//! selection intersects it; ancestors reveal when a descendant reveals;
-//! everything else renders decorated. It is a pure function of
-//! `(tokens, caret, selection)`, so it is cheap to test headlessly — and it is
-//! load-bearing for the product's identity. Get it exactly right early.
-//! Lands in S6.
+//! when the caret is on it, and everything else renders decorated. It is a
+//! pure function of `(token.range, cursor)`, so it is cheap to test
+//! headlessly — and it is load-bearing for the product's identity.
+//!
+//! §3.1 states it as *"the caret is inside `token.range` (inclusive of edges)
+//! or the selection intersects it … ancestors reveal when a descendant
+//! reveals"*. **Two of those three clauses are false**, measured against the
+//! running renderer: the two selection endpoints are tested separately, so a
+//! selection *spanning* a token does not reveal it; and there is no
+//! ancestor propagation, in either direction, by any mechanism. M1.md §5 D8
+//! records what the engine does and [`marker`] implements that.
 //!
 //! ## Deliberate divergences from muya
 //!
@@ -115,12 +120,14 @@
 //! *before* it is made. Read that file before changing tokenizer behaviour;
 //! `cargo xtask divergences` is what keeps it honest.
 //!
-//! ## Status: S5 — the tokenizer is complete
+//! ## Status: S6 — the tokenizer is complete and everything that reads a token
 //!
 //! **All sixteen handlers are implemented and all 49 transcribed muya specs
 //! pass.** `PENDING` in `tests/inline_renderer_specs.rs` is empty, which is
-//! M1's exit gate for conformance; what M1 still owes is S6 and S7 (below),
-//! not tokenization.
+//! M1's exit gate for conformance. S6 added the three consumers that were
+//! still owed — [`tokens_to_plain_text`], the `highlights` post-pass
+//! ([`union`], run by [`tokenizer`]) and [`marker_state`] — so what M1 still
+//! owes is S7 alone: invariants and soak, not behaviour.
 //!
 //! Landed: the token types (S0), the 49 transcribed specs (S0), the rule table
 //! with `fancy-regex` behind it, the tokenizer loop with the ordered
@@ -133,8 +140,10 @@
 //! S3 the link half (`link.rs` — `parseSrcAndTitle`, `correctUrl`,
 //! `findClosingBracket`) and its four; in S4 `getAttributes` without a DOM
 //! (`html.rs`, plus the HTML5 named-reference table in `entities.rs`) and the
-//! `html_tag` handler that consumes it; and in S5 the two autolinks together
-//! with `trimAutoLinkExtent`, GFM §6.9's extent trimming.
+//! `html_tag` handler that consumes it; in S5 the two autolinks together
+//! with `trimAutoLinkExtent`, GFM §6.9's extent trimming; and in S6 the three
+//! things that *read* a finished token tree rather than producing one —
+//! [`plain_text`], [`highlight`] and [`marker`].
 //!
 //! Implemented handlers: `header` `hr` `code_fence` `multiple_math`
 //! `reference_definition` `tail_header` `backlash` `html_escape`
@@ -163,8 +172,10 @@
 //! checked against real children rather than vacuously true. The autolinks add
 //! no nesting level: neither form tokenizes children.
 //!
-//! Not yet read by anything: [`TokenizerOptions::highlights`] (S6, the
-//! post-pass). [`TokenizerOptions::syntax`] became live in S2 — it gates
+//! **Every option is now read.** [`TokenizerOptions::highlights`] became live
+//! in S6: [`tokenizer`] runs the intersection post-pass over the finished tree
+//! when it is non-empty, and skips it entirely when it is not (M1.md §5 D7).
+//! [`TokenizerOptions::syntax`] became live in S2 — it gates
 //! `super_sub_script` (on by default) and `footnote_identifier` (**off** by
 //! default, so `[^1]` is plain text unless a caller asks).
 //! [`TokenizerOptions::labels`] became live in S3: it is the *only* thing that
@@ -173,8 +184,6 @@
 //!
 //! ### What M1 still owes, so that "complete" is not read too widely
 //!
-//! - **S6**: `tokensToPlainText`, the `highlights` post-pass, and §3.1's
-//!   `marker_state`. [`generator`] landed early and is not S6's remainder.
 //! - **S7**: proptest generators, the 24-hour libFuzzer soak, and pointing
 //!   `cargo xtask divergences` at a real token-stream comparator. That last
 //!   one is a **live gap**: every registered divergence has been checked by
@@ -191,15 +200,21 @@ mod emphasis;
 mod entities;
 mod escape;
 mod generator;
+mod highlight;
 mod html;
 mod lexer;
 mod link;
+mod marker;
+mod plain_text;
 mod rules;
 mod token;
 
 use std::collections::BTreeMap;
 
 pub use generator::{generator, generator_rebuilding_wrappers};
+pub use highlight::union;
+pub use marker::{Cursor, MarkerState, marker_state, marker_state_of_range};
+pub use plain_text::tokens_to_plain_text;
 pub use token::{
     AutoLink, AutoLinkExtension, AutoLinkKind, BacklashPair, BeginRule, CodeEmojiMath, Emphasis,
     Highlight, HtmlTag, HtmlTagName, Image, ImageAttrs, Link, ReferenceDefinition, ReferenceImage,
@@ -303,16 +318,10 @@ impl TokenizerOptions {
 /// Concatenating every returned token's `raw` reproduces `src` byte for byte
 /// — that is §3 rule 1, and [`generator`] is it as a function.
 ///
-/// # What S5 does not do yet
-///
-/// All sixteen handlers are implemented, so every inline construct muya
-/// recognises is recognised here. **One option is still ignored**, and is
-/// documented as ignored rather than quietly honoured-later:
-///
-/// - `options.highlights` — the intersection post-pass is S6.
-///
-/// `options.has_begin_rules`, `options.syntax` and `options.labels` are all
-/// honoured.
+/// Every field of [`TokenizerOptions`] is honoured as of S6.
+/// `options.highlights` runs the intersection post-pass over the finished tree
+/// (`lexer.ts:873`) and is skipped entirely when empty, which is the common
+/// case; see [`union`].
 pub fn tokenizer(src: &str, options: &TokenizerOptions) -> Vec<Token> {
     lexer::tokenizer(src, options)
 }
