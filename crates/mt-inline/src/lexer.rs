@@ -1,23 +1,31 @@
 //! The tokenizer loop — a port of `inlineRenderer/lexer.ts`.
 //!
-//! # What is here at S3
+//! # What is here at S5 — all of it
 //!
-//! The loop, `pushPending`, `consumeBeginRules` — both halves of it now,
-//! including [`consume_reference_definition`] — the ordered
-//! [`INLINE_HANDLERS`] array, and thirteen of its sixteen handlers: the nine
-//! plain ones from S1 (`header` `hr` `code_fence` `multiple_math`
-//! `tail_header` `backlash` `html_escape` `soft_line_break`
-//! `hard_line_break`), S2's four ([`try_strong_em`], [`try_chunks`],
-//! [`try_super_sub_script`], [`try_footnote`]) and S3's four
-//! ([`try_image`], [`try_link`], [`try_reference_link`],
-//! [`try_reference_image`]). The remaining three ([`try_html_tag`] and the two
-//! autolinks) are present, in their exact precedence positions, and return
-//! `false`. Each says which stage fills it in.
+//! The loop, `pushPending`, `consumeBeginRules` — both halves, including
+//! [`consume_reference_definition`] — the ordered [`INLINE_HANDLERS`] array,
+//! and **all sixteen** of its handlers:
 //!
-//! That is not a placeholder pattern for its own sake. **The array order is
-//! the rule-precedence contract** (`lexer.ts:790`, and the TypeScript carries
-//! a comment saying so), so it is written down once, in full, and stages 3–5
-//! fill in bodies rather than rearranging entries.
+//! | Stage | Handlers |
+//! |---|---|
+//! | S1 | `header` `hr` `code_fence` `multiple_math` `tail_header` `backlash` `html_escape` `soft_line_break` `hard_line_break` |
+//! | S2 | [`try_strong_em`], [`try_chunks`], [`try_super_sub_script`], [`try_footnote`] |
+//! | S3 | [`try_image`], [`try_link`], [`try_reference_link`], [`try_reference_image`] |
+//! | S4 | [`try_html_tag`] |
+//! | S5 | [`try_auto_link_extension`], [`try_auto_link`] |
+//!
+//! The array was written out in full at S1 with the unwritten handlers
+//! returning `false`, and stages 2–5 filled in bodies rather than rearranging
+//! entries. That is not a placeholder pattern for its own sake: **the array
+//! order is the rule-precedence contract** (`lexer.ts:790`, and the TypeScript
+//! carries a comment saying so).
+//!
+//! It also has a consequence that only became visible at S4 and is now spent.
+//! A stub is harmless exactly while nothing *below* it in the array can match
+//! the same input — true for S1–S3, false for S4, where `html_tag` caught
+//! every `<scheme:…>` that the two stubbed autolinks outrank. S5 is what
+//! restores that precedence, so from here the array holds no stubs and the
+//! question does not arise again.
 //!
 //! # Nesting
 //!
@@ -62,11 +70,13 @@
 //! that is not obvious, which is D3 site 3.
 
 use crate::emphasis::{is_length_even, is_word_character, lower_priority, validate_emphasize};
+use crate::html::get_attributes;
 use crate::link::{correct_url, encode_backslash_run, parse_src_and_title};
 use crate::rules::{self, RuleId, exec, rule};
 use crate::token::{
-    BacklashPair, BeginRule, CodeEmojiMath, Emphasis, Image, ImageAttrs, Link, ReferenceDefinition,
-    ReferenceImage, ReferenceLink, Span, Token, TokenKind,
+    AutoLink, AutoLinkExtension, AutoLinkKind, BacklashPair, BeginRule, CodeEmojiMath, Emphasis,
+    HtmlTag, HtmlTagName, Image, ImageAttrs, Link, ReferenceDefinition, ReferenceImage,
+    ReferenceLink, Span, Token, TokenKind,
 };
 use crate::{Labels, SyntaxOptions, TokenizerOptions};
 
@@ -126,8 +136,9 @@ pub(crate) struct LexState<'a> {
     tokens: Vec<Token>,
     /// muya's `state.top`: true only for the outermost call.
     ///
-    /// Read by [`try_tail_header`] and, from S5, by
-    /// [`try_auto_link_extension`].
+    /// Read by [`try_tail_header`] and by [`try_auto_link_extension`], where
+    /// it is what keeps `<div>www.x.y</div>` from producing an extension
+    /// autolink in the children.
     top: bool,
     /// muya's `state.superSubScript` and `state.footnote`, destructured from
     /// `options` at `lexer.ts:812` and threaded down every nested call
@@ -252,8 +263,8 @@ impl<'a> LexState<'a> {
     /// three handlers report less than they eat or eat less than they report —
     /// M1.md §4 C3 names them: [`try_backlash`] (reports the `\`, eats two),
     /// [`try_tail_header`] (leaves the trailing whitespace group in the
-    /// input), and `try_auto_link_extension` in S5 (reports and eats the
-    /// trimmed extent).
+    /// input), and [`try_auto_link_extension`] (reports and eats the *trimmed*
+    /// extent, so the greedy tail the regex matched re-enters the loop).
     fn emit(&mut self, kind: TokenKind, span: Span, consumed_to: usize) {
         self.push_pending();
         self.tokens.push(leaf(kind, span));
@@ -992,21 +1003,461 @@ fn try_html_escape(state: &mut LexState<'_>) -> bool {
     true
 }
 
-/// `tryAutoLinkExtension` (`lexer.ts:572`). **S5** — needs
-/// `trimAutoLinkExtent`.
-fn try_auto_link_extension(_state: &mut LexState<'_>) -> bool {
-    false
+/// The characters `trimAutoLinkExtent` strips from the end of a bare autolink
+/// (`lexer.ts:539`), mirroring cmark-gfm's `autolink_delim`.
+///
+/// Interior occurrences are kept; only a trailing run goes.
+const AUTO_LINK_TRAILING_PUNCT: &[u8] = b"?!.,:*_~";
+
+/// `trimAutoLinkExtent` (`lexer.ts:528`) — GFM §6.9's extent trimming, as a
+/// byte length rather than a slice.
+///
+/// The extended autolink rule's path component is `\S+`, which is greedy, so
+/// `https://example.com/a/b. Next` matches through the full stop. GFM trims the
+/// match afterwards, and muya does the same in four rules:
+///
+/// | Rule | What it does | Applied |
+/// |---|---|---|
+/// | `<` | the link ends at the first `<` | **once**, before the loop |
+/// | punctuation | a trailing [`AUTO_LINK_TRAILING_PUNCT`] character goes | repeatedly |
+/// | paren | a trailing `)` goes when `)` outnumber `(` | repeatedly |
+/// | entity | a trailing `&…;` goes **whole** | repeatedly |
+///
+/// The last three **interleave**: each pass re-reads the last character, so
+/// `).` trims the `.` first and then finds the `)` unbalanced and takes that
+/// too. `applies_the_rules_repeatedly_for_a_trailing_paren_then_period` is the
+/// spec case named for exactly this. The `<` rule does not interleave — it runs
+/// once, before the loop, which is why `https://x/a<b.` keeps nothing after the
+/// `<` regardless of what follows it.
+///
+/// Three things a reader will want checked rather than asserted:
+///
+/// - **The paren rule counts over `raw[0..end]`, not over the whole match**,
+///   and `end` moves as the other rules fire. So a `)` that a later pass has
+///   already trimmed stops being counted, which is what makes
+///   `(see https://example.com/path). rest` come out right: the `.` goes, then
+///   the `)` is unbalanced against zero `(` and goes too.
+/// - **The entity rule cuts *before* the `&`** — `end = entityStart`, so
+///   `&amp;` is removed whole rather than losing only its `;`. It needs at
+///   least one alphanumeric between the two (`entityStart < end - 2`), so a
+///   bare `;` and a bare `&;` both survive;
+///   `keeps_a_bare_trailing_semicolon_that_is_not_an_entity` is that case.
+/// - **JavaScript indexes `raw[end - 1]` in UTF-16 code units and this indexes
+///   bytes.** Every character the trim can remove is ASCII, and a UTF-8
+///   multi-byte sequence contains no ASCII byte, so the two agree on every
+///   comparison *and* `end` always lands on a `char` boundary. That is a fact
+///   about the character set, not about the inputs, so it is asserted on the
+///   way out rather than assumed: slicing off a boundary would panic rather
+///   than misbehave quietly.
+///
+/// # It can return zero, and the handler can never see that
+///
+/// `raw.starts_with('<')` gives `end = 0` before the loop is entered, and the
+/// loop's own `end > 0` guard then keeps it there. A zero-length extent would
+/// be a **non-terminating tokenizer**: [`try_auto_link_extension`] consumes the
+/// trimmed length, so `pos` would not advance while the handler still reported
+/// `true`. In muya that is an infinite loop; here it would be a hang, which the
+/// M1 exit gate (24 hours of fuzzing) forbids just as firmly as a panic.
+///
+/// It is **unreachable from the handler**, and the argument is short enough to
+/// check. The trim is skipped entirely for the email alternative, so `raw` is a
+/// `www` or `https?://` match and `raw.as_bytes()[0]` is `w` or `h`. That byte
+/// is not `<`, so the `<` rule cannot produce `end == 0`; it is not in
+/// [`AUTO_LINK_TRAILING_PUNCT`] and is not `)`, so the punctuation and paren
+/// rules cannot consume it; and the entity rule only ever moves `end` to the
+/// index of an `&`, which position 0 is not. So `end >= 1` throughout.
+///
+/// The handler guards anyway — see the note there. `trim_auto_link_extent`
+/// itself reproduces muya exactly, zero and all, because that is what a unit
+/// test can check.
+fn trim_auto_link_extent(raw: &str) -> usize {
+    let bytes = raw.as_bytes();
+
+    // The `<` rule, once, before the loop. muya: `raw.indexOf('<')`.
+    let mut end = raw.find('<').unwrap_or(bytes.len());
+
+    let mut changed = true;
+    while changed && end > 0 {
+        changed = false;
+        let last = bytes[end - 1];
+
+        if AUTO_LINK_TRAILING_PUNCT.contains(&last) {
+            end -= 1;
+            changed = true;
+        } else if last == b')' {
+            // Over `raw[0..end]`, so an already-trimmed `)` no longer counts.
+            let opening = bytes[..end].iter().filter(|&&b| b == b'(').count();
+            let closing = bytes[..end].iter().filter(|&&b| b == b')').count();
+            if closing > opening {
+                end -= 1;
+                changed = true;
+            }
+        } else if last == b';' {
+            // `entityStart` walks left over `[a-z0-9]/i`, which is ASCII-only
+            // in both engines: JavaScript's Canonicalize leaves a non-ASCII
+            // character alone when its uppercase form is ASCII, so `ſ` and `K`
+            // are not `[a-z]/i` there either (M1.md §4 C2's `(?i)` row).
+            //
+            // It may reach -1, which is why this is `isize`. muya relies on
+            // that: `entityStart >= 0` is one of the three conditions.
+            let mut entity_start = end as isize - 2;
+            while entity_start >= 0 && bytes[entity_start as usize].is_ascii_alphanumeric() {
+                entity_start -= 1;
+            }
+            if entity_start >= 0
+                && entity_start < end as isize - 2
+                && bytes[entity_start as usize] == b'&'
+            {
+                end = entity_start as usize;
+                changed = true;
+            }
+        }
+    }
+
+    debug_assert!(
+        raw.is_char_boundary(end),
+        "the trim landed at {end}, inside a character of {raw:?}: every character it can \
+         remove is ASCII, so this cannot happen unless a rule grew a non-ASCII case"
+    );
+    end
 }
 
-/// `tryAutoLink` (`lexer.ts:623`). **S5.**
-fn try_auto_link(_state: &mut LexState<'_>) -> bool {
-    false
+/// `tryAutoLinkExtension` (`lexer.ts:572`) — GFM §6.9's bare `www.x.y`,
+/// `https://x.y` and `user@x.y`.
+///
+/// # `raw` is the trimmed extent — M1.md §4 C3's third handler
+///
+/// The rule matches greedily and [`trim_auto_link_extent`] then shortens it, so
+/// the token's `raw` is a **prefix** of what the regex matched and the
+/// consumption matches the trim. The trimmed tail is not lost: `pos` stops
+/// there, so it re-enters the loop and accumulates as text. That is the whole
+/// point of #2096 — `https://example.com/a/b. Next sentence.` renders as a link
+/// followed by a full stop, not as a link with a full stop in it.
+///
+/// `generator(tokenize(s)) == s` is the cheapest check that the trim did not
+/// lose a byte, and `round_trip.rs` runs it over the whole corpus.
+///
+/// # The guard reads the preceding character — and here muya is *right*
+///
+/// `state.originSrc[state.pos - 1]` (`lexer.ts:578`) is the same read as
+/// `tryChunks`'s, which is M1.md §5 D3 site 1 and a bug. **This one is not**,
+/// and the reason is the `state.top` gate on the line above it: at the top
+/// level `originSrc` really is the string `pos` indexes, so the two cannot
+/// describe different things. Nothing diverges, so nothing is registered — and
+/// this is the last of the two sites, so D3 site 1's entry is now closed at
+/// both of them.
+///
+/// What D4 claims is that the port is safe *by construction* rather than by
+/// that gate: a level is `(origin, level: Span)`, so
+/// [`LexState::preceding_char`] cannot read a different string from the one
+/// `pos` indexes whether or not `top` holds. This is the last place that claim
+/// had left to be checked, and it holds — the gate is reproduced because it is
+/// muya's behaviour, not because the port needs it for safety.
+///
+/// Two differences from the emoji predicate that are easy to conflate:
+///
+/// - it is an **allow-list**, `/[* _~(]/`, not the emoji check's deny-list
+///   `\w`. So a `,` or a `」` before the URL refuses the autolink, where a
+///   deny-list would admit it. `xhttps://example.com` and `,https://x.y` are
+///   both refused, and the first is a transcribed spec case.
+/// - the `pos === 0` clause is what [`LexState::preceding_char`] returns `None`
+///   for. muya needs the clause because `originSrc[-1]` is `undefined` and
+///   `/[* _~(]/.test(undefined)` is `false` — it would refuse an autolink at
+///   the very start of a block. Here the `None` arm says the same thing
+///   without the special case.
+///
+/// muya reads one UTF-16 code unit, so for an astral preceding character it
+/// tests a lone surrogate; this reads the whole `char`. Neither is in the
+/// allow-list, so the two agree, and the port is the one that says what it
+/// means.
+///
+/// # `state.top` is load-bearing
+///
+/// There is no extension autolink inside a nested level, ever:
+/// `<div>www.x.y</div>` and `**www.x.y**` leave the URL as text in the
+/// children. [`try_auto_link`] has no such gate, so `**<https://x.y>**` *does*
+/// produce one.
+fn try_auto_link_extension(state: &mut LexState<'_>) -> bool {
+    let id = RuleId::AutoLinkExtension;
+    let origin = state.origin;
+
+    // muya evaluates `exec` first and the two guards afterwards, in one
+    // condition. Reproduced in that order: neither has a side effect, so the
+    // order is unobservable — but it is not free, because this rule carries a
+    // lookahead and so runs on `fancy-regex`'s backtracking path even to fail.
+    // Hoisting the `top` check above it would skip the rule in every nested
+    // level. That is a change to *when a rule is run*, which `benches/
+    // tokenizer.rs` records as M3's alongside S4's first-byte pre-check.
+    let Some(caps) = exec(rule(id), state.rest()) else {
+        return false;
+    };
+    if !state.top {
+        return false;
+    }
+    // `/[* _~(]/` — an allow-list, and a literal space rather than `\s`.
+    if !matches!(
+        state.preceding_char(),
+        None | Some('*' | ' ' | '_' | '~' | '(')
+    ) {
+        return false;
+    }
+
+    let whole = state.required(&caps, 0, id);
+    let www = state.group(&caps, 1);
+    let url = state.group(&caps, 2);
+    let email = state.group(&caps, 3);
+
+    // muya: `www ? 'www' : url ? 'url' : 'email'` — falsiness again, but no
+    // alternative here can match the empty string, so `is_some` is the same
+    // test. The three are mutually exclusive alternatives of one group.
+    let link_type = match (www, url) {
+        (Some(_), _) => AutoLinkKind::Www,
+        (_, Some(_)) => AutoLinkKind::Url,
+        _ => AutoLinkKind::Email,
+    };
+    debug_assert!(
+        matches!(link_type, AutoLinkKind::Email) == email.is_some(),
+        "exactly one of the three alternatives participates"
+    );
+
+    // muya's `if (!email)`, and it is **unobservable** — reproduced anyway.
+    //
+    // An email match's last character is always alphanumeric (the domain
+    // production ends `[a-zA-Z0-9]`) and neither the local-part class nor the
+    // domain admits a `<`. All four trim rules test the last character or need
+    // a `<`, so none of them could fire on an email match: the trim is the
+    // identity there whether or not this guard runs. Proved by
+    // `the_email_alternatives_extent_would_be_unchanged_by_the_trim_anyway`,
+    // and left in place because a faithful port is what M1 is for — the third
+    // dead branch of the milestone, after `validateEmphasize`'s rule-16 guard
+    // (S2) and `correctUrl`'s group 5 (S3).
+    let (raw, www, url) = match email {
+        Some(_) => (whole, www, url),
+        None => {
+            let trimmed = trim_auto_link_extent(whole.of(origin));
+            if trimmed == whole.len() {
+                (whole, www, url)
+            } else {
+                let raw = Span::new(whole.start, whole.start + trimmed);
+                // muya rewrites whichever of the two participated. Both are
+                // the whole match before the trim — the alternation captures
+                // everything and the lookahead is zero-width — so both become
+                // the trimmed extent.
+                (raw, www.map(|_| raw), url.map(|_| raw))
+            }
+        }
+    };
+
+    // Unreachable, and guarded rather than asserted. `trim_auto_link_extent`
+    // explains why no `www`/`https?://` match can trim to nothing; the guard is
+    // here because the cost of being wrong is a **hang**, not a wrong token,
+    // and a hang is what the exit gate's 24-hour soak is looking for. Reporting
+    // "the rule did not match" is the same degradation `rules::BACKTRACK_LIMIT`
+    // chooses, for the same reason: the tokenizer must stay total. muya has no
+    // such guard and would loop forever, so there is nothing to register — a
+    // divergence needs two behaviours to differ, and a hang has no output.
+    if raw.is_empty() {
+        return false;
+    }
+
+    state.emit(
+        TokenKind::AutoLinkExtension(AutoLinkExtension {
+            link_type,
+            www,
+            url,
+            email,
+        }),
+        raw,
+        raw.end,
+    );
+    true
 }
 
-/// `tryHtmlTag` (`lexer.ts:649`). **S4** — needs the attribute scanner
-/// (M1.md §5 D2) and carries the D3 site 2 disallowed-tag fix.
-fn try_html_tag(_state: &mut LexState<'_>) -> bool {
-    false
+/// `tryAutoLink` (`lexer.ts:623`) — CommonMark §6.5's `<https://x.y>` and
+/// `<user@x.y>`.
+///
+/// The simplest handler in the file: no gate, no validation, no trimming, no
+/// children. The rule's two alternatives are the two forms and they fill the
+/// two fields; `isLink` says which.
+///
+/// # `href` is the literal source between the angle brackets
+///
+/// No encoding, no decoding, no normalisation — that is the tokenizer half of
+/// marktext #3548, where the *renderer*'s `encodeURI` turned an author's `%20`
+/// into `%2520` and the link opened the wrong URL. See [`AutoLink`] and the
+/// `auto_link_encoding` module in `tests/inline_renderer_specs.rs`; the
+/// rendering half of that fix is owed to the renderer milestone and recorded in
+/// M1.md §10.
+///
+/// # It outranks `html_tag`, and until now that was theoretical
+///
+/// `auto_link` sits two places above `html_tag` in [`INLINE_HANDLERS`] and
+/// `html_tag`'s pattern matches `<https://x.y>` perfectly well — its tag-name
+/// class accepts `https` and `[^\n<>]*` accepts `://x.y`. From S4 until this
+/// handler landed, every angle-bracket autolink in the corpus and the fixtures
+/// was tokenized as an `html_tag` whose `tag` was its scheme. Landing this
+/// restores the precedence for all of them.
+fn try_auto_link(state: &mut LexState<'_>) -> bool {
+    let id = RuleId::AutoLink;
+    let Some(caps) = exec(rule(id), state.rest()) else {
+        return false;
+    };
+
+    let whole = state.required(&caps, 0, id);
+    let href = state.group(&caps, 1);
+    let email = state.group(&caps, 2);
+
+    state.emit(
+        TokenKind::AutoLink(AutoLink {
+            href,
+            email,
+            // muya: `isLink: !!autoLTo[1]`. Group 1 needs at least three
+            // characters, so it can never be the empty string that would make
+            // the falsiness differ from `is_some`.
+            is_link: href.is_some(),
+        }),
+        whole,
+        whole.end,
+    );
+    true
+}
+
+/// GFM §6.11's nine disallowed raw-HTML tag names — **M1.md §5 D3 site 2.**
+///
+/// muya writes
+/// `/title|textarea|style|xmp|iframe|noembed|noframes|script|plaintext/i`
+/// (`lexer.ts:21`) and tests it against the captured tag name **unanchored**,
+/// so any name *containing* one of the nine is rejected too: `<subtitle>` for
+/// containing `title`, `<scripty>` for containing `script`. Neither is raw
+/// HTML that GFM disallows. D3 fixes it: match the name exactly.
+///
+/// # Why this is `eq_ignore_ascii_case` and not a regex
+///
+/// The Unicode half of the question is already closed upstream of here. S1
+/// wrapped `html_tag`'s tag-name class in `(?-i:…)` precisely so that Rust's
+/// full-Unicode case folding could not admit U+017F (ſ) or U+212A (K) where
+/// JavaScript's simple folding would not — so capture 3 is **ASCII by
+/// construction**, and an ASCII-only comparison is exact rather than a
+/// narrowing. `character_classes.rs` asserts that construction, and
+/// `rules.rs`'s own test asserts `<ſpan>x</ſpan>` does not match at all.
+///
+/// Registered as `disallowed-html-tag-substring-match` in
+/// `spec/divergences.json` before the fix was made, per D3's rule.
+const DISALLOWED_HTML_TAGS: [&str; 9] = [
+    "title",
+    "textarea",
+    "style",
+    "xmp",
+    "iframe",
+    "noembed",
+    "noframes",
+    "script",
+    "plaintext",
+];
+
+fn is_disallowed_html_tag(name: &str) -> bool {
+    DISALLOWED_HTML_TAGS
+        .iter()
+        .any(|disallowed| name.eq_ignore_ascii_case(disallowed))
+}
+
+/// `tryHtmlTag` (`lexer.ts:649`) — `<!-- … -->` and `<span …>…</span>`.
+///
+/// # Two branches, discriminated by capture 3 and not by capture 1
+///
+/// `html_tag` is
+/// `^(<!--[\s\S]*?-->|(<([a-z][a-z\d-]*)[^\n<>]*>)(?:([\s\S]*?)(<\/\3 *>))?)/i`,
+/// and **group 1 wraps the entire alternation**, so it participates for both
+/// forms and cannot tell them apart. muya's test is `htmlTo[1] && !htmlTo[3]`;
+/// the discriminator is the *absence of a tag name*, i.e. the comment
+/// alternative won. For a comment `openTag === raw`, `tag` is the literal
+/// string `<!---->` rather than a slice — hence [`HtmlTagName`] — and `attrs`
+/// is `{}` without `getAttributes` ever being called.
+///
+/// # Three distinct child states, two of which serialize alike
+///
+/// - a comment omits `content`, `closeTag` and `children` entirely;
+/// - `<div></div>` has `content: ''` — which is **falsy**, so `children: []`;
+/// - `<div>` with no close tag has `content: undefined` and `children: []`.
+///
+/// The second and third differ only in `content`, and `token.rs` keeps that:
+/// `Some(empty span)` versus `None`. The comment's absent `children` versus an
+/// element's empty `children` is the load-bearing one — `[]` is truthy in
+/// JavaScript, so `tokensToPlainText` takes different branches.
+///
+/// # `getAttributes` sees the whole match
+///
+/// muya passes `htmlTo[0]` — content and close tag included, not the open tag
+/// — because it parses the string and reads `body.firstElementChild`. That is
+/// not a detail: it is what makes `<td class="x">y</td>` *not* an html_tag,
+/// and [`crate::html`] is where the consequences live. `None` fails the
+/// handler; `Some(vec![])` does **not**, because `{}` is truthy.
+fn try_html_tag(state: &mut LexState<'_>) -> bool {
+    let id = RuleId::HtmlTag;
+    let origin = state.origin;
+    let Some(caps) = exec(rule(id), state.rest()) else {
+        return false;
+    };
+
+    let whole = state.required(&caps, 0, id);
+    let name = state.group(&caps, 3);
+
+    // The comment branch. muya: `htmlTo[1] && !htmlTo[3]`.
+    let Some(name) = name else {
+        state.emit(
+            TokenKind::HtmlTag(HtmlTag {
+                tag: HtmlTagName::Comment,
+                // Capture 1 for a comment, which is the whole match.
+                open_tag: state.required(&caps, 1, id),
+                close_tag: None,
+                content: None,
+                attrs: Vec::new(),
+                children: None,
+            }),
+            whole,
+            whole.end,
+        );
+        return true;
+    };
+
+    if is_disallowed_html_tag(name.of(origin)) {
+        return false;
+    }
+    let Some(attrs) = get_attributes(whole.of(origin)) else {
+        return false;
+    };
+
+    let open_tag = state.required(&caps, 2, id);
+    let content = state.group(&caps, 4);
+
+    // muya tokenizes `htmlTo[4]` with the absolute base
+    // `state.pos + htmlTo[2].length`, with `top: false` and no begin rules.
+    // Under D4 the child level is capture 4's span, so the base is asserted to
+    // agree rather than computed twice — the same "assert rather than
+    // recompute" as `try_strong_em` and `try_link`. Group 4 begins exactly
+    // where group 2 ends, because the two are adjacent in the pattern.
+    let children = content.map(|content| {
+        debug_assert_eq!(content.start, open_tag.end);
+        tokenizer_fac(origin, content, false, false, state.labels, state.syntax)
+    });
+
+    state.emit(
+        TokenKind::HtmlTag(HtmlTag {
+            tag: HtmlTagName::Name(name),
+            open_tag,
+            close_tag: state.group(&caps, 5),
+            content,
+            attrs,
+            // muya: `htmlTo[4] ? tokenizerFac(…) : []`. An absent group 4 and
+            // an empty one are both falsy in JavaScript, so both give `[]` —
+            // the `Option` here is on `content`, never on `children`, which is
+            // `Some` for every element and `None` only for a comment.
+            children: Some(children.unwrap_or_default()),
+        }),
+        whole,
+        whole.end,
+    );
+    true
 }
 
 /// `trySoftLineBreak` (`lexer.ts:719`) — a `\n` that is not the start of a
@@ -1313,23 +1764,6 @@ mod tests {
     #[test]
     fn empty_input_produces_no_tokens() {
         assert!(tokenize("").is_empty());
-    }
-
-    /// Nothing implemented can match here, so every rule falls through and the
-    /// whole thing accumulates. That is the loop's default path and the one
-    /// every unimplemented handler relies on.
-    ///
-    /// The input is S4–S5 only — HTML and autolinks. It used to include
-    /// `**bold**` and `` `code` ``, which S2 took out, and `[link](url)` and
-    /// `![img](src)`, which S3 has just taken out: a handler that starts
-    /// working turns this test red, which is the point of keeping it pointed
-    /// at whatever is *still* unimplemented. Narrow it again at S4 and S5
-    /// until there is nothing left to put in it.
-    #[test]
-    fn unmatched_constructs_accumulate_as_text_rather_than_being_dropped() {
-        let src = "<span>x</span> and https://x.y and www.x.y";
-        assert_eq!(types(src), ["text"]);
-        assert_eq!(raws(src), [src]);
     }
 
     /// Multi-byte characters advance by `char`, not by byte, and land in the
@@ -2063,11 +2497,16 @@ mod tests {
 
     /// The gate: an odd run of `\` before the `]` escapes it, so the line is
     /// not a definition. An even run is.
+    ///
+    /// The trailing `auto_link_extension` arrived at S5 and is incidental: once
+    /// the line is not a definition, its URL is a bare URL after a space, which
+    /// is exactly what GFM §6.9 autolinks. Measured — muya gives the same four
+    /// tokens. What this test is about is the first three.
     #[test]
     fn an_odd_backslash_run_before_the_bracket_is_not_a_definition() {
         assert_eq!(
             types(r"[label\]: https://example.com"),
-            ["text", "backlash", "text"]
+            ["text", "backlash", "text", "auto_link_extension"]
         );
         let src = r"[label\\]: https://example.com";
         assert_eq!(types(src), ["reference_definition"]);
@@ -2079,12 +2518,20 @@ mod tests {
 
     /// A definition is a *begin* rule: offset 0, top level, and only when the
     /// caller asked for begin rules.
+    ///
+    /// The `auto_link_extension` in every row arrived at S5, and it is what a
+    /// line that is *not* a definition is supposed to become: a bare URL after
+    /// a space. Measured against muya, which produces the same two tokens for
+    /// all three. The assertion is still "no `reference_definition` here".
     #[test]
     fn a_definition_is_only_recognised_at_the_start_of_a_block() {
-        assert_eq!(types("not a def [label]: https://example.com"), ["text"]);
+        assert_eq!(
+            types("not a def [label]: https://example.com"),
+            ["text", "auto_link_extension"]
+        );
         assert_eq!(
             types("    [label]: https://example.com"),
-            ["text"],
+            ["text", "auto_link_extension"],
             "four spaces is a code block, and the rule allows three"
         );
         let options = TokenizerOptions {
@@ -2093,7 +2540,7 @@ mod tests {
         };
         assert_eq!(
             types_of(&crate::tokenizer("[label]: https://example.com", &options)),
-            ["text"]
+            ["text", "auto_link_extension"]
         );
     }
 
@@ -2343,6 +2790,606 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // html_tag — S4
+    // -----------------------------------------------------------------------
+
+    fn html_tag_of(src: &str) -> HtmlTag {
+        let tokens = tokenize(src);
+        assert_eq!(tokens.len(), 1, "{src:?} tokenized to {:?}", types(src));
+        let TokenKind::HtmlTag(tag) = &tokens[0].kind else {
+            panic!("{src:?} is a {:?}, not an html_tag", tokens[0].type_str());
+        };
+        tag.clone()
+    }
+
+    #[test]
+    fn an_element_carries_its_open_tag_content_and_close_tag() {
+        let src = "<span class=\"a\">x</span>";
+        let tag = html_tag_of(src);
+        let HtmlTagName::Name(name) = tag.tag else {
+            panic!("expected a named tag");
+        };
+        assert_eq!(name.of(src), "span");
+        assert_eq!(tag.open_tag.of(src), "<span class=\"a\">");
+        assert_eq!(tag.content.map(|s| s.of(src)), Some("x"));
+        assert_eq!(tag.close_tag.map(|s| s.of(src)), Some("</span>"));
+        assert_eq!(tag.attrs, [("class".to_string(), "a".to_string())]);
+        assert_eq!(types_of(tag.children.as_ref().expect("children")), ["text"]);
+    }
+
+    /// The comment branch is discriminated by the **absence of capture 3**,
+    /// not by capture 1 — group 1 wraps the whole alternation, so it
+    /// participates either way. For a comment `openTag == raw`, `tag` is the
+    /// literal `<!---->`, and `content`/`closeTag`/`children` are all omitted.
+    #[test]
+    fn a_comment_reports_the_literal_tag_and_no_children() {
+        for src in ["<!---->", "<!-- a -->", "<!--\n-->", "<!-- <div> -->"] {
+            let tag = html_tag_of(src);
+            assert_eq!(tag.tag, HtmlTagName::Comment, "{src:?}");
+            assert_eq!(tag.open_tag.of(src), src, "{src:?}: openTag is the raw");
+            assert_eq!(tag.content, None, "{src:?}");
+            assert_eq!(tag.close_tag, None, "{src:?}");
+            assert!(tag.children.is_none(), "{src:?}");
+            assert!(tag.attrs.is_empty(), "{src:?}");
+        }
+    }
+
+    /// Three distinct child states, two of which serialize alike. `''` is
+    /// falsy in JavaScript, so `<div></div>` gets `children: []` from
+    /// `htmlTo[4] ? … : []` even though group 4 participated — and a comment
+    /// gets no `children` key at all.
+    #[test]
+    fn the_three_child_states_are_distinguishable() {
+        let empty = html_tag_of("<div></div>");
+        assert_eq!(empty.content.map(|s| s.len()), Some(0));
+        assert_eq!(empty.children.as_deref(), Some(&[][..]));
+
+        let unclosed = html_tag_of("<div>");
+        assert_eq!(unclosed.content, None);
+        assert_eq!(unclosed.close_tag, None);
+        assert_eq!(unclosed.children.as_deref(), Some(&[][..]));
+
+        let comment = html_tag_of("<!---->");
+        assert_eq!(comment.content, None);
+        assert!(comment.children.is_none());
+    }
+
+    /// The child level is based at `pos + openTag.len()`, and D4 makes that
+    /// capture 4's span. Asserted through the child ranges, which are absolute
+    /// offsets into the same top-level text.
+    #[test]
+    fn children_are_tokenized_at_an_absolute_base_inside_the_open_tag() {
+        let src = "a <div id=\"i\">**b**</div> c";
+        let tokens = tokenize(src);
+        assert_eq!(types(src), ["text", "html_tag", "text"]);
+        let children = tokens[1].children().expect("children");
+        assert_eq!(types_of(children), ["strong"]);
+        assert_eq!(children[0].raw.of(src), "**b**");
+        assert_eq!(children[0].raw.start, src.find("**b**").unwrap());
+    }
+
+    /// **D3 site 1's justification stops being a promise here.** That fix
+    /// allows the emoji when `pos == level.start`, arguing that a child level
+    /// is only ever entered after `*`, `_`, `~`, `[` or a `>`-terminated open
+    /// tag — none of them word characters. `html_tag` is the `>` clause, and
+    /// until S4 nothing exercised it.
+    ///
+    /// The port's behaviour is what it always was and is right: the character
+    /// before the child level is the `>`, so the emoji stands.
+    ///
+    /// **muya does not agree, and S4 recorded that it did.** Its
+    /// `originSrc[pos - 1]` lands `base` characters to the right, `base` being
+    /// the open tag's length, so for `<div>:smile:</div>` it reads
+    /// `":smile:"[4]`, which is `l`, and suppresses the emoji. S4 checked the
+    /// class with `<div>:smile:</div>` and `<span>:100:</span>` and found both
+    /// agreeing; only the second does, because there `base` is 6 against a
+    /// five-character child, so the read is out of range and `lexer.ts:203`'s
+    /// `prevChar &&` treats `undefined` as a boundary.
+    ///
+    /// So this is the **registered `emoji-nested-boundary` divergence** at one
+    /// more container, widened a third time at S5 — see
+    /// [`the_boundary_fix_applies_inside_an_html_tags_children`], which is
+    /// where the register's four `html_tag` inputs are asserted. What is kept
+    /// here is the half that really does agree, because it is the half that
+    /// tests D3 site 1's argument rather than the bug.
+    #[test]
+    fn an_emoji_at_the_start_of_an_html_tags_children_is_kept() {
+        for src in ["<span>:100:</span>", "<div id=\"i\">:smile:</div>"] {
+            let tag = html_tag_of(src);
+            assert_eq!(
+                types_of(tag.children.as_ref().expect("children")),
+                ["emoji"],
+                "{src:?}: a `>`-terminated open tag is a word boundary"
+            );
+        }
+    }
+
+    /// **The register's third widening of `emoji-nested-boundary`, at S5.**
+    ///
+    /// muya reads `originSrc[pos - 1]` where `originSrc` is the *child* string
+    /// and `pos` starts at the open tag's length, so what it lands on is
+    /// `child[tag_len + rel - 1]` where the correct character is
+    /// `child[rel - 1]`. Both directions therefore occur, exactly as they do at
+    /// `link` and `em` (S3): muya loses the emoji when the open tag is shorter
+    /// than the text before the shortcode, and keeps one the port correctly
+    /// suppresses when it is longer.
+    ///
+    /// Measured over 228 inputs sweeping open-tag length against emoji
+    /// position: **96 disagree.** These four are the register's
+    /// representatives.
+    #[test]
+    fn the_boundary_fix_applies_inside_an_html_tags_children() {
+        // muya LOSES these — it reads a word character that is not there.
+        for (src, expected) in [
+            ("<div>:smile:</div>", &["emoji"][..]),
+            ("<b>x :smile:</b>", &["text", "emoji"][..]),
+            ("<em>:100:</em>", &["emoji"][..]),
+        ] {
+            let tag = html_tag_of(src);
+            assert_eq!(
+                types_of(tag.children.as_ref().expect("children")),
+                expected,
+                "{src:?}"
+            );
+        }
+
+        // …and KEEPS this one, where the port is right to suppress it: the `:`
+        // really is glued to a word character at this level. muya reads
+        // `"x:smile:"[8 + 1 - 1]`, which is off the end.
+        let tag = html_tag_of("<strong>x:smile:</strong>");
+        assert_eq!(
+            types_of(tag.children.as_ref().expect("children")),
+            ["text"],
+            "the `:` is glued to `x`"
+        );
+    }
+
+    /// **D3 site 2, registered as `disallowed-html-tag-substring-match`.**
+    /// GFM §6.11 names nine tag names; muya tests them unanchored, so anything
+    /// *containing* one is rejected too. These assert the fixed behaviour, and
+    /// they are the register's seven inputs.
+    #[test]
+    fn a_tag_name_merely_containing_a_disallowed_one_is_still_an_html_tag() {
+        for src in [
+            "<subtitle>",
+            "<scripty>",
+            "<noscript>",
+            "<SubTitle>x</SubTitle>",
+            "<subscript>x</subscript>",
+            "<iframe-x>x</iframe-x>",
+            "<xstyle>x</xstyle>",
+        ] {
+            assert_eq!(types(src), ["html_tag"], "{src:?} is not raw HTML GFM bans");
+        }
+    }
+
+    /// The other half of the same fix: the nine themselves are still refused,
+    /// in any ASCII case.
+    #[test]
+    fn the_nine_gfm_names_are_refused_case_insensitively() {
+        for name in DISALLOWED_HTML_TAGS {
+            for spelling in [name.to_string(), name.to_uppercase(), {
+                let mut s = name.to_string();
+                s[..1].make_ascii_uppercase();
+                s
+            }] {
+                let src = format!("<{spelling}>x</{spelling}>");
+                assert_eq!(types(&src), ["text"], "{src:?} must not be an html_tag");
+            }
+        }
+    }
+
+    /// **The registered `html-tag-attrs-from-a-foster-parented-element`
+    /// divergence**, asserting the fixed behaviour: the token's `attrs` are
+    /// the attributes of the tag the token is about.
+    ///
+    /// muya reports `{id: 'i'}`, `{id: 'i'}`, `{title:'',src:'s',alt:''}` and
+    /// `{}` for these four, because happy-dom moves an element that is not a
+    /// permitted descendant of `<table>` to *before* it and `getAttributes`
+    /// then reads that one.
+    #[test]
+    fn a_tags_attrs_are_its_own_and_not_a_foster_parented_descendants() {
+        for (src, expected) in [
+            ("<table><span id=\"i\">y</span></table>", &[][..]),
+            (
+                "<table class=\"c\"><span id=\"i\">y</span></table>",
+                &[("class", "c")][..],
+            ),
+            (
+                "<table class=\"c\"><img src=\"s\"></table>",
+                &[("class", "c")][..],
+            ),
+            (
+                "<table class=\"c\">a <code>c</code> b</table>",
+                &[("class", "c")][..],
+            ),
+        ] {
+            let tag = html_tag_of(src);
+            let got: Vec<(&str, &str)> = tag
+                .attrs
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            assert_eq!(got, expected, "{src:?}");
+        }
+    }
+
+    /// A `null` from `getAttributes` **fails** the handler, so the tag is
+    /// text. These are the eleven names happy-dom will not append under
+    /// `<body>`, and reproducing them is why [`crate::html`] models the
+    /// element and not just the attribute string. `<td>b <code>x</code></td>`
+    /// is the one that shows a name gate alone is not enough: the dropped `td`
+    /// lets the `code` take the slot, so muya returns `{}` — truthy — and the
+    /// tag *is* raw HTML. CommonMark example 148 is exactly that input.
+    #[test]
+    fn a_tag_whose_element_the_parser_discards_is_text_not_html() {
+        for src in [
+            "<td class=\"x\">y</td>",
+            "<tr><td>foo</td></tr>",
+            "<th>foo</th>",
+            "<tbody>x</tbody>",
+            "<caption>x</caption>",
+            "<col>",
+            // An unterminated quoted value discards the element too —
+            // CommonMark example 620.
+            "<a href=\"hi'>",
+        ] {
+            assert_eq!(types(src), ["text"], "{src:?}");
+        }
+
+        // `<head>` is the one of the eleven that also swallows its content, so
+        // no descendant can take the slot and the outer tag is never raw HTML.
+        // The handler failing does not stop the *loop*, though: the `<` joins
+        // the pending run and the scan continues, so an inner tag one position
+        // later is still tokenized. muya does the same, which is why this is
+        // three tokens rather than one.
+        let src = "<head class=\"c\"><span id=\"i\">y</span></head>";
+        assert_eq!(types(src), ["text", "html_tag", "text"]);
+        assert_eq!(tokenize(src)[0].raw.of(src), "<head class=\"c\">");
+
+        // …but a discarded element lets a later one take the slot.
+        assert_eq!(types("<td>b <code>|</code> az</td>"), ["html_tag"]);
+        assert_eq!(types("<td>\n<pre>\nx\n</pre>\n</td>"), ["html_tag"]);
+        // …and the retry after an unterminated quote can still find one — but
+        // only when the *whole match* supplies a later terminator, which is
+        // the close tag here. `<a href="hi'>x" y>` is text in both engines,
+        // because the rule's open tag is `[^\n<>]*` and stops at the first
+        // `>`, so `getAttributes` never sees the rest.
+        assert_eq!(types("<a href=\"hi'>x\"</a>"), ["html_tag"]);
+        assert_eq!(types("<a href=\"hi'>x\" y>"), ["text"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // The autolinks — S5
+    //
+    // Every expectation below was measured against the running TypeScript
+    // engine before it was written down: 49,751 inputs across two runs, of
+    // which 6885 produce an autolink and all 6885 agree exactly. §3 rule 3.
+    // -----------------------------------------------------------------------
+
+    fn auto_link_of(src: &str) -> AutoLink {
+        let tokens = tokenize(src);
+        let TokenKind::AutoLink(a) = tokens[0].kind else {
+            panic!("{src:?} is a {:?}, not an auto_link", tokens[0].type_str());
+        };
+        a
+    }
+
+    fn extension_of(src: &str) -> (AutoLinkExtension, Span) {
+        let tokens = tokenize(src);
+        let token = tokens
+            .iter()
+            .find(|t| t.type_str() == "auto_link_extension")
+            .unwrap_or_else(|| panic!("no auto_link_extension in {src:?}: {:?}", types(src)));
+        let TokenKind::AutoLinkExtension(a) = token.kind else {
+            unreachable!()
+        };
+        (a, token.raw)
+    }
+
+    // --- tryAutoLink -------------------------------------------------------
+
+    /// **This is what S4's shadowing test was waiting for.** These four are
+    /// from the class of 26 distinct corpus and fixture inputs that S4
+    /// measured tokenizing as an `html_tag` whose `tag` was the scheme,
+    /// because `auto_link` outranked `html_tag` and returned `false`. All 26
+    /// are `auto_link` again — measured, not inferred.
+    #[test]
+    fn an_angle_bracket_autolink_outranks_the_html_tag_that_shadowed_it() {
+        for src in [
+            "<https://foo.bar/?q=**>",
+            "<foo@bar.example.com>",
+            "<MAILTO:FOO@BAR.BAZ>",
+            "<irc://foo.bar:2233/baz>",
+        ] {
+            assert_eq!(types(src), ["auto_link"], "{src:?}");
+        }
+    }
+
+    /// The two alternatives fill the two fields, and `isLink` says which.
+    /// muya's `marker: '<'` is a literal that is always the byte at
+    /// `raw.start`, so [`AutoLink`] does not carry it.
+    #[test]
+    fn an_auto_link_reports_a_url_or_an_email_but_never_both() {
+        let src = "<https://example.com/a?b=c&d=e>";
+        let link = auto_link_of(src);
+        assert!(link.is_link);
+        assert_eq!(
+            link.href.map(|s| s.of(src)),
+            Some("https://example.com/a?b=c&d=e")
+        );
+        assert_eq!(link.email, None, "undefined, not ''");
+        assert_eq!(
+            tokenize(src)[0].raw.of(src),
+            src,
+            "the angle brackets are in `raw`"
+        );
+
+        let src = "<foo@bar.example.com>";
+        let link = auto_link_of(src);
+        assert!(!link.is_link);
+        assert_eq!(link.href, None);
+        assert_eq!(link.email.map(|s| s.of(src)), Some("foo@bar.example.com"));
+    }
+
+    /// The tokenizer half of marktext #3548: the `href` is the source between
+    /// the angle brackets, byte for byte. The renderer's `encodeURI` was the
+    /// bug, and it can only be fixed if the token hands the span through
+    /// untouched — `%20` must not become `%2520`, and `&` must stay `&`.
+    #[test]
+    fn an_auto_links_href_is_the_literal_source_between_the_brackets() {
+        let src = "<https://www.google.com/search?q=marktext%20foo%20bar>";
+        let href = auto_link_of(src).href.expect("a url");
+        assert_eq!(
+            href.of(src),
+            "https://www.google.com/search?q=marktext%20foo%20bar"
+        );
+        assert_eq!(href, Span::new(1, src.len() - 1), "the span, not a copy");
+    }
+
+    /// [`try_auto_link`] has no `state.top` gate, unlike
+    /// [`try_auto_link_extension`]. Measured: muya nests it too.
+    #[test]
+    fn an_angle_bracket_autolink_opens_inside_a_nested_level() {
+        let src = "**<https://example.com/a>**";
+        let tokens = tokenize(src);
+        let TokenKind::Strong(emphasis) = &tokens[0].kind else {
+            panic!("expected a strong");
+        };
+        assert_eq!(types_of(&emphasis.children), ["auto_link"]);
+    }
+
+    // --- tryAutoLinkExtension ----------------------------------------------
+
+    #[test]
+    fn the_three_extension_alternatives_each_fill_their_own_field() {
+        for (src, kind, target) in [
+            (
+                "www.example.com/x end",
+                AutoLinkKind::Www,
+                "www.example.com/x",
+            ),
+            (
+                "https://example.com/x end",
+                AutoLinkKind::Url,
+                "https://example.com/x",
+            ),
+            (
+                "user@example.com end",
+                AutoLinkKind::Email,
+                "user@example.com",
+            ),
+        ] {
+            let (ext, raw) = extension_of(src);
+            assert_eq!(ext.link_type, kind, "{src:?}");
+            assert_eq!(ext.link_type.as_str(), kind.as_str());
+            assert_eq!(ext.target().map(|s| s.of(src)), Some(target), "{src:?}");
+            assert_eq!(raw.of(src), target, "{src:?}: raw is the extent");
+            // The other two fields are `undefined` in muya, not `''`.
+            let others = [ext.www, ext.url, ext.email]
+                .into_iter()
+                .filter(Option::is_some)
+                .count();
+            assert_eq!(others, 1, "{src:?}: exactly one alternative participates");
+        }
+    }
+
+    /// The guard is an **allow-list** — `/[* _~(]/` or the start of the block
+    /// — not the emoji check's deny-list. So a comma or a full stop before the
+    /// URL refuses it, where a deny-list would admit it.
+    /// `does_not_start_an_extension_autolink_inside_a_word` is the transcribed
+    /// spec case for the `x` row.
+    #[test]
+    fn an_extension_autolink_needs_an_allowed_character_before_it() {
+        for prefix in ["", "*", " ", "_", "~", "("] {
+            let src = format!("{prefix}https://example.com/x end");
+            assert!(
+                types(&src).contains(&"auto_link_extension"),
+                "{src:?} should autolink"
+            );
+        }
+        for prefix in [
+            "x", ",", ".", "-", ")", "]", ">", "\t", "\n", "\u{a0}", "中", "🙂",
+        ] {
+            let src = format!("{prefix}https://example.com/x end");
+            assert!(
+                !types(&src).contains(&"auto_link_extension"),
+                "{src:?} should not autolink: {:?}",
+                types(&src)
+            );
+        }
+    }
+
+    /// `state.top` — the extension form never opens in a nested level, at any
+    /// of the five containers that make one.
+    #[test]
+    fn an_extension_autolink_never_opens_in_a_nested_level() {
+        for src in [
+            "**www.example.com**",
+            "*https://example.com/a*",
+            "~~www.example.com~~",
+            "[www.example.com](u)",
+            "<div>www.example.com</div>",
+        ] {
+            let tokens = tokenize(src);
+            let children = tokens[0].children().expect("a container");
+            assert_eq!(
+                types_of(children),
+                ["text"],
+                "{src:?}: `state.top` is what forbids this"
+            );
+        }
+    }
+
+    /// M1.md §4 C3's third handler: `raw` is the **trimmed** extent, the
+    /// consumption matches it, and the tail the greedy `\S+` swallowed
+    /// re-enters the loop as text. #2096.
+    #[test]
+    fn a_trimmed_extension_autolink_leaves_its_tail_in_the_input() {
+        let src = "http://some.domain.name/path/to/resource: rest";
+        let tokens = tokenize(src);
+        assert_eq!(types(src), ["auto_link_extension", "text"]);
+        assert_eq!(
+            tokens[0].raw.of(src),
+            "http://some.domain.name/path/to/resource"
+        );
+        assert_eq!(tokens[1].raw.of(src), ": rest");
+
+        // …and the rewritten field agrees with `raw`, because muya rewrites
+        // whichever of `www`/`url` participated to the trimmed string too.
+        let (ext, raw) = extension_of(src);
+        assert_eq!(ext.target(), Some(raw));
+    }
+
+    /// The `<` rule runs **once, before the loop**, so what follows the `<`
+    /// cannot bring the extent back — and the trimmed tail is text, which
+    /// keeps the tiling.
+    #[test]
+    fn a_less_than_ends_the_extent_and_the_rest_is_text() {
+        let src = "https://example.com/a<b end";
+        let tokens = tokenize(src);
+        assert_eq!(types(src), ["auto_link_extension", "text"]);
+        assert_eq!(tokens[0].raw.of(src), "https://example.com/a");
+        assert_eq!(tokens[1].raw.of(src), "<b end");
+    }
+
+    // --- trimAutoLinkExtent, directly --------------------------------------
+
+    /// The four rules, one row at a time, against the function rather than
+    /// through the tokenizer — including the case the handler can never
+    /// produce.
+    #[test]
+    fn the_trim_applies_its_four_rules_and_interleaves_the_last_three() {
+        fn trim(s: &str) -> &str {
+            &s[..trim_auto_link_extent(s)]
+        }
+
+        // Trailing punctuation, one run at a time.
+        assert_eq!(trim("https://x.io/a."), "https://x.io/a");
+        assert_eq!(trim("https://x.io/a?!.,:*_~"), "https://x.io/a");
+        assert_eq!(trim("https://x.io/a:b:c!"), "https://x.io/a:b:c");
+        assert_eq!(
+            trim("https://x.io/a/b"),
+            "https://x.io/a/b",
+            "nothing to trim"
+        );
+
+        // Parens: counted over `raw[0..end]`, so balance decides.
+        assert_eq!(trim("https://x.io/foo(bar)"), "https://x.io/foo(bar)");
+        assert_eq!(trim("https://x.io/foo(bar))"), "https://x.io/foo(bar)");
+        assert_eq!(
+            trim("https://en.wikipedia.org/wiki/Foo_(bar))"),
+            "https://en.wikipedia.org/wiki/Foo_(bar)"
+        );
+        // …and the interleaving: the `.` goes first, which unbalances the `)`.
+        assert_eq!(trim("https://x.io/path)."), "https://x.io/path");
+
+        // The entity rule cuts before the `&`, and needs an alnum inside.
+        assert_eq!(trim("https://x.io/?a=1&amp;"), "https://x.io/?a=1");
+        assert_eq!(
+            trim("https://x.io/a;b;"),
+            "https://x.io/a;b;",
+            "a bare `;` stays"
+        );
+        assert_eq!(
+            trim("https://x.io/&;"),
+            "https://x.io/&;",
+            "no alnum between"
+        );
+        assert_eq!(
+            trim("https://x.io/&#39;"),
+            "https://x.io/&#39;",
+            "`#` is not alnum"
+        );
+        assert_eq!(
+            trim("https://x.io/&AMP;"),
+            "https://x.io/",
+            "case-insensitive"
+        );
+
+        // The `<` rule, once, before the loop.
+        assert_eq!(trim("https://x.io/a<b"), "https://x.io/a");
+        assert_eq!(
+            trim("https://x.io/a<b."),
+            "https://x.io/a",
+            "not re-entered"
+        );
+    }
+
+    /// The zero-length extent, which is real for the function and unreachable
+    /// for the handler — see [`trim_auto_link_extent`] for the proof, and
+    /// [`pathological_input_still_terminates_and_tiles`] for what would happen
+    /// if the proof were wrong.
+    #[test]
+    fn the_trim_can_return_zero_but_only_for_a_string_the_rule_cannot_match() {
+        assert_eq!(trim_auto_link_extent("<https://x.io"), 0);
+        assert_eq!(trim_auto_link_extent("."), 0);
+        assert_eq!(trim_auto_link_extent(""), 0);
+
+        // The rule's two trimmable alternatives both start with a letter that
+        // no rule can remove, which is the whole of the proof.
+        for src in ["www.example.com", "https://example.com", "http://a.io"] {
+            assert!(trim_auto_link_extent(src) >= 1, "{src:?}");
+            assert!(matches!(src.as_bytes()[0], b'w' | b'h'));
+        }
+    }
+
+    /// **`if (!email)` at `lexer.ts:592` is unobservable**, and this proves it
+    /// rather than asserting it.
+    ///
+    /// The email alternative's last character is always alphanumeric — the
+    /// domain ends `[a-zA-Z0-9]` — and neither the local-part class nor the
+    /// domain admits a `<`. So no rule the trim owns can fire on an email
+    /// match: the punctuation, paren and entity rules all test the last
+    /// character, and the `<` rule needs a `<`. The guard is therefore dead,
+    /// and it is reproduced anyway because a faithful port is what M1 is for.
+    ///
+    /// The same shape as S2's rule-16 finding and S3's group-5 one: a branch
+    /// that reads as load-bearing and cannot fire. Worth writing down so that
+    /// nobody "simplifies" the guard away and then reintroduces it later as a
+    /// behaviour change.
+    #[test]
+    fn the_email_alternatives_extent_would_be_unchanged_by_the_trim_anyway() {
+        for email in [
+            "user@example.com",
+            "a@b.co",
+            "foo+special@Bar.baz-bar0.com",
+            "a.b!c#d$e%f&g'h*i+j/k=l?m^n`o{p|q}r~s-t@example.com",
+            "foo@example",
+        ] {
+            let src = format!("{email} end");
+            let (ext, raw) = extension_of(&src);
+            assert_eq!(ext.link_type, AutoLinkKind::Email);
+            assert_eq!(raw.of(&src), email, "an email extent is never trimmed");
+            assert_eq!(
+                trim_auto_link_extent(email),
+                email.len(),
+                "…and the trim would not have trimmed it if it had run"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // The backtrack limit, at the tokenizer level
     // -----------------------------------------------------------------------
 
@@ -2350,6 +3397,27 @@ mod tests {
     /// terminates, it does not panic, and the result still tiles. That is the
     /// property the M1 fuzzing gate is really about, and it holds because a
     /// rule that gives up is indistinguishable from a rule that did not match.
+    ///
+    /// # S5's rows are here for a second reason: `pos` must *advance*
+    ///
+    /// Every other handler consumes at least the character it matched, so
+    /// "terminates" has only ever meant "no rule runs forever".
+    /// [`try_auto_link_extension`] is the first that consumes a length it
+    /// **computes** — the trimmed extent — and a zero-length one would leave
+    /// `pos` where it was while the handler still reported `true`. That is an
+    /// infinite loop in muya and would be a hang here, which is the same
+    /// failure the 24-hour soak is looking for and is not what the backtrack
+    /// limit protects against.
+    ///
+    /// It cannot happen: [`trim_auto_link_extent`] documents why no `www` or
+    /// `https?://` match can trim to nothing, the handler guards anyway, and
+    /// the last four rows below are the shapes that get closest — a URL
+    /// followed by nothing but trimmable characters, at four different rules.
+    /// Measured over a 42,130-input exhaustive sweep of trailing-character
+    /// combinations, **the shortest surviving extent was 17 bytes**, from
+    /// `www.example.com/p???`; nothing came within an order of magnitude of
+    /// zero. Two of the rows are also quadratic in the extent, because the
+    /// paren rule recounts `raw[0..end]` on every pass.
     #[test]
     fn pathological_input_still_terminates_and_tiles() {
         let cases = [
@@ -2359,6 +3427,15 @@ mod tests {
             format!("&{};", "a".repeat(4000)),
             format!("{}\\", "\\".repeat(2000)),
             format!("{}#", " ".repeat(4000)),
+            // S5: everything after the scheme is trimmable, at each rule.
+            format!("https://a.io/{}", ".".repeat(4000)),
+            format!("https://a.io/{}", ")".repeat(2000)),
+            format!("www.a.io/{}", "&amp;".repeat(800)),
+            format!("{}www.a.io/x", "<".repeat(2000)),
+            // …and the two rules' own openers, repeated.
+            "<".repeat(2000),
+            "www.".repeat(1000),
+            "https://".repeat(500),
         ];
         for src in &cases {
             let tokens = tokenize(src);

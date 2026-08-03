@@ -95,6 +95,8 @@ fn corpus_files() -> Vec<(String, String)> {
 /// | S1 | 9 of 16 | ~1.3 s | ~21 s |
 /// | S2 | 13 of 16 | ~4.2 s | **~134 s** |
 /// | S3 | 13 of 16 (+4 rules) | ~3.2 s | **~68 s** |
+/// | S4 | 14 of 16 | ~4.3 s | **~229 s** |
+/// | S5 | **16 of 16** | ~5.7 s | **~245 s** |
 ///
 /// S2's four handlers cost **6.4×**, which is more than the S1 note's
 /// "plausibly a minute or more by S5" allowed for — S2 alone passed that. The
@@ -123,15 +125,63 @@ fn corpus_files() -> Vec<(String, String)> {
 /// should add cost rather than remove it — but the factor to expect is not
 /// S2's.
 ///
+/// # S4: the prediction held, and the cost has a different shape
+///
+/// **~68 s → ~229 s**, a 3.4× rise, and the first stage to make this number
+/// worse. In release the same change is 2.4× (see `benches/tokenizer.rs`); the
+/// gap is `check_tiling` and the extra nesting level `html_tag` introduces,
+/// both of which only exist in a debug profile.
+///
+/// The shape is what to carry forward. S2's and S3's changes were
+/// *shape-dependent* — they moved the rows with long levels and left short
+/// ones alone, because a lazy `[\s\S]*?` costs in proportion to how far it
+/// scans. S4's is **flat**: every measured row moved by about the same factor,
+/// which means a fixed cost per rule *attempt* rather than per character
+/// scanned. `html_tag` carries a `\3` backreference and an `(?i)` flag, so it
+/// runs on `fancy-regex`'s backtracking path even to fail on the first
+/// character, and before S4 the handler returned `false` without running it at
+/// all.
+///
 /// The one thing S2 asked for that survives unchanged is the benchmark:
 /// `benches/tokenizer.rs` exists as of S3, it covers the whole tokenizer
-/// rather than `lowerPriority` alone, and it carries the release numbers and
-/// the per-file breakdown this comment only summarises. **Re-measure both
-/// tables at S4 and S5.**
+/// rather than `lowerPriority` alone, and it carries the release numbers, the
+/// per-file breakdown and the remedy this comment only summarises.
 ///
-/// The covered run is ~3 s, which is fine, and that is what the limit is
-/// protecting. 256 KiB is chosen to keep `250kb.md` in: it is the largest file
-/// whose content differs *structurally* from the two above it.
+/// # S5: a third cost shape, and a caution about this whole table
+///
+/// **~229 s → ~245 s** for the ignored pair, and ~4.3 s → ~5.7 s for the
+/// covered run. Release moved 1.20× over the same change.
+///
+/// **Read the two rows as different numbers, not as one factor**, because they
+/// disagree: 1.07× for the ignored pair against 1.33× for the covered run.
+/// Both are cross-session wall clocks, and by S5 the stage-over-stage delta has
+/// shrunk to about the size of the session-to-session drift — S5's release A/B
+/// measured the stubbed build at 13.9 s where S4 had recorded 14.9 s for the
+/// same behaviour, a 7% gap from nothing but the machine. `benches/tokenizer.rs`
+/// carries the only clean attribution S5 has, an A/B on one binary, and **S6
+/// should do the same here** rather than subtracting two sessions.
+///
+/// What the table is still good for is catching a *jump* — S2's 6.4× was
+/// unmistakable at any precision. It is no longer good for a 10% claim.
+///
+/// The cost S5 adds is a scan *inside* a regex:
+/// `auto_link_extension`'s email alternative opens
+/// `[\w.!#$%&'*+/=?^`{|}~-]+@`, a class containing every letter, digit and
+/// underscore, so at every position inside a word the engine runs to the end
+/// of the word looking for an `@` that is not there. That is a third shape for
+/// the model — S2/S3 measured how far a *lazy* quantifier scans when it fails,
+/// S4 measured a flat per-attempt VM setup, and this is how far a **greedy**
+/// one scans before the character that must follow it turns out to be absent.
+/// Note that it adds **no nesting level** — neither autolink handler tokenizes
+/// children — so unlike S4 this is not a change the debug profile should be
+/// expected to pay for twice.
+///
+/// The covered run is what the limit is protecting, and it is still seconds
+/// rather than minutes. 256 KiB is chosen to keep `250kb.md` in: it is the
+/// largest file whose content differs *structurally* from the two above it.
+/// **Re-measure both tables at S6 and S7** — S6 adds a post-pass over every
+/// token rather than a rule, so it should move these numbers in a way neither
+/// of the three shapes predicts.
 const DEBUG_PROFILE_SIZE_LIMIT: usize = 256 * 1024;
 
 /// Assert that a token list tiles `[start, end)` of `src`, recursively.

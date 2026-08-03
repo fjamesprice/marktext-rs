@@ -5,9 +5,15 @@ A native Rust reimplementation of [MarkText](https://github.com/marktext/marktex
 The build plan is [`docs/RUST-REWRITE-PLAN.md`](docs/RUST-REWRITE-PLAN.md), and
 it is authoritative. This README describes only what exists.
 
-> **Status: M0.** Workspace, CI, conformance suite, differential-test harness,
-> and benchmark corpus. Every crate is a stub. There is no parser, no layout,
-> no window. M1 (`mt-inline`, the tokenizer port) is next.
+> **Status: M1, stage 5 of 7.** Workspace, CI, conformance suite,
+> differential-test harness, and benchmark corpus, from M0. `mt-inline` — the
+> inline tokenizer — is a complete port of muya's `lexer.ts`: all sixteen
+> handlers, all 49 of muya's inline specs passing. Nothing consumes it yet, and
+> the rest of the workspace is still stubs. There is no parser, no layout, no
+> window; **you cannot run the application.** M1 finishes with S6
+> (`tokensToPlainText`, search highlights, the marker-reveal predicate) and S7
+> (property tests, the fuzz soak, machine-checking the divergence register);
+> wiring the tokenizer into `mt-md` is M2.
 
 ---
 
@@ -84,19 +90,21 @@ catches a dependency *cycle*, but not a one-way edge.
 - `mt_doc::Block` and `mt_doc::Edit` as concrete types, with the four
   round-trip constraints from §2 carried as code comments and a test asserting
   the 1:1 mapping onto muya's `TState` union.
-- **`mt-inline`, in part** — M1 S3. The token types, the 26-rule table, the
-  tokenizer loop with muya's ordered handler list, `generator`, and both halves
-  of `utils.ts` that do not need a DOM — emphasis validation and the
-  link/destination parsing. Thirteen of the sixteen handlers are implemented:
-  the nine plain ones, `strong`/`em`, the four chunk rules (`inline_code`
-  `del` `emoji` `inline_math`), `super_sub_script`, `footnote_identifier`,
-  `image`, `link`, `reference_link` and `reference_image`, plus
-  `reference_definition`. Nested tokenization runs, so ``[**a** `b`](c)`` is a
-  tree. The remaining three return `false`, so HTML tags and autolinks still
-  tokenize as plain text. Progress is the `PENDING` list in
-  `crates/mt-inline/tests/inline_renderer_specs.rs`: 15 of the 49 transcribed
-  muya specs still to go, and every one of them is an autolink case.
+- **`mt-inline`, the whole tokenizer** — M1 S5. The token types, the 26-rule
+  table, the tokenizer loop with muya's ordered handler list, `generator`, and
+  all of `utils.ts` — emphasis validation, link/destination parsing, and
+  `getAttributes` reimplemented **without a DOM**, which is where the HTML5
+  named-reference table in `entities.rs` comes from. **All sixteen handlers are
+  implemented** and **all 49 transcribed muya specs pass**: the `PENDING` list
+  in `crates/mt-inline/tests/inline_renderer_specs.rs` is empty. Nested
+  tokenization runs, so ``[**a** `b`](c)`` and `<div>**a**</div>` are trees.
   `cargo bench -p mt-inline` is the per-stage cost number.
+
+  What M1 still owes is not tokenization: S6 is `tokensToPlainText`, the
+  `highlights` post-pass and the marker-reveal predicate; S7 is proptest, the
+  24-hour fuzz soak, and pointing `cargo xtask divergences` at a real
+  token-stream comparator — which today reports `SKIPPED` for every entry, so
+  the divergence register is **not** machine-checked yet.
 - The conformance ratchet, over 1,324 real fixtures.
 - The TypeScript half of the differential harness, over the 22-file corpus.
 - The dependency-direction guard.

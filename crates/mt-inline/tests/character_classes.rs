@@ -60,19 +60,26 @@
 //! | `\w` | **S2** — the emoji word boundary at `lexer.ts:206` |
 //! | `\d` | **S2** — `emoji`'s content class `[a-z_\d+-]` |
 //! | `\s` (again) | **S2** — `UNICODE_WHITESPACE_REG`, the flanking decision |
+//! | `\w` (again) | **S5** — `auto_link`'s email local part |
+//! | `\d` (again) | **S5** — `auto_link`'s scheme and the extension's port |
+//! | `(?i)` (again) | **S5** — `auto_link`, whose flag S1 *removed* |
 //!
-//! S1's version of this table said the last three were unreachable and named
-//! this file as the place to extend when they became reachable. S2 is that
-//! stage: `emoji` reaches `\w` and `\d`, and `inline_code` and `inline_math`
-//! reach `.`. The remaining unreached user of `\w` and `\d` is the autolink
-//! host, which is S5.
+//! S1's version of this table said three rows were unreachable and named this
+//! file as the place to extend when they became reachable. S2 was that stage
+//! for `emoji`, `inline_code` and `inline_math`; **S5 is the last of them**,
+//! and it closes the note S2 left — *"the remaining unreached user of `\w` and
+//! `\d` is the autolink host"*. Every class in M1.md §4 C2's table is now
+//! exercised by at least one rule that produces a token, so the file no longer
+//! has a row waiting on a stage.
 //!
 //! Every S2 row below was measured the same way as the S1 rows — muya's
 //! `tokenizer` run over the input at the pinned reference commit, with the
 //! `type` of each token recorded. The S2 sweep covered 207 inputs; 194 agreed
 //! exactly on type, `raw`, every field and `range`, six differ only because
 //! muya reaches an S3–S5 rule the port has not written, and the remaining
-//! seven are the registered `emoji-nested-boundary` divergence.
+//! seven are the registered `emoji-nested-boundary` divergence. The S5 rows
+//! come from a 49,751-input sweep in which 6885 inputs produce an autolink and
+//! all 6885 agree exactly.
 
 use mt_inline::{Token, tokenize};
 
@@ -385,6 +392,22 @@ fn every_class_case_still_tiles() {
         "**\u{85}a\u{85}**",
         "** a **",
         "**a**",
+        // S5 — \d, \w and (?i) at the autolink host
+        "<a1://example.com>",
+        "<a\u{664}://example.com>",
+        "<a\u{96d}://example.com>",
+        "www.example.com:80 end",
+        "www.example.com:808080 end",
+        "www.example.com:\u{668}\u{660} end",
+        "<foo@example.com>",
+        "<\u{434}foo@example.com>",
+        "<foo\u{434}@example.com>",
+        "<\u{4e2d}@example.com>",
+        "<HTTP://example.com>",
+        "<a\u{17f}://example.com>",
+        "<a\u{212a}://example.com>",
+        "WWW.example.com end",
+        "https://EXAMPLE.com end",
     ];
 
     for src in INPUTS {
@@ -393,6 +416,129 @@ fn every_class_case_still_tiles() {
             src,
             "input: {src:?}"
         );
+    }
+}
+
+// ===========================================================================
+// S5 — the autolink host, which is the last unreached user of `\w` and `\d`
+// ===========================================================================
+
+/// `\d`, through `auto_link`'s scheme class and the extension rule's port.
+///
+/// muya's `auto_link` is `[a-z][a-z\d+.\-]{1,31}:` and its extension rule has
+/// `(?::\d{1,5})?`. JavaScript's `\d` is `[0-9]`; Rust's is `\p{Nd}`, so a bare
+/// `\d` would admit an Arabic-Indic or Devanagari digit into a URI scheme and
+/// into a port number — and both would then autolink something muya leaves
+/// alone.
+///
+/// The scheme rows land on `html_tag` rather than on `text` when they fail,
+/// because `html_tag` matches `<a…>` happily; that is the measured answer and
+/// it is the shape S4's shadowing note is about, read from the other side.
+#[test]
+fn the_digit_class_agrees_with_muya_in_a_scheme_and_a_port() {
+    const CASES: &[(&str, &[&str])] = &[
+        // auto_link's scheme: an ASCII digit is a scheme character…
+        ("<a1://example.com>", &["auto_link"]),
+        ("<http2://example.com>", &["auto_link"]),
+        // …and no other decimal-digit script is.
+        ("<a\u{664}://example.com>", &["html_tag"]), // ARABIC-INDIC FOUR
+        ("<a\u{96d}://example.com>", &["html_tag"]), // DEVANAGARI SEVEN
+        // The extension rule's port: `(?::\d{1,5})?`.
+        ("www.example.com:80 end", &["auto_link_extension", "text"]),
+        (
+            "www.example.com:80808 end",
+            &["auto_link_extension", "text"],
+        ),
+        // Six digits is one too many, so the optional group cannot match and
+        // the lookahead then fails against the `:`.
+        ("www.example.com:808080 end", &["text"]),
+        ("www.example.com:\u{668}\u{660} end", &["text"]),
+        (
+            "https://127.0.0.1:8080/a end",
+            &["auto_link_extension", "text"],
+        ),
+    ];
+
+    for (src, expected) in CASES {
+        assert_eq!(&types(src), expected, "input: {src:?}");
+    }
+}
+
+/// `\w`, through `auto_link`'s email local part
+/// `[\w.!#$%&'*+/=?^`{|}~-]+@`.
+///
+/// JavaScript's `\w` is ASCII, so a Cyrillic letter breaks the local part and
+/// the whole autolink fails; under Rust's Unicode-aware default every row
+/// below would become an `auto_link` that muya leaves as text. This is the
+/// same class as the emoji boundary above, at the only other rule that uses
+/// `\w`.
+#[test]
+fn the_word_class_agrees_with_muya_in_an_email_local_part() {
+    const CASES: &[(&str, &[&str])] = &[
+        // ASCII local parts autolink, including the class's punctuation.
+        ("<foo@example.com>", &["auto_link"]),
+        ("<foo_bar@example.com>", &["auto_link"]),
+        ("<foo+special@Bar.baz-bar0.com>", &["auto_link"]),
+        // Non-ASCII does not, in either position of the local part.
+        ("<\u{434}foo@example.com>", &["text"]), // Cyrillic, leading
+        ("<\u{4e2d}@example.com>", &["text"]),   // CJK
+        ("<\u{e9}@example.com>", &["text"]),     // Latin-1 letter
+        // …and `html_tag` is what catches the interior case instead, because
+        // its tag name is the ASCII prefix and `[^\n<>]*` eats the rest. The
+        // leading cases are `text` only because a tag name must *start*
+        // `[a-zA-Z]`. Measured; it is the same shadowing shape S4 recorded,
+        // read from the other side.
+        ("<foo\u{434}@example.com>", &["html_tag"]),
+    ];
+
+    for (src, expected) in CASES {
+        assert_eq!(&types(src), expected, "input: {src:?}");
+    }
+}
+
+/// `(?i)` a third time, through the rule whose flag S1 **removed**.
+///
+/// M1.md §4 C2: `auto_link` has no backreference, so instead of keeping the
+/// flag its classes are written out (`[a-z]` → `[a-zA-Z]`). That is what
+/// JavaScript's Canonicalize does to an ASCII class anyway, and unlike a Rust
+/// `(?i)` it cannot admit U+017F (ſ) or U+212A (K) as a scheme character. Both
+/// halves are checked here: the fold still works, and it does not reach past
+/// ASCII.
+#[test]
+fn auto_links_case_insensitivity_agrees_with_muya_without_the_flag() {
+    const CASES: &[(&str, &[&str])] = &[
+        ("<HTTP://example.com>", &["auto_link"]),
+        ("<Http://example.com>", &["auto_link"]),
+        ("<MAILTO:FOO@BAR.BAZ>", &["auto_link"]),
+        // …and the two characters Rust's Unicode folding would let in.
+        ("<a\u{17f}://example.com>", &["html_tag"]), // LATIN SMALL LETTER LONG S
+        ("<a\u{212a}://example.com>", &["html_tag"]), // KELVIN SIGN
+    ];
+
+    for (src, expected) in CASES {
+        assert_eq!(&types(src), expected, "input: {src:?}");
+    }
+}
+
+/// The extension rule has **no** `i` flag in muya, so unlike `auto_link` its
+/// classes really are lowercase-only. `WWW.EXAMPLE.COM` does not autolink,
+/// which is easy to "fix" by mistake when porting the two rules side by side.
+#[test]
+fn the_extension_rule_is_case_sensitive_and_muya_agrees() {
+    const CASES: &[(&str, &[&str])] = &[
+        ("www.example.com end", &["auto_link_extension", "text"]),
+        ("https://example.com end", &["auto_link_extension", "text"]),
+        ("WWW.example.com end", &["text"]),
+        ("HTTPS://example.com end", &["text"]),
+        ("Www.example.com end", &["text"]),
+        // The host is lowercase-only too, but only in the `www` alternative's
+        // label class — the `https?://` alternative's host is `[a-z0-9\-._~]`.
+        ("www.EXAMPLE.com end", &["text"]),
+        ("https://EXAMPLE.com end", &["text"]),
+    ];
+
+    for (src, expected) in CASES {
+        assert_eq!(&types(src), expected, "input: {src:?}");
     }
 }
 

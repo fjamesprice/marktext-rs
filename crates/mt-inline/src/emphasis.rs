@@ -7,9 +7,10 @@
 //! decides whether a `*`/`_` run may open or close an emphasis span:
 //! `PUNCTUATION_REG`, `CJK_REG`, `UNICODE_WHITESPACE_REG`, `canOpenEmphasis`,
 //! `canCloseEmphasis`, `validateEmphasize` and `lowerPriority`, plus
-//! `isLengthEven` from `utils/index.ts`. The other half is
+//! `isLengthEven` from `utils/index.ts`. The rest of `utils.ts` is
 //! [`crate::link`] — `parseSrcAndTitle` and `correctUrl`, landed in S3 — and
-//! `getAttributes`, which is M1.md §5 D2 and belongs to S4.
+//! [`crate::html`] — `getAttributes`, `validWidthAndHeight` and
+//! `WHITELIST_ATTRIBUTES`, which are M1.md §5 D2 and landed in S4.
 //!
 //! Two functions of `utils.ts` are **deliberately not ported at all**:
 //! `lastCodePointChar` and `codePointCharAt` (lines 104–130). M1.md §5 D1 is

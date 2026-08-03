@@ -115,7 +115,12 @@
 //! *before* it is made. Read that file before changing tokenizer behaviour;
 //! `cargo xtask divergences` is what keeps it honest.
 //!
-//! ## Status: S3
+//! ## Status: S5 — the tokenizer is complete
+//!
+//! **All sixteen handlers are implemented and all 49 transcribed muya specs
+//! pass.** `PENDING` in `tests/inline_renderer_specs.rs` is empty, which is
+//! M1's exit gate for conformance; what M1 still owes is S6 and S7 (below),
+//! not tokenization.
 //!
 //! Landed: the token types (S0), the 49 transcribed specs (S0), the rule table
 //! with `fancy-regex` behind it, the tokenizer loop with the ordered
@@ -124,27 +129,39 @@
 //! `generator(tokenize(s)) == s` is the tiling invariant restated as an
 //! equality, and building it now makes every later stage's handler tested the
 //! moment it is written (M1.md §6). Then, in S2, the emphasis half of
-//! `utils.ts` (`emphasis.rs`) and the four handlers that consume it; and in
+//! `utils.ts` (`emphasis.rs`) and the four handlers that consume it; in
 //! S3 the link half (`link.rs` — `parseSrcAndTitle`, `correctUrl`,
-//! `findClosingBracket`) and its four.
+//! `findClosingBracket`) and its four; in S4 `getAttributes` without a DOM
+//! (`html.rs`, plus the HTML5 named-reference table in `entities.rs`) and the
+//! `html_tag` handler that consumes it; and in S5 the two autolinks together
+//! with `trimAutoLinkExtent`, GFM §6.9's extent trimming.
 //!
 //! Implemented handlers: `header` `hr` `code_fence` `multiple_math`
 //! `reference_definition` `tail_header` `backlash` `html_escape`
 //! `soft_line_break` `hard_line_break` `strong`/`em`
 //! `inline_code`/`del`/`emoji`/`inline_math` `super_sub_script`
-//! `footnote_identifier` `image` `link` `reference_link` `reference_image`.
-//! **The other three are present in their exact precedence positions and
-//! return `false`**, so anything they would match accumulates as text. That is
-//! correct rather than merely tolerable: an unmatched construct is text, the
-//! input still tiles, and the round-trip still holds. HTML is S4 and autolinks
-//! are S5.
+//! `footnote_identifier` `image` `link` `reference_link` `reference_image`
+//! `html_tag` `auto_link` `auto_link_extension`. There are no stubs left.
+//!
+//! ### The stub shadowing S4 introduced is gone
+//!
+//! Until S4 an unimplemented handler simply left its construct as text: the
+//! input still tiled, the round trip still held, and nothing produced a wrong
+//! token. S4 broke that, because `auto_link` and `auto_link_extension`
+//! **outrank** `html_tag` in the precedence array while returning `false`, and
+//! `html_tag`'s pattern matches `<scheme:…>` — so an angle-bracket autolink
+//! became an `html_tag` whose `tag` was its scheme. Twenty-six distinct corpus
+//! and fixture inputs were in that class. S5 restores the precedence for all
+//! twenty-six, measured rather than inferred, and with no stubs left the
+//! question cannot arise again in this crate.
 //!
 //! **Nested tokenization is live from S2**: `strong`, `em` and `del` tokenize
 //! their content as children, based at an absolute offset into the same
-//! top-level text, and S3 adds `link` and `reference_link`, which tokenize
-//! their anchor. So the cross-level half of M1.md §4 C3 — every child span is
-//! contained in its parent's — is checked against real children rather than
-//! vacuously true.
+//! top-level text; S3 adds `link` and `reference_link`, which tokenize their
+//! anchor; S4 adds `html_tag`, which tokenizes its content. So the cross-level
+//! half of M1.md §4 C3 — every child span is contained in its parent's — is
+//! checked against real children rather than vacuously true. The autolinks add
+//! no nesting level: neither form tokenizes children.
 //!
 //! Not yet read by anything: [`TokenizerOptions::highlights`] (S6, the
 //! post-pass). [`TokenizerOptions::syntax`] became live in S2 — it gates
@@ -154,17 +171,27 @@
 //! makes `[text][ref]` a reference link, so with the default empty map every
 //! reference form is plain text.
 //!
-//! The remaining spec cases fail without failing the build: every case that
-//! does not pass yet is listed in `PENDING` in
-//! `tests/inline_renderer_specs.rs`, and that list only shrinks — a listed
-//! case that starts passing fails CI until it is delisted. Same ratchet as
-//! `spec/expected-failures.json` and `spec/divergences.json`, for the same
-//! reason. **The list emptying is M1's exit gate**, and its length is the
-//! milestone's progress meter.
+//! ### What M1 still owes, so that "complete" is not read too widely
+//!
+//! - **S6**: `tokensToPlainText`, the `highlights` post-pass, and §3.1's
+//!   `marker_state`. [`generator`] landed early and is not S6's remainder.
+//! - **S7**: proptest generators, the 24-hour libFuzzer soak, and pointing
+//!   `cargo xtask divergences` at a real token-stream comparator. That last
+//!   one is a **live gap**: every registered divergence has been checked by
+//!   hand against the running engine and **none is machine-checked**, so the
+//!   register cannot yet detect its own staleness. See
+//!   `xtask/src/divergences.rs`.
+//! - **The renderer milestone**: `autoLinkEncoding.spec.ts`'s other half.
+//!   `mt-inline` guarantees the `auto_link` token's `href` is the literal
+//!   source between the angle brackets; that the rendered `<a href>` is
+//!   emitted from it verbatim rather than through an `encodeURI` equivalent is
+//!   owed, and M1.md §10 carries it.
 
 mod emphasis;
+mod entities;
 mod escape;
 mod generator;
+mod html;
 mod lexer;
 mod link;
 mod rules;
@@ -276,12 +303,11 @@ impl TokenizerOptions {
 /// Concatenating every returned token's `raw` reproduces `src` byte for byte
 /// — that is §3 rule 1, and [`generator`] is it as a function.
 ///
-/// # What S3 does not do yet
+/// # What S5 does not do yet
 ///
-/// Three of the sixteen handlers are unimplemented (see the crate docs), so
-/// HTML tags and autolinks currently tokenize as text. One option is
-/// consequently ignored, and is documented as ignored rather than quietly
-/// honoured-later:
+/// All sixteen handlers are implemented, so every inline construct muya
+/// recognises is recognised here. **One option is still ignored**, and is
+/// documented as ignored rather than quietly honoured-later:
 ///
 /// - `options.highlights` — the intersection post-pass is S6.
 ///

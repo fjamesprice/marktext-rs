@@ -41,12 +41,21 @@
 //! comparison against TypeScript exact while retaining information muya throws
 //! away. Groups that always participate are a plain [`Span`].
 //!
-//! **Two fields are exceptions and serialize as `undefined`**, because muya
+//! **Four fields are exceptions and serialize as `undefined`**, because muya
 //! writes them without the `|| ''`: [`CodeEmojiMath::backlash`]
-//! (`lexer.ts:227`) and [`ReferenceDefinition::left_title_space`]
-//! (`lexer.ts:102`). Both are noted where they are declared. They matter only
-//! at the wire boundary, and S3 found the first of them by diffing token
-//! streams against the running engine.
+//! (`lexer.ts:227`), [`ReferenceDefinition::left_title_space`]
+//! (`lexer.ts:102`) and — added at S4 — [`HtmlTag::content`] and
+//! [`HtmlTag::close_tag`] (`lexer.ts:690` and `:693`). Each is noted where it
+//! is declared. They matter only at the wire boundary, and S3 found the first
+//! of them by diffing token streams against the running engine.
+//!
+//! S4 raised the count from two to four rather than finding a new *kind* of
+//! exception: `html_tag`'s optional group is `(?:([\s\S]*?)(<\/\3 *>))?`, so
+//! an element with no close tag has `content: undefined` and
+//! `closeTag: undefined` where the rest of the module would give `''`. The
+//! number is in this header because it is the sort of claim that quietly stops
+//! being true, and a stage that adds a handler is the stage that should check
+//! it.
 
 use std::ops::Range;
 
@@ -176,7 +185,10 @@ pub struct Highlight {
 /// consumes. M1.md §4 C3 names the three where they differ: `tryBacklash`
 /// (`raw` is the `\` alone, consumption is 2), `tryTailHeader` (the trailing
 /// whitespace group is left in the input) and `tryAutoLinkExtension` (`raw` is
-/// the trimmed extent and the trimmed tail re-enters the loop).
+/// the trimmed extent and the trimmed tail re-enters the loop). All three are
+/// implemented as of S5, so the equality `range == raw` that `check_tiling`
+/// asserts is now checked against every one of the sixteen handlers rather
+/// than against thirteen of them.
 ///
 /// # No `parent`
 ///
@@ -612,7 +624,25 @@ impl AutoLinkKind {
 /// them, so all four are kept rather than collapsed into one span.
 ///
 /// For `Www` and `Url`, the span is the extent **after** `trimAutoLinkExtent`
-/// has run, which is a prefix of the regex match. `Email` is never trimmed.
+/// has run, which is a prefix of the regex match.
+///
+/// `Email` is *documented* as never trimmed, because `lexer.ts:592` guards the
+/// trim with `if (!email)` — but S5 established that the guard is
+/// **unobservable**: an email match always ends with an alphanumeric and can
+/// never contain a `<`, so no rule the trim owns could fire on one anyway. The
+/// guard is reproduced regardless, and `lexer.rs`'s
+/// `the_email_alternatives_extent_would_be_unchanged_by_the_trim_anyway`
+/// proves the claim rather than restating it.
+///
+/// # S0 wrote these three types and S5 is the first code to construct one
+///
+/// They were written from `types.ts` five stages before anything filled them
+/// in, so the shape was a prediction. It held: all four fields are needed
+/// (`types.ts` carries them and the differential harness compares them),
+/// [`AutoLinkExtension::target`] and [`AutoLinkKind::as_str`] were both the
+/// right accessors, and nothing had to change. Worth saying because the
+/// opposite happened at S4 — `HtmlTag::attrs` carried an `Option` that could
+/// not be `None` and it was removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AutoLinkExtension {
     pub link_type: AutoLinkKind,
@@ -683,35 +713,48 @@ pub struct HtmlTag {
     pub close_tag: Option<Span>,
     /// Capture 4.
     pub content: Option<Span>,
-    /// `getAttributes(raw)` — whitelisted attributes of the open tag.
+    /// `getAttributes(raw)` — the whitelisted attributes of the tag.
     ///
     /// `String`, not `Span`: muya routes this through `DOMParser`, which
-    /// lowercases names and resolves character references in values, so
-    /// neither is generally a source slice. `None` is a valueless attribute
-    /// (`<input disabled>`), which `getAttribute` reports as `null` — distinct
-    /// from `Some("")`.
+    /// ASCII-lowercases names and resolves character references in values, so
+    /// neither is generally a source slice. A duplicate attribute keeps the
+    /// first.
+    ///
+    /// # There is no `Option` on the value, and S4 is where that was settled
+    ///
+    /// This was declared `Vec<(String, Option<String>)>` until S4, with `None`
+    /// meaning a valueless attribute — `<input disabled>` — on the reading
+    /// that `getAttribute` reports those as `null`. **It does not.**
+    /// `getAttributes` iterates `getAttributeNames()`, so every name it asks
+    /// for is present, and a present-but-valueless attribute has the value
+    /// `""` in the DOM; `null` means *absent*. Measured against happy-dom:
+    /// `<input disabled>` gives `{"disabled": ""}`. So the inner `Option` was
+    /// uninhabited, and a type that cannot be `None` should not be an
+    /// `Option` — it makes every reader ask what `None` means and every writer
+    /// wrap a value that is never absent. Removed, along with the test that
+    /// asserted the distinction.
     ///
     /// A `Vec` rather than a map because insertion order is observable:
     /// `getAttributeNames()` returns document order, and `getAttributes`
     /// pre-seeds `title`/`src`/`alt` for `IMG` before overwriting them, which
     /// a JavaScript object preserves as first-insertion order.
     ///
-    /// M1.md §5 D2 is the open decision about how this is produced without a
-    /// DOM. It does not affect this shape.
-    pub attrs: Vec<(String, Option<String>)>,
+    /// M1.md §5 D2 decides how this is produced without a DOM; see
+    /// [`crate::html`]. It does not affect this shape.
+    pub attrs: Vec<(String, String)>,
     /// Capture 4, tokenized, based at `pos + open_tag.len()`.
     pub children: Option<Vec<Token>>,
 }
 
 impl HtmlTag {
-    /// The value of `name`, if the attribute is present.
+    /// The value of `name`, or `None` if the attribute is absent.
     ///
-    /// The outer `Option` is presence; the inner is whether it has a value.
-    pub fn attr(&self, name: &str) -> Option<Option<&str>> {
+    /// A valueless attribute is `Some("")`, not `None` — see [`Self::attrs`].
+    pub fn attr(&self, name: &str) -> Option<&str> {
         self.attrs
             .iter()
             .find(|(k, _)| k == name)
-            .map(|(_, v)| v.as_deref())
+            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -946,21 +989,24 @@ mod tests {
         assert_eq!(leaf(Some(Vec::new())).children(), Some(&[][..]));
     }
 
+    /// The replacement for `a_valueless_attribute_is_not_an_empty_one`, which
+    /// asserted a distinction the DOM does not make — see [`HtmlTag::attrs`].
+    /// What is left is the distinction that *is* real: absent versus present.
     #[test]
-    fn a_valueless_attribute_is_not_an_empty_one() {
+    fn an_absent_attribute_is_not_an_empty_one() {
         let tag = HtmlTag {
             tag: HtmlTagName::Name(Span::new(1, 6)),
             open_tag: Span::new(0, 20),
             close_tag: None,
             content: None,
             attrs: vec![
-                ("disabled".to_string(), None),
-                ("class".to_string(), Some(String::new())),
+                ("disabled".to_string(), String::new()),
+                ("class".to_string(), "x".to_string()),
             ],
             children: None,
         };
-        assert_eq!(tag.attr("disabled"), Some(None));
-        assert_eq!(tag.attr("class"), Some(Some("")));
+        assert_eq!(tag.attr("disabled"), Some(""));
+        assert_eq!(tag.attr("class"), Some("x"));
         assert_eq!(tag.attr("id"), None);
     }
 }

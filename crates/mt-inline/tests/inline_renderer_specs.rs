@@ -21,11 +21,12 @@
 //!
 //! # The pending ratchet — why these do not fail the build
 //!
-//! Most of them fail today, and are supposed to: §14 step 5 wants them
-//! transcribed first and made to pass afterwards, so they are the target to
-//! build against. As of S3, 15 of the 49 are still red, and every one of them
-//! is an autolink case — S5's. HTML is S4 and delists nothing; see
-//! [`PENDING`].
+//! Most of them failed for most of the milestone, and were supposed to: §14
+//! step 5 wants them transcribed first and made to pass afterwards, so they
+//! are the target to build against. **As of S5 all 49 pass and [`PENDING`] is
+//! empty**, which is M1's exit gate. The ratchet below stays anyway — see
+//! [`PENDING`] for why an empty list is a state to hold rather than a
+//! mechanism to retire.
 //!
 //! But a build that is red for months is a build nobody reads, and by the time
 //! a real regression appears in one of the other thirteen crates the signal is
@@ -140,7 +141,7 @@ use mt_inline::{
 /// | the sup/sub whitespace case | S2 (`super_sub_script`) | **done** |
 /// | example 520 | S3 (`link`, `reference_link`) | **done** |
 /// | the undefined reference label | S3 (`reference_link`) | **done** |
-/// | the intra-word extension autolink | S5 (`auto_link_extension`) | pending |
+/// | the intra-word extension autolink | S5 (`auto_link_extension`) | **done** |
 ///
 /// — and none of them can be made to pass by *not* implementing the rule,
 /// because each stage's positive cases are still on this list.
@@ -161,8 +162,9 @@ use mt_inline::{
 /// `tryHtmlTag` still returning `false`. The undefined-reference-label row
 /// went live the same way: `[text][undefined-label]` reaches
 /// `tryReferenceLink` and is refused by the *labels* lookup, not by absence.
-/// Eight of the nine are now non-vacuous; only the intra-word extension
-/// autolink is left, and it is S5's.
+/// All nine are now non-vacuous: S5 finished the table by making
+/// `xhttps://example.com` reach `tryAutoLinkExtension`, where the boundary
+/// allow-list `[* _~(]` refuses it because `x` is not in the list.
 ///
 /// # The eleven delisted at S2
 ///
@@ -177,30 +179,50 @@ use mt_inline::{
 /// The three `referenceLinkImageAnchor` cases, the three
 /// `linkFollowedByAutolink` cases, and eight of `commonmarkExamples`: the
 /// defined reference label, the four title cases and the three balanced-paren
-/// cases. What is left is exactly S5 — every remaining entry is an autolink.
+/// cases. What was left was exactly S5 — every remaining entry an autolink.
 /// **S4 delists nothing**, which is not a gap: `html_tag`'s two spec cases
 /// (475 and 520) were already delisted as the rules that forbid them landed,
 /// so S4's gate is its own attribute-scanner tests and the D3 site 2 fix.
-const PENDING: &[&str] = &[
-    // commonmarkExamples.spec.ts — S5 now; the file spans every stage
-    "parses_an_angle_bracket_autolink_as_auto_link",
-    "parses_a_bare_url_as_auto_link_extension",
-    "parses_a_bare_www_url_as_auto_link_extension",
-    // autoLinkTrailingPunct.spec.ts — S5
-    "excludes_a_trailing_colon_from_the_link",
-    "excludes_a_trailing_period_at_the_end_of_a_sentence",
-    "keeps_interior_punctuation_and_only_trims_the_trailing_run",
-    "leaves_a_clean_url_untouched",
-    "excludes_a_trailing_paren_when_parens_are_unbalanced",
-    "keeps_a_trailing_paren_when_parens_are_balanced",
-    "excludes_a_trailing_entity_reference",
-    "keeps_a_bare_trailing_semicolon_that_is_not_an_entity",
-    "ends_the_link_at_a_less_than_character",
-    "applies_the_rules_repeatedly_for_a_trailing_paren_then_period",
-    // autoLinkEncoding.spec.ts — S5
-    "keeps_an_already_encoded_percent_twenty_intact_instead_of_double_encoding_it",
-    "does_not_re_encode_reserved_characters_in_a_query_string",
-];
+///
+/// # S4 confirmed that rather than assuming it
+///
+/// The prediction was checked after the fact, as the ratchet's row two makes
+/// possible: implementing `try_html_tag` turned **no** listed case green, so
+/// the list was still those fifteen. That is the useful direction of the
+/// check — had something started passing, the ratchet would have failed the
+/// build and said which, and that would have been information about a case
+/// whose stage attribution was wrong. It did not.
+///
+/// Examples 475 and 520 were *already* non-vacuous before S4, because
+/// `lowerPriority` runs `html_tag`'s **regex** whether or not `tryHtmlTag`
+/// exists. Implementing the handler therefore could not have changed them,
+/// which is why "S4 delists nothing" was predictable rather than lucky.
+///
+/// # The fifteen delisted at S5, which is the last of them
+///
+/// Every remaining entry was an autolink case, and the two autolink handlers
+/// are the two S5 wrote: the three `commonmarkExamples` cases (an
+/// angle-bracket autolink, a bare URL, a bare `www.` URL), all ten of
+/// `autoLinkTrailingPunct`, and both of `autoLinkEncoding`.
+///
+/// One case that was **delisted back at S1** also goes live here rather than
+/// being delisted by S5 — `does_not_start_an_extension_autolink_inside_a_word`,
+/// which has been a vacuous pass for four stages because nothing could emit
+/// the token it forbids. `xhttps://example.com` now reaches
+/// `tryAutoLinkExtension` and is refused by the boundary guard, which is an
+/// allow-list of `[* _~(]` and does not contain `x`. That empties the last row
+/// of the S1 table above.
+///
+/// **`PENDING` is empty, which is M1's exit gate.** Every one of the 49 is a
+/// live test with normal teeth, and row four of the table applies to all of
+/// them: one that starts failing fails the build with its own diagnostic.
+///
+/// The ratchet stays. An empty list is not a spent mechanism — it is the state
+/// the mechanism exists to reach and to hold, and the two bookkeeping tests
+/// below still prove it works. S6 and S7 add no spec cases, so the only way
+/// this list grows again is a regression, which is exactly when the machinery
+/// should be there.
+const PENDING: &[&str] = &[];
 
 /// Run one transcribed spec case under the ratchet.
 ///
@@ -215,7 +237,18 @@ const PENDING: &[&str] = &[
 /// pending and why. That is the more useful of the two behaviours, and it
 /// needs no panic hook to get it.
 fn spec_case(name: &str, body: impl FnOnce()) {
-    if !PENDING.contains(&name) {
+    spec_case_in(PENDING, name, body);
+}
+
+/// [`spec_case`], with the list injected.
+///
+/// Split out at S5, when `PENDING` became empty. The ratchet's own proof —
+/// row two, *getting better must also fail the build* — needs a **listed**
+/// case to run against, and with an empty list there is no longer a real one
+/// to borrow. Testing the mechanism against a synthetic list is what keeps
+/// emptying `PENDING` from silently retiring the mechanism that got it there.
+fn spec_case_in(pending: &[&str], name: &str, body: impl FnOnce()) {
+    if !pending.contains(&name) {
         body();
         return;
     }
@@ -368,10 +401,14 @@ fn ext_target<'a>(src: &'a str, token: &Token) -> &'a str {
 /// the whole reason the ratchet is not `#[ignore]`, so it is checked rather
 /// than assumed — run a listed name with a body that succeeds and require the
 /// harness to reject it.
+///
+/// Against a synthetic list since S5, because [`PENDING`] is empty. See
+/// [`spec_case_in`]: the mechanism has to keep being tested after it has
+/// finished its job, or the last delisting quietly turns it off.
 #[test]
 fn a_listed_case_that_starts_passing_fails_the_build() {
-    let listed = PENDING.first().expect("PENDING is not empty yet");
-    let outcome = panic::catch_unwind(|| spec_case(listed, || {}));
+    let pending = ["a_case_that_is_listed"];
+    let outcome = panic::catch_unwind(|| spec_case_in(&pending, pending[0], || {}));
     let message = outcome
         .expect_err("a listed case that passes must fail the build")
         .downcast::<String>()
@@ -379,9 +416,18 @@ fn a_listed_case_that_starts_passing_fails_the_build() {
     assert!(message.contains("PENDING"), "unhelpful message: {message}");
 }
 
+/// …and a listed case that still fails is still tolerated, which is row one.
+/// Trivial with a non-empty list and worth stating now that the real one is
+/// empty: the two rows together are what "ratchet" means.
+#[test]
+fn a_listed_case_that_still_fails_is_tolerated() {
+    let pending = ["a_case_that_is_listed"];
+    spec_case_in(&pending, pending[0], || panic!("still red, as listed"));
+}
+
 /// Row four: an **unlisted** case is not wrapped at all, so its own diagnostic
-/// reaches libtest unchanged. If this ever started reporting the harness's
-/// message instead, every delisted case would lose its failure output.
+/// reaches libtest unchanged. Every one of the 49 is unlisted as of S5, so this
+/// is now the path all of them take.
 #[test]
 fn an_unlisted_case_fails_with_its_own_diagnostic_not_the_harness_message() {
     let outcome = panic::catch_unwind(|| {
@@ -408,19 +454,21 @@ fn the_pending_list_has_no_duplicates() {
     }
 }
 
-/// The progress meter, asserted so that shrinking the list is a deliberate,
-/// reviewable act rather than a side effect.
+/// **The M1 exit gate, as one number.**
 ///
-/// **Decrement this when you delist a case.** It is the one number that says
-/// how much of M1 is left.
+/// It went 49 → 40 (S1) → 29 (S2) → 15 (S3) → 15 (S4) → **0** (S5), and zero is
+/// where §6's *"S7's gate is `PENDING` is empty"* lands. The assertion stays
+/// rather than being deleted along with the list: it is now the thing that
+/// fails if a later stage tries to park a regression on the list instead of
+/// fixing it.
 #[test]
 fn the_pending_list_is_the_expected_length() {
     assert_eq!(
         PENDING.len(),
-        15,
-        "PENDING changed length. If you fixed a case, decrement the expected \
-         number here in the same commit; if it grew, a case regressed and the \
-         list must not absorb it."
+        0,
+        "PENDING is empty as of M1 S5, and that is the milestone's exit gate. \
+         A case that starts failing must be fixed, not listed — listing it \
+         would mean M1 no longer holds."
     );
 }
 
@@ -1279,6 +1327,13 @@ mod reference_link_image_anchor {
 ///   an `encodeURI` equivalent. Tracked in docs/M1.md §10 alongside the
 ///   outstanding `normalizeHtml` check, which is owed for the same reason —
 ///   the consuming layer does not exist yet.
+///
+/// **S5 closed the first half and not the second.** These two cases now pass,
+/// and `PENDING` is empty, so nothing in this repository is red on account of
+/// #3548 any more. That is exactly the situation in which an owed check becomes
+/// a forgotten one, which is why §10 carries it rather than this file alone:
+/// a green tokenizer test is not evidence that the rendered `<a href>` is
+/// right, because no renderer exists to be wrong yet.
 mod auto_link_encoding {
     use super::*;
 

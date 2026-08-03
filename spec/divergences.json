@@ -18,17 +18,44 @@
         "[12:00-14:00](u)",
         "[x:100:](u)",
         "*a:smile:*",
-        "[[a:smile:]](u)"
+        "[[a:smile:]](u)",
+        "<div>:smile:</div>",
+        "<b>x :smile:</b>",
+        "<em>:100:</em>",
+        "<strong>x:smile:</strong>"
       ],
-      "note": "Widened twice, both times by diffing token streams against the running engine, and both times because register rule 1 makes an UNREGISTERED disagreement a failure — so a divergence class wider than its entry has to widen the entry. This is one divergence, not three; nothing about the fix has changed. (1) S0 registered the first two from a hand-run. (2) S2 added five more from a 207-input run: the same fix at the other two container rules (`__`, `~~`), the case where the misread character is a digit rather than a letter (`**:100:**`), and two longer spans. (3) S3 added the last five from a 313-input run, and they are the other DIRECTION of the same bug, which the first seven do not show: muya reads `base` positions too far right, so where `base` is 1 it reads the `:` itself, never a word character, and the #1677 guard silently never fires. `[a:smile:](u)` and `[12:00-14:00](u)` therefore emit an emoji in muya that the port suppresses — the reverse of every earlier input. `*a:smile:*` is the uncomfortable one: `em` has base 1 too, so it was reachable at S2 and the S2 run missed it because every input it tried put a SPACE before the `:`, which only probes the losing direction. The same class also covers `[a:smile:][ref]`, `[hello:smile:][ref]` and `[12:00-14:00][ref]`, which are not listed because they need a populated `labels` map to reach `tryReferenceLink` at all and the harness tokenizes registered inputs with default options.",
+      "note": "Widened three times, every time by diffing token streams against the running engine, and every time because register rule 1 makes an UNREGISTERED disagreement a failure — so a divergence class wider than its entry has to widen the entry. This is one divergence, not four; nothing about the fix has changed. (1) S0 registered the first two from a hand-run. (2) S2 added five more from a 207-input run: the same fix at the other two container rules (`__`, `~~`), the case where the misread character is a digit rather than a letter (`**:100:**`), and two longer spans. (3) S3 added five from a 313-input run, and they are the other DIRECTION of the same bug, which the first seven do not show: muya reads `base` positions too far right, so where `base` is 1 it reads the `:` itself, never a word character, and the #1677 guard silently never fires. `[a:smile:](u)` and `[12:00-14:00](u)` therefore emit an emoji in muya that the port suppresses — the reverse of every earlier input. `*a:smile:*` is the uncomfortable one: `em` has base 1 too, so it was reachable at S2 and the S2 run missed it because every input it tried put a SPACE before the `:`, which only probes the losing direction. The same class also covers `[a:smile:][ref]`, `[hello:smile:][ref]` and `[12:00-14:00][ref]`, which are not listed because they need a populated `labels` map to reach `tryReferenceLink` at all and the harness tokenizes registered inputs with default options. (4) S5 added the last four, at `html_tag` — the container S4 introduced — and this widening is a CORRECTION rather than an extension. S4 probed the class with two inputs, `<div>:smile:</div>` and `<span>:100:</span>`, found both agreeing, and recorded that html_tag needed no register entry. Only the second of those actually agrees, and it agrees for a reason that does not generalise: `base` there is 6 and the child string `:100:` is five characters, so muya indexes off the end, and `lexer.ts:203`'s `prevChar &&` treats `undefined` as a boundary. `<div>:smile:</div>` has `base` 5 against a seven-character child, so muya reads `l` and loses the emoji. Sweeping open-tag length against emoji position over 228 inputs, 96 disagree and BOTH directions occur: muya loses an emoji for every tag shorter than the text before the shortcode (`<div>:smile:</div>`, `<b>x :smile:</b>`, `<em>:100:</em>`) and keeps one the port suppresses when the tag is longer (`<strong>x:smile:</strong>`). Four representatives, per rule 2.",
       "upstream": null
     },
     {
       "id": "disallowed-html-tag-substring-match",
       "site": "lexer.ts:21 disallowedHtmlTag",
-      "muya": "unanchored substring match — `/title|textarea|style|xmp|iframe|noembed|noframes|script|plaintext/i` is tested against the captured tag name without anchors, so any tag name CONTAINING one of the nine is rejected. `<subtitle>` is rejected for containing `title`, `<scripty>` for containing `script`, and neither is raw HTML that GFM §6.11 disallows.",
-      "ours": "exact tag-name match, case-insensitive, against the nine names GFM §6.11 lists: title, textarea, style, xmp, iframe, noembed, noframes, script, plaintext.",
-      "inputs": ["<subtitle>", "<scripty>"],
+      "muya": "unanchored substring match — `/title|textarea|style|xmp|iframe|noembed|noframes|script|plaintext/i` is tested against the captured tag name without anchors, so any tag name CONTAINING one of the nine is rejected. `<subtitle>` is rejected for containing `title`, `<scripty>` for containing `script`, and neither is raw HTML that GFM §6.11 disallows. `<noscript>` is the one that shows it is not a contrived class: it is a standard HTML element, it is not on GFM's list, and muya rejects it for containing `script`.",
+      "ours": "exact tag-name match, case-insensitive, against the nine names GFM §6.11 lists: title, textarea, style, xmp, iframe, noembed, noframes, script, plaintext. `eq_ignore_ascii_case` rather than a regex, and that is exact rather than a narrowing: S1 wrapped html_tag's tag-name class in `(?-i:…)`, so capture 3 is ASCII by construction and Rust's Unicode folding can never admit U+017F or U+212A there.",
+      "inputs": [
+        "<subtitle>",
+        "<scripty>",
+        "<noscript>",
+        "<SubTitle>x</SubTitle>",
+        "<subscript>x</subscript>",
+        "<iframe-x>x</iframe-x>",
+        "<xstyle>x</xstyle>"
+      ],
+      "note": "Widened at S4, from two inputs to seven, by the same rule that widened `emoji-nested-boundary` twice: register rule 1 makes an UNREGISTERED disagreement a failure, so a class wider than its entry has to widen the entry. The S4 differential ran 4172 inputs through both engines and 58 of them are this class — every one of the nine names with a prefix, a suffix, a hyphenated suffix and an inserted prefix. The two registered at S0 came from reading the regex; what reading did not supply is that the class contains real HTML elements (`<noscript>`, and `<subscript>`/`<superscript>` are used in the wild), that it is case-insensitive on the CONTAINING name too (`<SubTitle>`), and that it reaches hyphenated custom-element names, which GFM's own tag-name production explicitly allows. Seven representatives rather than all 58: rule 2 asks for concrete inputs that become tests, not for an enumeration.",
+      "upstream": null
+    },
+    {
+      "id": "html-tag-attrs-from-a-foster-parented-element",
+      "site": "utils.ts:172 getAttributes",
+      "muya": "`getAttributes` parses the WHOLE match — content and close tag included — and reads `body.firstElementChild`, so its answer is whichever element the HTML parser happens to put first under the body. Usually that is the open tag's own element, and the port reproduces the two mechanisms where it is not: the eleven tag names happy-dom refuses to append under `<body>` (`<td>`, `<tr>`, `<html>`, …), and an unterminated quoted value, both of which discard the element. The mechanism NOT reproduced is foster parenting: an element that is not a permitted descendant of `<table>` or `<colgroup>` is MOVED to before it, so `<table class=\"t\"><img src=\"s\"></table>` reports the image's attributes — `{title:'',src:'s',alt:''}` — for a token whose `tag` is `table`.",
+      "ours": "the attributes of the tag the token is about. `HtmlTag::attrs` is documented as the tag's whitelisted attributes, and an unrelated descendant's are not that.",
+      "inputs": [
+        "<table><span id=\"i\">y</span></table>",
+        "<table class=\"c\"><span id=\"i\">y</span></table>",
+        "<table class=\"c\"><img src=\"s\"></table>",
+        "<table class=\"c\">a <code>c</code> b</table>"
+      ],
+      "note": "Registered at S4, when the attribute scanner (M1.md §5 D2) was decided. It is the ONE mechanism the scanner does not model, and the reason is that modelling it means porting happy-dom's per-element `permittedDescendants` / `moveForbiddenDescendant` configuration — a test-only DOM's non-conformant table handling, which the shipped Electron/Chromium build does differently again. Everything else agrees: over 4172 differential inputs and 1198 distinct `html_tag` matches from `bench/corpus/` and `spec/fixtures/`, this class and the two already-registered ones are the only disagreements, and NOT ONE of them is in the corpus. Four representative inputs: no attributes on either side but a different element (1), a different element where both have attributes (2), the `IMG` seeding leaking onto a `table` token (3), and the reverse direction where muya reports FEWER attributes than the open tag has (4).",
       "upstream": null
     }
   ]

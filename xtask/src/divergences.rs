@@ -36,19 +36,42 @@
 //! `UnexpectedPass` it fails CI, so the register is forced back down instead
 //! of accumulating entries that quietly widen what the harness tolerates.
 //!
-//! # Status: skipped-but-present
+//! # Status: skipped-but-present, and **that is now an open gap owned by S7**
 //!
 //! No comparison can be made yet, so [`disagrees`] returns `None` for every
 //! input and every entry reports [`Verdict::Skipped`]. The runner exits 0 with
 //! a loud summary.
 //!
 //! At S0 that was because neither side could produce a token stream. S1
-//! changed half of it: `mt_inline::tokenizer` is implemented, and the nine
-//! plain handlers are live. What is still missing is the other half —
-//! `diff.rs` compares **block state**, not token streams, so there is no
-//! TypeScript token stream to compare a Rust one against. Both registered
-//! entries are S2 and S4 behaviours in any case, so nothing is being deferred
-//! that could be checked today.
+//! changed half of it: `mt_inline::tokenizer` is implemented. What is still
+//! missing is the other half — `diff.rs` compares **block state**, not token
+//! streams, so there is no TypeScript token stream to compare a Rust one
+//! against.
+//!
+//! Until S4 that cost nothing, because the registered fixes belonged to stages
+//! that had not run. **S4 is where it starts costing something, and it should
+//! not be allowed to read as done:** all three entries' fixes are now
+//! implemented, all three have been verified by hand against the running
+//! engine, and **not one of them is machine-checked**. Concretely, rule 3 — an
+//! entry with no failing differential case is stale — *cannot fire for any
+//! entry*, so the register currently cannot detect its own staleness. If a fix
+//! were reverted tomorrow, this runner would still print `SKIPPED` and exit 0.
+//!
+//! **At S5 it stopped being a hypothetical cost.** S4's hand-check of one
+//! divergence class returned a false negative and was written into M1.md as a
+//! clean result; S5's sweep found 96 disagreements in it. The failure this gap
+//! permits is therefore not only "a reverted fix reads as green" but "a class
+//! nobody rechecks, because the last person to check it said it was fine".
+//!
+//! **S7 owns closing it**, and M1.md §6's S7 row says so. Two reasons it is
+//! S7's rather than M2's: M1's exit gate is where "the port agrees with the
+//! TypeScript engine except where registered" is finally claimed, and a
+//! register that has never been machine-checked would carry that claim into M2
+//! unverified; and the work is nearly done already — S2, S3, S4 and S5 each
+//! built a token-stream comparator as a throwaway script (49,751 inputs at
+//! S5), so what S7 has to do is make one of them permanent and point
+//! [`disagrees`] at it, not invent it. See "What S5 leaves for whoever builds
+//! it" below.
 //!
 //! That is not the same as "not wired up". Running today already checks that
 //! the register parses, that every entry is well-formed and uniquely
@@ -78,6 +101,46 @@
 //! them, `*a:smile:*`, was reachable at S2 and missed, because every input the
 //! S2 run tried put a space before the `:` and so only ever probed the losing
 //! direction. A register is only as wide as the inputs someone thought to try.
+//!
+//! S4 did it a third time, to a *different* entry:
+//! `disallowed-html-tag-substring-match` went from two inputs to seven, and
+//! the ones it was missing are the ones that matter — `<noscript>` is a
+//! standard HTML element that muya rejects for containing `script`, which is
+//! harder to dismiss than the invented `<scripty>` the entry opened with.
+//!
+//! **S5 did it a fourth time, and that one is the argument by itself.** S4
+//! probed `emoji-nested-boundary` at its own new container, `html_tag`, with
+//! two inputs, found both agreeing, and wrote down that the entry did not need
+//! to widen. One of the two agrees for a reason that does not generalise —
+//! muya's misread index runs off the end of a short child string, and
+//! `lexer.ts:203`'s `prevChar &&` treats `undefined` as a boundary — and 96 of
+//! 228 swept inputs disagree, in both directions. A hand-run does not just
+//! find a class once instead of every time; it can find *half* of one and read
+//! as a clean result. That is the strongest reason yet for the permanent
+//! comparator, and it is why the entry now carries a correction rather than an
+//! extension.
+//!
+//! ## What S5 leaves for whoever builds it
+//!
+//! S5's script was the fourth throwaway and **ownership deliberately stayed
+//! here** rather than moving to that stage — the reasoning is in M1.md §6,
+//! under "The divergence harness is still `SKIPPED`". What it settled, so that
+//! S7 is not starting from a blank file:
+//!
+//! - **Compare hex of UTF-8 bytes, not strings.** It removes every encoding
+//!   question from the diff in one move.
+//! - **Convert muya's UTF-16 offsets by walking code points**, not by dividing
+//!   or by `length`. An astral character is one code point and four bytes.
+//! - **Do not let the transport normalise.** S5's first run showed four
+//!   disagreements that were `TextDecoder`'s default BOM-stripping, not the
+//!   tokenizer; `{ ignoreBOM: true }` is required on any JavaScript side that
+//!   round-trips an input through bytes. A harness bug and a port bug look
+//!   identical in the output.
+//! - **Normalise `undefined` versus `''` per field**, following muya's own
+//!   `|| ''` sites (`lexer.ts:77`, `:97`, `:433`, `:480`) rather than per type.
+//!   S3 lost a run to this; the fields that differ are listed on `token.rs`.
+//! - **Sweep, do not sample.** Every finding at S3, S4 and S5 came from a
+//!   combination nobody would have written by hand.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -755,17 +818,30 @@ mod tests {
     /// the third (`pending` doubling, `lexer.ts:135`) is inert and diverges
     /// from nothing. If a fix is ever made without an entry, this is what
     /// notices.
+    ///
+    /// The third entry is **not** one of D3's sites and that is deliberate:
+    /// `html-tag-attrs-from-a-foster-parented-element` came out of deciding
+    /// D2 at S4, where porting `getAttributes` without a DOM left exactly one
+    /// tree-construction mechanism unmodelled. D3's list was never meant to be
+    /// closed — it is the list of *muya bugs known when M1 opened* — so a
+    /// fourth entry from a later stage is the register working, not the plan
+    /// being violated. What must not happen is an entry appearing with no
+    /// decision behind it, which is why this asserts the id and M1.md §5 names
+    /// each one.
     #[test]
-    fn the_register_holds_the_two_entries_d3_names() {
+    fn the_register_holds_d3s_two_entries_and_d2s() {
         let entries = load(&spec_dir()).expect("load");
         let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(
             ids,
             [
+                // docs/M1.md §5 D3, sites 1 and 2
                 "emoji-nested-boundary",
-                "disallowed-html-tag-substring-match"
+                "disallowed-html-tag-substring-match",
+                // docs/M1.md §5 D2, decided at S4
+                "html-tag-attrs-from-a-foster-parented-element"
             ],
-            "docs/M1.md §5 D3 registers exactly these two sites"
+            "every entry needs a decision in docs/M1.md §5 behind it"
         );
     }
 
@@ -774,8 +850,11 @@ mod tests {
     /// inputs someone actually ran against the engine.
     ///
     /// The four D3 named are still here; the five `emoji-nested-boundary`
-    /// gained at S2 came from diffing token streams over 207 inputs, and every
-    /// one of them has a test in `crates/mt-inline/src/lexer.rs`. **Grow this
+    /// gained at S2 came from diffing token streams over 207 inputs, the five
+    /// more at S3 from 319, and S4's eleven — five widening
+    /// `disallowed-html-tag-substring-match` and four opening
+    /// `html-tag-attrs-from-a-foster-parented-element` — from 4172. Every one
+    /// of them has a test in `crates/mt-inline/src/lexer.rs`. **Grow this
     /// number only alongside those tests** — a registered input with no test is
     /// a tolerated disagreement nobody is asserting anything about, which is
     /// the failure mode rule 2 exists to prevent.
@@ -803,10 +882,34 @@ mod tests {
             "[x:100:](u)",
             "*a:smile:*",
             "[[a:smile:]](u)",
+            // S4 widened the disallowed-tag class from two inputs to seven:
+            // the unanchored test reaches real HTML elements, is
+            // case-insensitive on the containing name, and hits hyphenated
+            // custom-element names GFM explicitly allows.
+            "<noscript>",
+            "<SubTitle>x</SubTitle>",
+            "<subscript>x</subscript>",
+            "<iframe-x>x</iframe-x>",
+            "<xstyle>x</xstyle>",
+            // …and opened D2's entry: the one tree-construction mechanism the
+            // DOM-free `getAttributes` does not model.
+            "<table><span id=\"i\">y</span></table>",
+            "<table class=\"c\"><span id=\"i\">y</span></table>",
+            "<table class=\"c\"><img src=\"s\"></table>",
+            "<table class=\"c\">a <code>c</code> b</table>",
+            // S5 widened `emoji-nested-boundary` a third time, at `html_tag`
+            // — and this one is a correction: S4 probed the class with two
+            // inputs, found both agreeing, and recorded that it needed no
+            // entry. Only one of the two agrees, and for a reason that does
+            // not generalise. Both directions occur here too.
+            "<div>:smile:</div>",
+            "<b>x :smile:</b>",
+            "<em>:100:</em>",
+            "<strong>x:smile:</strong>",
         ] {
             assert!(inputs.contains(expected), "{expected:?} is not registered");
         }
-        assert_eq!(inputs.len(), 14);
+        assert_eq!(inputs.len(), 27);
     }
 
     /// Asserted so that the day it changes is the day someone deliberately
