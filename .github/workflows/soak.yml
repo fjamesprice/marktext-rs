@@ -1,0 +1,320 @@
+name: Soak
+
+# The checks that are too slow for every commit and too important to skip.
+#
+# docs/M1.md §6's S7 row is M1's exit gate, and three of its clauses do not fit
+# in a per-push budget:
+#
+#   - "24 h no panic"                     — the libFuzzer soak (§5 D6)
+#   - "tiling holds on all corpus files"  — release, including 1mb.md and 5mb.md
+#   - the divergence register's full sweep — 41,009 inputs, ~120 s of Node
+#
+# ci.yml runs the bounded versions of the last two on every push; this runs the
+# unbounded ones nightly. Nothing here is a *different* check — it is the same
+# check with the cap taken off, which is why each job says what ci.yml's version
+# of it leaves out.
+
+on:
+  schedule:
+    # 03:00 UTC. Nothing depends on the hour; it is off-peak for the shared
+    # runner pool and the fuzz matrix asks for six concurrent runners.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      fuzz_minutes:
+        description: 'Minutes per fuzz shard (6 shards run in parallel; 240 = 24 CPU-hours)'
+        required: false
+        default: '240'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Same pin as ci.yml, and for the same reason: a failure here must always be
+  # about this repository's change, never about the reference engine moving
+  # underneath it. Bump both together, deliberately, in one commit.
+  MARKTEXT_REPO: fjamesprice/marktext
+  MARKTEXT_REF: e52106fd1cdcbd33c1258b7b0cdc7013c4c5d86c
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Build the fuzz targets once, before spending four hours on them.
+  #
+  # `fuzz/` is its own workspace so that nightly stays out of the repository's
+  # rust-toolchain.toml, and the price of that is that `cargo test --workspace`
+  # does not compile these targets — a rename in `mt-inline` breaks them
+  # silently. This job is what turns "silently, four hours in" into "in one
+  # minute".
+  # ---------------------------------------------------------------------------
+  fuzz-build:
+    name: fuzz build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          # Both: nightly for cargo-fuzz's -Zsanitizer, stable because
+          # `cargo xtask fuzz-seed` and everything else in this repository is
+          # built with the channel rust-toolchain.toml pins.
+          rustup toolchain install stable nightly --profile minimal
+          rustup component add --toolchain nightly rust-src
+          rustup default stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/bin/cargo-fuzz
+            fuzz/target
+          key: fuzz-${{ hashFiles('fuzz/Cargo.toml', 'crates/mt-inline/**') }}
+          restore-keys: fuzz-
+
+      - name: Install cargo-fuzz
+        # `|| true` because a cached ~/.cargo/bin already has it and `cargo
+        # install` of an up-to-date binary is not an error worth failing on.
+        # If it is genuinely missing, the next step says so in one line.
+        run: cargo install cargo-fuzz --locked || true
+
+      # From the **repository root**, not from `fuzz/`. cargo-fuzz locates the
+      # fuzz crate as a `fuzz/` subdirectory of the project it is invoked in;
+      # run it inside `fuzz/` and it looks for `fuzz/fuzz/` and reports no
+      # targets.
+      - name: cargo fuzz build
+        run: cargo +nightly fuzz build
+
+  # ---------------------------------------------------------------------------
+  # The 24 hours.
+  #
+  # A GitHub-hosted runner is killed at 6 hours, so "24 h" cannot be one job.
+  # 3 targets × 2 shards × 4 h = 24 CPU-hours in 4 hours of wall clock, every
+  # shard well under the limit. The shards of one target differ only in their
+  # libFuzzer `-seed` and share a restored corpus, so they explore different
+  # mutation sequences from the same frontier instead of repeating each other.
+  # ---------------------------------------------------------------------------
+  fuzz:
+    name: fuzz ${{ matrix.target }} (shard ${{ matrix.shard }})
+    needs: fuzz-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [tokenize, autolink, backtracking]
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable nightly --profile minimal
+          rustup component add --toolchain nightly rust-src
+          rustup default stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/bin/cargo-fuzz
+            fuzz/target
+          key: fuzz-${{ hashFiles('fuzz/Cargo.toml', 'crates/mt-inline/**') }}
+          restore-keys: fuzz-
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked || true
+
+      # The accumulated corpus is the valuable half after the first night: the
+      # seeds are derivable from the repository, the inputs libFuzzer discovered
+      # are not. Restored by prefix so a run always continues from the most
+      # recent frontier it can find, and saved under a run-unique key because
+      # actions/cache entries are immutable.
+      - name: Restore the accumulated corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: corpus-${{ matrix.target }}-${{ github.run_id }}-${{ matrix.shard }}
+          restore-keys: |
+            corpus-${{ matrix.target }}-
+
+      # Real markdown, already known to agree with muya on every commit, and
+      # covering M1.md §4 C2's trap characters and all 26 token types. A target
+      # taking `&str` needs this: libfuzzer-sys rejects any mutation that is not
+      # valid UTF-8, so a run from nothing spends its budget rediscovering
+      # UTF-8 rather than the tokenizer.
+      - name: Seed the corpus
+        run: cargo xtask fuzz-seed
+
+      # From the repository root — see the note in `fuzz-build`.
+      - name: Fuzz
+        env:
+          MINUTES: ${{ github.event.inputs.fuzz_minutes || '240' }}
+        run: |
+          set -o pipefail
+          # -report_slow_units=5 is what turns a soak into a benchmark row:
+          # whatever it reports slowest belongs in benches/tokenizer.rs, tagged
+          # with which of the three cost terms it exercises.
+          #
+          # -rss_limit_mb=4096 rather than libFuzzer's 2048 default: the
+          # tokenizer allocates a Token tree per level and a deeply nested
+          # input is a legitimate shape, not an OOM to report.
+          cargo +nightly fuzz run ${{ matrix.target }} -- \
+            -max_total_time=$((MINUTES * 60)) \
+            -seed=${{ matrix.shard }} \
+            -max_len=65536 \
+            -rss_limit_mb=4096 \
+            -report_slow_units=5 \
+            -print_final_stats=1
+
+      # A crashing input is the whole point of running this, and the default
+      # would be to lose it with the runner.
+      - name: Upload crashes
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}-${{ matrix.shard }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # The same soak on the platform that ships first.
+  #
+  # D6 puts libFuzzer on Linux because cargo-fuzz on Windows MSVC is thin, and
+  # that is right — but §9 says Windows ships first, so a gate met only on Linux
+  # is a gate met on the platform whose failures block least. This is the same
+  # properties over the same generators, coverage-blind, on all three.
+  # ---------------------------------------------------------------------------
+  proptest-soak:
+    name: proptest soak (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+          - os: macos-latest
+            name: macos
+          - os: ubuntu-latest
+            name: linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # `-C debug-assertions=yes` with `--release` is not a contradiction and
+      # not optional: M1.md §6 records four branches this crate proves
+      # unreachable and reproduces anyway, and S7 turned each proof into a
+      # `debug_assert!` so a soak can falsify it. A plain --release run compiles
+      # all four out — faster, and worth less.
+      - name: Soak
+        shell: bash
+        env:
+          MT_SOAK_SECONDS: 3600
+          RUSTFLAGS: -C debug-assertions=yes
+        run: cargo test -p mt-inline --release --test properties -- --ignored soak --nocapture
+
+  # ---------------------------------------------------------------------------
+  # "Tiling holds on all corpus files" — the clause ci.yml runs bounded.
+  #
+  # `round_trip.rs` puts 1mb.md and 5mb.md behind `#[ignore]` because they are
+  # minutes in a debug profile. --release is not only for speed: `check_tiling`
+  # is compiled out there, so this checks the property through the public API
+  # alone, which is the honest version of it.
+  # ---------------------------------------------------------------------------
+  release-invariants:
+    name: release invariants (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+          - os: ubuntu-latest
+            name: linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Tiling and round trip over every corpus file
+        run: cargo test -p mt-inline --release --test round_trip -- --include-ignored --nocapture
+
+  # ---------------------------------------------------------------------------
+  # The divergence register's full sweep.
+  #
+  # ci.yml runs 4,264 inputs in ~22 s; this runs 41,009 in ~120 s by adding the
+  # lines of 1mb.md and 5mb.md. See xtask/src/tokens.rs::sweep_inputs for why
+  # that cap is defensible rather than merely convenient — and why running the
+  # uncapped version somewhere is still worth doing.
+  # ---------------------------------------------------------------------------
+  full-sweep:
+    name: divergence register, full sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout the TypeScript reference engine
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MARKTEXT_REPO }}
+          ref: ${{ env.MARKTEXT_REF }}
+          path: marktext
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - run: npm install -g pnpm@10.33.4
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install the TypeScript engine's dependencies
+        working-directory: marktext
+        run: pnpm install --filter @muyajs/core --ignore-scripts
+
+      # --require-ts, for the same reason ci.yml passes it: without it a broken
+      # checkout reduces this to a no-op that still reports green, which is
+      # exactly the state S7 spent a stage getting the register out of.
+      - name: Full sweep
+        env:
+          MARKTEXT_DIR: ${{ github.workspace }}/marktext
+        run: cargo xtask divergences --full-sweep --require-ts

@@ -50,8 +50,21 @@ opt-level = "s"
 # It satisfies §1's purity constraint for `mt-inline`: no I/O, no windowing,
 # no GPU. Its own tree is `regex` + `bit-set`, both pure.
 # ---------------------------------------------------------------------------
+# `proptest` is the third third-party crate and the second scheduled one: M1.md
+# §5 D6 puts property testing in the normal test job on all three platforms,
+# with the 24-hour libFuzzer soak on Linux only, and S7 is the stage that owes
+# both. It is a `[dev-dependencies]` entry of `mt-inline` alone — it does not
+# reach that crate's own build, and §1's purity constraint is about `src/`,
+# which `cargo xtask deps` is what scans.
+#
+# `libfuzzer-sys` and `arbitrary` are deliberately **not** here: `fuzz/` is its
+# own workspace (`fuzz/Cargo.toml` carries `[workspace]`), because cargo-fuzz
+# needs a nightly toolchain and `-Zbuild-std`, and pulling either into this
+# lockfile would put a nightly-only dependency in front of every `cargo build`
+# on three platforms for the sake of one Linux job.
 [workspace.dependencies]
 fancy-regex = "0.19"
+proptest = "1"
 serde_json = "1"
 
 mt-app = { path = "crates/mt-app", version = "0.1.0" }

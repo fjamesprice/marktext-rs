@@ -120,7 +120,7 @@
 //! *before* it is made. Read that file before changing tokenizer behaviour;
 //! `cargo xtask divergences` is what keeps it honest.
 //!
-//! ## Status: S6 — the tokenizer is complete and everything that reads a token
+//! ## Status: S7 — the tokenizer is complete, and so is its verification
 //!
 //! **All sixteen handlers are implemented and all 49 transcribed muya specs
 //! pass.** `PENDING` in `tests/inline_renderer_specs.rs` is empty, which is
@@ -184,12 +184,22 @@
 //!
 //! ### What M1 still owes, so that "complete" is not read too widely
 //!
-//! - **S7**: proptest generators, the 24-hour libFuzzer soak, and pointing
-//!   `cargo xtask divergences` at a real token-stream comparator. That last
-//!   one is a **live gap**: every registered divergence has been checked by
-//!   hand against the running engine and **none is machine-checked**, so the
-//!   register cannot yet detect its own staleness. See
-//!   `xtask/src/divergences.rs`.
+//! - ~~**S7**: proptest generators, the 24-hour libFuzzer soak, and pointing
+//!   `cargo xtask divergences` at a real token-stream comparator.~~ **Built.**
+//!   The register is enforced on every commit — 27 of 27 registered inputs
+//!   disagree, 41,009 swept inputs agree, and reverting a fix turns it red;
+//!   `tests/properties.rs` runs on all three platforms; `fuzz/` and
+//!   `.github/workflows/soak.yml` carry the soak. **The 24-hour clause is the
+//!   one exit-gate item still unmet** — the workflow is scheduled and has not
+//!   run. M1.md's "Closing M1" states each clause and its evidence.
+//! - **S7 also made four proofs falsifiable.** `validateEmphasize`'s rule-16
+//!   guard, `correctUrl`'s group 5, `tryAutoLinkExtension`'s `if (!email)` and
+//!   `tokensToPlainText`'s `html_tag` `content` arm are each proved
+//!   unreachable and reproduced anyway. Each is now a `debug_assert!` at the
+//!   site, so a fuzz or proptest run attacks the proof rather than agreeing
+//!   with it. `debug_assert!` and not `unreachable!`, because the exit gate is
+//!   panic-freedom and each release-build fallback is the transcribed muya
+//!   behaviour.
 //! - **The renderer milestone**: `autoLinkEncoding.spec.ts`'s other half.
 //!   `mt-inline` guarantees the `auto_link` token's `href` is the literal
 //!   source between the angle brackets; that the rendered `<a href>` is

@@ -133,7 +133,7 @@ jobs:
         # changes what the conformance ratchet measures.
         run: node tools/vendor-commonmark-spec.mjs --check --marktext marktext
 
-      - name: xtask CI (deps, corpus, conformance §11.1, differential §11.2)
+      - name: xtask CI (deps, corpus, divergences, conformance §11.1, differential §11.2)
         env:
           MARKTEXT_DIR: ${{ github.workspace }}/marktext
         # --require-ts turns a missing reference engine into a hard failure
@@ -141,4 +141,17 @@ jobs:
         # quietly reduce the differential harness to a no-op that still
         # reports green — which is the one failure mode that would make the
         # whole §11.2 investment worthless.
+        #
+        # As of M1 S7 the flag reaches **two** harnesses, and the second is the
+        # reason it matters more than it did: `xtask divergences` now compares
+        # token streams against the running engine (M1.md §5 D3), and without a
+        # reference engine it reports SKIPPED and exits 0 — which is exactly the
+        # state that stage spent itself getting the register out of.
         run: cargo xtask ci --require-ts
+
+      # The checks too slow for every commit run in soak.yml, nightly: the
+      # 24-hour libFuzzer matrix, the divergence register's full sweep
+      # (41,009 inputs against this job's 3,254), the hour-long proptest soak on
+      # all three platforms, and tiling over 1mb.md and 5mb.md in release. This
+      # comment exists so that reading ci.yml does not leave the impression that
+      # what runs here is the whole gate.

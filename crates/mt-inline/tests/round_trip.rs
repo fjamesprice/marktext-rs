@@ -32,14 +32,27 @@
 //! genuinely needs a fixture, move it to an integration test"*. The crate
 //! stays pure; the fixture-reading lives here.
 //!
-//! # Scope, and what is deferred to S7
+//! # Scope — and S7 ran the deferred half
 //!
-//! The M1 **exit** gate is "tiling holds on all corpus files". This runs every
-//! file up to [`DEBUG_PROFILE_SIZE_LIMIT`]; the three larger generated files
-//! are behind `#[ignore]`, with the reasoning at
+//! The M1 **exit** gate is "tiling holds on all corpus files". Every
+//! `cargo test` runs the files up to [`DEBUG_PROFILE_SIZE_LIMIT`]; the two
+//! larger generated ones are behind `#[ignore]`, with the reasoning at
 //! [`the_large_corpus_files_also_tile`]. Nothing is silently skipped — the
 //! covered run prints what it covered and the ignored test names what it does
 //! not.
+//!
+//! **S7 ran the ignored half, in release, and the gate is met over all eleven
+//! corpus files:** 22.4 s for this whole file, `1mb.md` and `5mb.md` included,
+//! alongside the 1324 spec fixtures and the eleven round-trip fixtures. The
+//! `--release` matters for a reason other than speed — `check_tiling` is
+//! compiled out there, so the property goes through the public API alone.
+//! `.github/workflows/soak.yml` runs it nightly on Windows and Linux so it
+//! stays run rather than having been run once.
+//!
+//! The gate row said *"all **22** corpus files"*. It is **eleven**; the 22 is
+//! `cargo xtask diff`'s file count, which collects from `bench/corpus/` **and**
+//! `spec/fixtures/marktext-round-trip/`, both of which happen to hold exactly
+//! eleven. See M1.md's "Correction to S7's gate row".
 //!
 //! # S6 widened it to `spec/fixtures/`, and the deferral's reason had expired
 //!
@@ -122,6 +135,22 @@ fn corpus_files() -> Vec<(String, String)> {
 /// | S4 | 14 of 16 | ~4.3 s | **~229 s** |
 /// | S5 | **16 of 16** | ~5.7 s | **~245 s** |
 /// | S6 | 16 of 16 | ~5.7 s | **~248 s** |
+/// | S7 | 16 of 16 (+ 5 `debug_assert!`s) | — | — (see below) |
+///
+/// **S7's row is empty on purpose, and that is a note about the column rather
+/// than about S7.** The measurement taken this stage is a single
+/// `--include-ignored` run of the whole file: **324.4 s**. That is not the sum
+/// of the two columns and must not be read as one — libtest runs the six tests
+/// in parallel, so the large-file test contends with the other five for cores,
+/// where the recorded S1–S6 figures come from two *separate* invocations. A
+/// number in a different shape in the same column is worse than no number.
+///
+/// What replaced it is a measurement this table was never able to make.
+/// `benches/tokenizer.rs` now carries a debug **A/B** — the S7 tree against a
+/// `git worktree` at `d258349`, alternated — and it puts the whole-corpus debug
+/// figure at 257.7 s against 261.1 s, **1.013×**, with the `lowerPriority`
+/// section (which reaches none of the five new assertions) at exactly 1.000×.
+/// That is the attributable number, and it is what S5's caution asked for.
 ///
 /// The S6 row is the point of having the table at all by now: a stage that adds
 /// no rule and no nesting level should not move a debug profile, and it did
@@ -231,7 +260,13 @@ fn corpus_files() -> Vec<(String, String)> {
 /// post-pass *does* cost something — 1024 highlights, ~0.5–0.8 ns per `union`
 /// — is a section of that file too.
 ///
-/// **Re-measure at S7.**
+/// **Re-measured at S7** — and the answer is that this table has reached the
+/// end of what it can tell anyone. S5 already said it was "no longer good for a
+/// 10% claim"; S7 adds that the two columns cannot be filled by the run the
+/// exit gate actually wants (`--include-ignored`, in release, over everything),
+/// because that run has a different parallelism shape. The table is still good
+/// for what S2's 6.4× was: **catching a jump**. For anything smaller, go to
+/// `benches/tokenizer.rs`, which measures two binaries in one session.
 const DEBUG_PROFILE_SIZE_LIMIT: usize = 256 * 1024;
 
 /// Assert that a token list tiles `[start, end)` of `src`, recursively.
@@ -329,9 +364,13 @@ fn every_corpus_file_tiles_and_round_trips() {
         covered += 1;
     }
 
+    // Nine of eleven: `1mb.md` and `5mb.md` are the two over the limit. The
+    // gate row's "22" was `cargo xtask diff`'s file count — that harness
+    // collects from `spec/fixtures/marktext-round-trip/` as well, and both
+    // directories hold exactly eleven. See this file's header.
     assert!(
-        covered >= 8,
-        "the corpus lost files: only {covered} checked"
+        covered >= 9,
+        "the corpus lost files: only {covered} checked, of the nine under the limit"
     );
     // Not silent: `deps.rs`'s own comment about crude checks applies here too
     // — a bounded run that does not say what it bounded reads as full
@@ -339,13 +378,14 @@ fn every_corpus_file_tiles_and_round_trips() {
     println!("tiling: {covered} corpus files checked, deferred to --ignored: {deferred:?}");
 }
 
-/// The other three corpus files — `250kb.md`'s two larger siblings and
-/// whatever else grows past the limit.
+/// The other two corpus files — `1mb.md` and `5mb.md`, and whatever else grows
+/// past the limit.
 ///
 /// `#[ignore]` for the reason given at [`DEBUG_PROFILE_SIZE_LIMIT`], and
 /// because the M1 exit gate that needs them (S7: *"tiling holds on all corpus
 /// files"*) runs alongside the 24-hour soak rather than on every
-/// `cargo test`. Run it with:
+/// `cargo test`. **S7 ran it, in release, and it passes**; `soak.yml`'s
+/// `release-invariants` job keeps running it. Run it with:
 ///
 /// ```sh
 /// cargo test -p mt-inline --release --test round_trip -- --ignored
@@ -474,10 +514,16 @@ fn every_marktext_round_trip_fixture_tiles_and_round_trips() {
 
 /// The corpus is committed, so a file silently disappearing would quietly
 /// shrink the gate. Named files, not a count.
+///
+/// **All eleven**, as of S7. The list used to hold nine — it omitted `1mb.md`
+/// and `5mb.md`, the two this file runs only under `--ignored`, which is
+/// exactly backwards: a file nobody runs on every commit is the one whose
+/// disappearance would go unnoticed longest. The count is also the correction
+/// to S7's gate row, which said 22; see this file's header.
 #[test]
 fn the_corpus_still_contains_the_files_this_gate_names() {
     let names: Vec<String> = corpus_files().into_iter().map(|(name, _)| name).collect();
-    for expected in [
+    let expected = [
         "empty.md",
         "10kb.md",
         "cjk.md",
@@ -487,12 +533,22 @@ fn the_corpus_still_contains_the_files_this_gate_names() {
         "100-inline-math.md",
         "20-tables.md",
         "250kb.md",
-    ] {
+        "1mb.md",
+        "5mb.md",
+    ];
+    for name in expected {
         assert!(
-            names.iter().any(|name| name == expected),
-            "bench/corpus/{expected} is missing; found {names:?}"
+            names.iter().any(|found| found == name),
+            "bench/corpus/{name} is missing; found {names:?}"
         );
     }
+    assert_eq!(
+        names.len(),
+        expected.len(),
+        "bench/corpus/ holds eleven .md files plus a README; found {names:?}. A new one is \
+         welcome — add it here, and check whether the sweep in xtask/src/tokens.rs should \
+         treat it like the two large prose files."
+    );
 }
 
 /// The two corpus files M1.md §6 S1 singles out, checked one property at a

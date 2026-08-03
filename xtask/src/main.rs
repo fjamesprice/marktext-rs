@@ -12,6 +12,7 @@
 //! | `diff` | Differential test against the TypeScript engine | §11.2 |
 //! | `divergences` | The register of intentional differences from muya | M1 §5 D3 |
 //! | `corpus` | Generate `bench/corpus/` | §14 step 4 |
+//! | `fuzz-seed` | Write `fuzz/corpus/` from the sweep's inputs | M1 §5 D6 |
 //! | `deps` | Enforce the dependency-direction constraints | §1 |
 //! | `ci` | All of the above, in order | §9 M0 exit gate |
 
@@ -20,7 +21,9 @@ mod corpus;
 mod deps;
 mod diff;
 mod divergences;
+mod fuzz;
 mod html;
+mod tokens;
 
 use std::path::{Path, PathBuf};
 
@@ -46,10 +49,20 @@ COMMANDS:
                            is unavailable.
         --mt-cli <PATH>    Use a specific mt-cli binary.
         <FILE...>          Compare only these files.
-    divergences          Check spec/divergences.json, the register of
-                         intentional differences from muya (M1 §5 D3).
+    divergences [OPTIONS]
+                         Check spec/divergences.json, the register of
+                         intentional differences from muya (M1 §5 D3), by
+                         comparing token streams against the TypeScript engine.
+        --require-ts       Fail instead of skipping when the TypeScript engine
+                           is unavailable.
+        --no-sweep         Check the register's own inputs only, skipping
+                           rule 1's sweep. For a fast local loop; CI runs both.
+        --full-sweep       Add 1mb.md's and 5mb.md's lines to the sweep:
+                           ~40k inputs instead of ~5.6k. The nightly soak.
     corpus [--check]     Generate bench/corpus/ (§14 step 4); --check verifies
                          the committed files match the generator.
+    fuzz-seed [--check]  Write fuzz/corpus/<target>/ from the differential
+                         sweep's inputs (M1 §5 D6). Not part of `ci`.
     deps                 Enforce the §1 dependency-direction constraints.
     ci                   deps, corpus --check, divergences, conformance, diff —
                          in order.
@@ -68,8 +81,9 @@ fn main() {
     let result = match command {
         "conformance" => conformance::main(&root),
         "diff" => diff::main(&root, rest),
-        "divergences" => divergences::main(&root),
+        "divergences" => divergences::main(&root, rest),
         "corpus" => corpus::main(&root, rest),
+        "fuzz-seed" => fuzz::main(&root, rest),
         "deps" => deps::main(&root),
         "ci" => ci(&root, rest),
         "help" | "--help" | "-h" => {
@@ -98,6 +112,16 @@ fn ci(root: &Path, rest: &[String]) -> Result<i32, String> {
     // `(label, deps::main(root))` evaluates every step while the array is
     // built, so all the output appears before any of the headers.
     type Step<'a> = (&'a str, Box<dyn Fn() -> Result<i32, String> + 'a>);
+    // `divergences` takes `--require-ts` and nothing else `diff` takes, so it
+    // gets the flag rather than the whole argument list — passing `rest`
+    // through would make `cargo xtask ci --mt-cli <path>` fail inside the
+    // register runner for a reason that has nothing to do with the register.
+    let engine_flags: Vec<String> = rest
+        .iter()
+        .filter(|a| a.as_str() == "--require-ts")
+        .cloned()
+        .collect();
+
     let steps: Vec<Step<'_>> = vec![
         ("deps", Box::new(|| deps::main(root))),
         (
@@ -106,8 +130,14 @@ fn ci(root: &Path, rest: &[String]) -> Result<i32, String> {
         ),
         // Before the two harnesses that will consult it: a malformed register
         // is a register that silently widens what `diff` tolerates, so it
-        // should be reported before `diff`'s own output, not after.
-        ("divergences", Box::new(|| divergences::main(root))),
+        // should be reported before `diff`'s own output, not after. As of M1 S7
+        // this step is also the token-stream differential itself — it compares
+        // both engines over the register's inputs and over a sweep of the whole
+        // corpus, so it is no longer only a lint on a JSON file.
+        (
+            "divergences",
+            Box::new(|| divergences::main(root, &engine_flags)),
+        ),
         ("conformance", Box::new(|| conformance::main(root))),
         ("diff", Box::new(|| diff::main(root, rest))),
     ];

@@ -32,3 +32,6 @@ fancy-regex.workspace = true
 # own build, and §1's purity constraint is about `src/`, which `cargo xtask
 # deps` is what scans.
 serde_json.workspace = true
+# M1.md §5 D6, owed by S7: property tests in the normal test job on all three
+# platforms. `tests/properties.rs`.
+proptest.workspace = true

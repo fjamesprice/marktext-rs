@@ -630,6 +630,28 @@ pub(crate) fn validate_emphasize(
     let emphasize_text = &src[marker_len..offset - marker_len];
     let (shorter, close) = emphasis_regexes(marker);
     if exec(shorter, emphasize_text).is_some() && exec(close, emphasize_text).is_none() {
+        // **First of the milestone's four proved-unreachable branches, stated
+        // so that a fuzzer can falsify the proof rather than agree with it.**
+        //
+        // The implication above (`SHORTER` matches ⟹ `CLOSE` matches) is a
+        // theorem about two fixed patterns, and
+        // `the_shorter_span_guard_can_never_fire` asserts it over a chosen set.
+        // A proof plus a chosen set is still a proof nobody has tried to break;
+        // this is what the S7 soak tries to break, at every emphasis candidate
+        // in every input it generates.
+        //
+        // `debug_assert!` and not `unreachable!`: the M1 exit gate is
+        // panic-freedom, and a release build must degrade to muya's behaviour
+        // — refuse the emphasis — rather than abort. Fuzz and test builds carry
+        // debug assertions, which is exactly where a counterexample would be
+        // found.
+        debug_assert!(
+            false,
+            "validateEmphasize's rule-16 guard fired on {emphasize_text:?} with marker \
+             {marker:?}. M1.md §6 \"S2's verification\" proves it cannot: ` ␣M[^m]` implies \
+             `[^m]M` because a space is `[^m]`. If this fires, that proof is wrong and the \
+             port has a real divergence to register."
+        );
         return false;
     }
 

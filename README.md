@@ -5,15 +5,16 @@ A native Rust reimplementation of [MarkText](https://github.com/marktext/marktex
 The build plan is [`docs/RUST-REWRITE-PLAN.md`](docs/RUST-REWRITE-PLAN.md), and
 it is authoritative. This README describes only what exists.
 
-> **Status: M1, stage 5 of 7.** Workspace, CI, conformance suite,
-> differential-test harness, and benchmark corpus, from M0. `mt-inline` — the
-> inline tokenizer — is a complete port of muya's `lexer.ts`: all sixteen
-> handlers, all 49 of muya's inline specs passing. Nothing consumes it yet, and
-> the rest of the workspace is still stubs. There is no parser, no layout, no
-> window; **you cannot run the application.** M1 finishes with S6
-> (`tokensToPlainText`, search highlights, the marker-reveal predicate) and S7
-> (property tests, the fuzz soak, machine-checking the divergence register);
-> wiring the tokenizer into `mt-md` is M2.
+> **Status: M1, stage 7 of 7 — one exit-gate clause outstanding.** Workspace,
+> CI, conformance suite, differential-test harness, and benchmark corpus, from
+> M0. `mt-inline` — the inline tokenizer — is a complete port of muya's
+> `lexer.ts`: all sixteen handlers, all 49 of muya's inline specs passing, and
+> as of S7 a **token-stream differential against the running TypeScript engine
+> on every commit**. Nothing consumes it yet, and the rest of the workspace is
+> still stubs. There is no parser, no layout, no window; **you cannot run the
+> application.** The one thing M1 still owes is a green 24-hour fuzz soak: the
+> targets and the nightly workflow are in, and the run has not happened.
+> Wiring the tokenizer into `mt-md` is M2.
 
 ---
 
@@ -33,10 +34,21 @@ cargo xtask ci                                # everything CI runs beyond the ab
 |---|---|---|
 | `deps` | Dependency-direction guard | §1 |
 | `corpus --check` | `bench/corpus/` matches its generator | §14.4 |
+| `divergences` | **Token-stream** differential vs. the TypeScript engine, plus the register of intentional differences | M1 §5 D3 |
 | `conformance` | CommonMark + GFM ratchet | §11.1 |
-| `diff` | Differential test vs. the TypeScript engine | §11.2 |
+| `diff` | **Block-state** differential vs. the TypeScript engine | §11.2 |
 
-The differential harness needs a marktext clone. It is found via
+Two differentials, one per layer: `divergences` compares `mt-inline`'s token
+stream and is live today; `diff` compares `mt-md`'s block state and skips until
+M2 lands the Rust side. Neither subsumes the other — block state carries no
+inline tokens and a token stream has no blocks.
+
+The nightly [`soak`](.github/workflows/soak.yml) workflow runs what does not fit
+in a per-commit budget: 24 CPU-hours of libFuzzer, the divergence register's
+full 41,009-input sweep, an hour of property testing on all three platforms, and
+tiling over `1mb.md` and `5mb.md` in release.
+
+Both differentials need a marktext clone. It is found via
 `--marktext <DIR>`, `$MARKTEXT_DIR`, or a sibling `../marktext`, and needs only
 muya's own dependencies:
 
@@ -69,6 +81,7 @@ crates/
   mt-cli/         argv, headless convert
 spec/             CommonMark + GFM fixtures (copied verbatim)
 bench/corpus/     performance + differential corpus
+fuzz/             cargo-fuzz targets  [its own workspace — needs nightly]
 tools/            Node-side harness tooling
 xtask/            build/test-harness automation
 ```
@@ -108,12 +121,25 @@ catches a dependency *cycle*, but not a one-way edge.
   `generator(tokenize(s)) == s` now runs over `bench/corpus/`, the 1,324
   CommonMark and GFM examples and the eleven `marktext-round-trip` fixtures.
 
-  What M1 still owes is S7: proptest, the 24-hour fuzz soak, tiling over the
-  large corpus files in release, and pointing `cargo xtask divergences` at a
-  real token-stream comparator — which today reports `SKIPPED` for every entry,
-  so the divergence register is **not** machine-checked yet.
+  S7 closed the verification rather than adding behaviour. `cargo xtask
+  divergences` is now a **live token-stream differential**: it loads muya's
+  tokenizer with happy-dom, serializes an `mt_inline::Token` into the same wire
+  shape, and compares field by field — the register's 27 inputs as a negative
+  control (27 of 27 disagree) and 4,264 more on which any disagreement is a
+  failure, 41,009 in the nightly run. Property tests run on all three platforms,
+  tiling runs over every corpus file in release, and the four branches this
+  crate proves unreachable are `debug_assert!`s so a fuzzer attacks the proofs
+  instead of agreeing with them.
+
+  **What M1 still owes is one clause: 24 hours of libFuzzer, green.**
+  `fuzz/` and `.github/workflows/soak.yml` carry it — 3 targets × 2 shards × 4 h
+  on Linux, because a GitHub-hosted job is killed at six hours — and it has not
+  run yet.
 - The conformance ratchet, over 1,324 real fixtures.
-- The TypeScript half of the differential harness, over the 22-file corpus.
+- The TypeScript half of the differential harness, over the 22-file corpus
+  (eleven `bench/corpus/` files plus eleven `marktext-round-trip` fixtures —
+  see docs/M1.md's correction to S7's gate row, which is where that 22 got
+  misread as `bench/corpus/`'s own count).
 - The dependency-direction guard.
 - `bench/corpus/`, deterministic and `--check`able.
 - CI on Windows, macOS and Linux.

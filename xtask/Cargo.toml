@@ -11,3 +11,11 @@ publish = false
 [dependencies]
 serde_json.workspace = true
 mt-md.workspace = true
+# M1 S7: the token-stream half of the differential harness serializes real
+# `mt_inline::Token`s into muya's wire shape and compares them field by field
+# (`src/tokens.rs`). `xtask` is not one of the four headless crates `cargo xtask
+# deps` constrains — it is dev tooling that nothing ships — so depending upward
+# on a workspace crate here does not touch the §1 dependency direction. The
+# alternative was a `--dump-tokens` mode on `mt-cli` and a second process per
+# run, which buys nothing: this comparison is in-process on the Rust side.
+mt-inline.workspace = true

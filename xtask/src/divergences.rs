@@ -36,64 +36,46 @@
 //! `UnexpectedPass` it fails CI, so the register is forced back down instead
 //! of accumulating entries that quietly widen what the harness tolerates.
 //!
-//! # Status: skipped-but-present, and **that is now an open gap owned by S7**
+//! # Status: enforcing, as of M1 S7
 //!
-//! No comparison can be made yet, so [`disagrees`] returns `None` for every
-//! input and every entry reports [`Verdict::Skipped`]. The runner exits 0 with
-//! a loud summary.
+//! From S0 to S6 this runner reported [`Verdict::Skipped`] for every entry and
+//! exited 0, because there was no TypeScript token stream to compare a Rust one
+//! against — `diff.rs` compares **block state**. Rule 3 could therefore not
+//! fire for any entry, so the register could not detect its own staleness:
+//! revert a fix and the runner still printed `SKIPPED` and passed.
 //!
-//! At S0 that was because neither side could produce a token stream. S1
-//! changed half of it: `mt_inline::tokenizer` is implemented. What is still
-//! missing is the other half — `diff.rs` compares **block state**, not token
-//! streams, so there is no TypeScript token stream to compare a Rust one
-//! against.
+//! S7 closed it. [`crate::tokens`] is the comparator — a Node dumper beside
+//! `dump-ts-state.mjs` that loads muya's `tokenizer` with a happy-dom
+//! `DOMParser` registered, and a Rust-side serializer that puts an
+//! `mt_inline::Token` into muya's wire shape — and this runner now does two
+//! things with it:
 //!
-//! Until S4 that cost nothing, because the registered fixes belonged to stages
-//! that had not run. **S4 is where it starts costing something, and it should
-//! not be allowed to read as done:** all three entries' fixes are now
-//! implemented, all three have been verified by hand against the running
-//! engine, and **not one of them is machine-checked**. Concretely, rule 3 — an
-//! entry with no failing differential case is stale — *cannot fire for any
-//! entry*, so the register currently cannot detect its own staleness. If a fix
-//! were reverted tomorrow, this runner would still print `SKIPPED` and exit 0.
+//! 1. **The negative control.** Every registered input goes through the
+//!    comparator, and an entry whose inputs all agree is [`Verdict::Stale`] and
+//!    fails CI. That is rule 3, mechanically.
+//! 2. **Rule 1's other half.** A sweep over `bench/corpus/`, the 1324
+//!    CommonMark and GFM examples and the `marktext-round-trip` fixtures, on
+//!    which **any** disagreement is a failure. Without it the register only
+//!    ever proves that its own inputs still disagree, which is necessary and
+//!    nothing like sufficient.
 //!
-//! **At S5 it stopped being a hypothetical cost.** S4's hand-check of one
-//! divergence class returned a false negative and was written into M1.md as a
-//! clean result; S5's sweep found 96 disagreements in it. The failure this gap
-//! permits is therefore not only "a reverted fix reads as green" but "a class
-//! nobody rechecks, because the last person to check it said it was fine".
+//! When the reference engine is absent the run still reports `SKIPPED` and
+//! exits 0, exactly as `diff.rs` does — and `--require-ts` turns that into a
+//! hard failure. CI passes it, so a broken checkout cannot quietly return this
+//! runner to the state S7 spent a stage getting it out of.
 //!
-//! **S7 owns closing it**, and M1.md §6's S7 row says so. Two reasons it is
-//! S7's rather than M2's: M1's exit gate is where "the port agrees with the
-//! TypeScript engine except where registered" is finally claimed, and a
-//! register that has never been machine-checked would carry that claim into M2
-//! unverified; and the work is nearly done already — S2, S3, S4, S5 and S6 each
-//! built a comparator as a throwaway script (49,751 inputs at S5; 5586 inputs
-//! and 41,007 highlight runs at S6), so what S7 has to do is make one of them
-//! permanent and point [`disagrees`] at it, not invent it. See "What S5 leaves
-//! for whoever builds it" and S6's addition to it below.
+//! # Why five stages left this undone, and what it cost
 //!
-//! That is not the same as "not wired up". Running today already checks that
-//! the register parses, that every entry is well-formed and uniquely
-//! identified, that no two entries claim the same input, and — via the unit
-//! tests below — that a stale entry is actually reported rather than silently
-//! tolerated. The things that rot quietly are caught from day one.
+//! Kept because the *shape* of the mistake is the finding, and because the same
+//! shape is available to any future stage that decides a hand-check will do.
 //!
-//! ## Flipping it on
-//!
-//! There is nothing to flip. Point [`disagrees`] at a token-stream comparator
-//! and the same run starts enforcing;
-//! `tests::every_entry_is_skipped_until_the_harness_compares_token_streams`
-//! fails on that day and tells whoever hits it to delete it.
-//!
-//! S2 and S3 did the comparison by hand instead — muya's `tokenizer` loaded
-//! directly and its token streams diffed field by field against the port's,
-//! over 207 inputs and then 319 — and between them they widened
-//! `emoji-nested-boundary` from two registered inputs to seven and then to
-//! twelve. That is rule 1 working (an unregistered disagreement is a failure,
-//! so a class wider than its entry must widen the entry) and it is also the
-//! argument for building the comparator: a hand-run finds this once, a harness
-//! finds it every time.
+//! S2 and S3 did the comparison by hand — muya's `tokenizer` loaded directly
+//! and its token streams diffed field by field against the port's, over 207
+//! inputs and then 319 — and between them they widened `emoji-nested-boundary`
+//! from two registered inputs to seven and then to twelve. That is rule 1
+//! working (an unregistered disagreement is a failure, so a class wider than
+//! its entry must widen the entry) and it is also the argument for building the
+//! comparator: a hand-run finds this once, a harness finds it every time.
 //!
 //! S3's widening makes the argument sharper than S2's did. The five inputs it
 //! added are the **opposite direction** of the same bug — muya keeping an
@@ -116,64 +98,49 @@
 //! `lexer.ts:203`'s `prevChar &&` treats `undefined` as a boundary — and 96 of
 //! 228 swept inputs disagree, in both directions. A hand-run does not just
 //! find a class once instead of every time; it can find *half* of one and read
-//! as a clean result. That is the strongest reason yet for the permanent
-//! comparator, and it is why the entry now carries a correction rather than an
-//! extension.
+//! as a clean result.
 //!
-//! ## What S5 leaves for whoever builds it
+//! S6 built the fifth and found the gap had a second dimension: its comparator
+//! agreed on all 5586 inputs *and was structurally unable to see one of the
+//! three entries*, because that divergence lives in `attrs` and a text-level
+//! comparison never reads `attrs`.
 //!
-//! S5's script was the fourth throwaway and **ownership deliberately stayed
-//! here** rather than moving to that stage — the reasoning is in M1.md §6,
-//! under "The divergence harness is still `SKIPPED`". What it settled, so that
-//! S7 is not starting from a blank file:
+//! # What S5 and S6 left for S7, and where each note landed
 //!
-//! - **Compare hex of UTF-8 bytes, not strings.** It removes every encoding
-//!   question from the diff in one move.
-//! - **Convert muya's UTF-16 offsets by walking code points**, not by dividing
-//!   or by `length`. An astral character is one code point and four bytes.
-//! - **Do not let the transport normalise.** S5's first run showed four
-//!   disagreements that were `TextDecoder`'s default BOM-stripping, not the
-//!   tokenizer; `{ ignoreBOM: true }` is required on any JavaScript side that
-//!   round-trips an input through bytes. A harness bug and a port bug look
-//!   identical in the output.
-//! - **Normalise `undefined` versus `''` per field**, following muya's own
-//!   `|| ''` sites (`lexer.ts:77`, `:97`, `:433`, `:480`) rather than per type.
-//!   S3 lost a run to this; the fields that differ are listed on `token.rs`.
-//! - **Sweep, do not sample.** Every finding at S3, S4 and S5 came from a
-//!   combination nobody would have written by hand.
+//! S5 gave three reasons for deferring, and **all three were already decided
+//! and built** — `diff.rs` had been invoking Node with `tsx` for the whole
+//! corpus since M0, degrading to a skip without a marktext clone and
+//! hard-failing under `--require-ts`, and CI had been checking the engine out
+//! at `MARKTEXT_REF` and running `cargo xtask ci --require-ts` since the same
+//! commit. So the deferral's stated cost was a second dumper beside the first,
+//! not new plumbing. Recorded here rather than quietly dropped, because the
+//! sentence deterred four stages.
 //!
-//! ## What S6 adds to that list
+//! The part of the handoff that *was* worth having is the list of things each
+//! stage lost a run to. Every one of them is implemented in [`crate::tokens`]
+//! and restated beside the code that satisfies it:
 //!
-//! S6's script was the **fifth** throwaway, and ownership stayed here again,
-//! deliberately and for S5's reasons: the permanent harness has to decide how a
-//! Rust build invokes Node with `tsx` and `happy-dom`, what happens on a
-//! machine with no marktext clone, and whether CI runs it — none of which is
-//! `tokensToPlainText` work, and all of which would have landed in the same
-//! commit with no test able to tell the two apart. Three additions:
-//!
-//! - **Run a negative control, every time.** S6's main sweep agreed on all 5586
-//!   inputs — and *not one of them reaches a registered divergence*, so on its
-//!   own that number is worth nothing. Feeding the register's own 27 inputs
-//!   through the same comparator is what makes it evidence: 16 of 16
-//!   `emoji-nested-boundary` and 7 of 7
-//!   `disallowed-html-tag-substring-match` disagree, in both directions. A
-//!   comparator that has never produced a disagreement has not been shown to be
-//!   able to.
-//! - **Compare fields, not rendered text.** The negative control also showed
-//!   the limit of a text-level comparison:
-//!   `html-tag-attrs-from-a-foster-parented-element` **agrees on all four of
-//!   its inputs**, because that divergence lives in `attrs` and
-//!   `tokensToPlainText` never reads `attrs`. One of the three entries is
-//!   invisible to a comparator built the easy way. [`disagrees`] must compare
-//!   the token, field by field.
-//! - **`highlights` is a per-field `undefined`/`[]` normalisation**, alongside
-//!   the `|| ''` sites above. muya creates `token.highlights` on the first
-//!   push, so a token that intersects nothing has **no key**; the port gives
-//!   every token an empty `Vec`. That is M1.md §5 D7 working as decided, not a
-//!   divergence — but a comparator that treats "absent" and "empty" as
-//!   different will report every token in every document.
+//! - **Compare hex of UTF-8 bytes, not strings** (S5).
+//! - **Convert muya's UTF-16 offsets by walking code points** (S5), not by
+//!   dividing or by `length`. An astral character is one code point, two UTF-16
+//!   units and four bytes.
+//! - **Do not let the transport normalise** (S5). Four of S5's first-run
+//!   disagreements were `TextDecoder`'s default BOM-stripping rather than the
+//!   tokenizer. A harness bug and a port bug look identical in the output.
+//! - **Normalise `undefined` versus `''` per field**, not per type (S3),
+//!   following muya's own `|| ''` sites. S3 lost a run to this; `token.rs`
+//!   lists the four fields that differ.
+//! - **Sweep, do not sample** (S3, S4, S5).
+//! - **Run a negative control every time** (S6). A comparator that has never
+//!   produced a disagreement has not been shown to be able to.
+//! - **Compare fields, not rendered text** (S6), or
+//!   `html-tag-attrs-from-a-foster-parented-element` is invisible.
+//! - **`highlights` is a per-field absent/empty normalisation** (S6). muya
+//!   creates the key on the first push; the port gives every token an empty
+//!   `Vec`. Treat the two as different and every token in every document
+//!   reports a disagreement.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// One registered intentional difference from muya.
@@ -494,26 +461,19 @@ pub fn registered_inputs(entries: &[Divergence]) -> BTreeSet<&str> {
 // Running
 // ---------------------------------------------------------------------------
 
-/// Whether the two engines disagree on `input`.
+/// The register's verdicts, given a comparison already made.
 ///
-/// `None` means the comparison could not be made, which is still the whole
-/// story: `diff.rs` compares block state rather than token streams, so there
-/// is no TypeScript side to compare against. `mt_inline::tokenizer` itself has
-/// worked since S1.
-///
-/// When the harness grows a token-stream mode, this is the one call site to
-/// point at it. Everything else in this file already works.
-fn disagrees(input: &str) -> Option<bool> {
-    let _ = input;
-    None
-}
-
-pub fn run(entries: &[Divergence]) -> Report {
-    run_with(entries, disagrees)
+/// Split from [`run_with`] only so that `main` can run **one** Node process for
+/// the register and the sweep together — the engine costs about a second to
+/// start and nothing per input after that, so two invocations would double the
+/// fixed cost to separate two things that are one run.
+pub fn run(entries: &[Divergence], outcomes: &BTreeMap<String, Option<bool>>) -> Report {
+    run_with(entries, |input| outcomes.get(input).copied().flatten())
 }
 
 /// [`run`], with the engine comparison injected — which is what makes the
-/// staleness logic testable before either engine can produce a token stream.
+/// staleness logic testable without a marktext clone, and what let the decision
+/// table below be written and asserted five stages before a comparison existed.
 pub fn run_with(entries: &[Divergence], compare: impl Fn(&str) -> Option<bool>) -> Report {
     let mut report = Report {
         shape_problems: validate(entries),
@@ -542,11 +502,126 @@ pub fn run_with(entries: &[Divergence], compare: impl Fn(&str) -> Option<bool>) 
     report
 }
 
-/// `cargo xtask divergences`.
-pub fn main(repo_root: &Path) -> Result<i32, String> {
+/// How many unregistered disagreements to print before summarising.
+///
+/// A bounded report that does not say what it bounded reads as full coverage,
+/// so the count is always printed even when the list is truncated.
+const REPORTED_FAILURES: usize = 12;
+
+/// `cargo xtask divergences [--require-ts] [--no-sweep] [--full-sweep]`.
+pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
+    let mut require_ts = false;
+    let mut sweep = true;
+    let mut breadth = crate::tokens::Breadth::Default;
+    for arg in args {
+        match arg.as_str() {
+            // Same flag and the same meaning as `cargo xtask diff`: without a
+            // marktext clone this runner skips, and CI passes this so that a
+            // broken checkout is a failure rather than a silent no-op. That is
+            // the one failure mode that would return the register to its
+            // pre-S7 state without anyone noticing.
+            "--require-ts" => require_ts = true,
+            // The register alone, for a fast local loop. Not what CI runs:
+            // without the sweep, rule 1's other half is unchecked.
+            "--no-sweep" => sweep = false,
+            // Adds the lines of `1mb.md` and `5mb.md`: 4,264 inputs becomes
+            // 41,009, and 22 s of Node becomes 120 s. The nightly soak workflow
+            // runs this; every-commit CI does not. See `tokens::sweep_inputs`
+            // for why that cap is defensible rather than merely convenient.
+            "--full-sweep" => breadth = crate::tokens::Breadth::Full,
+            other => return Err(format!("unrecognised argument: {other}")),
+        }
+    }
+
     let spec_dir: PathBuf = repo_root.join("spec");
     let entries = load(&spec_dir)?;
-    let report = run(&entries);
+
+    // The register's own inputs first, then everything else. Both go through
+    // one Node process: the engine costs about a second to start and almost
+    // nothing per input, so splitting them would double the fixed cost to
+    // separate two halves of one run.
+    //
+    // Registered inputs are always tokenized with muya's **defaults**, which is
+    // why `emoji-nested-boundary`'s note records that `[a:smile:][ref]` and its
+    // siblings are not listed: they need a populated label map to reach
+    // `tryReferenceLink` at all. Option-carrying probes live in the sweep.
+    let registered: Vec<crate::tokens::Input> = entries
+        .iter()
+        .flat_map(|e| {
+            e.inputs
+                .iter()
+                .map(|i| crate::tokens::Input::new(i.clone()))
+        })
+        .collect();
+    let tolerated = registered_inputs(&entries);
+    let swept: Vec<crate::tokens::Input> = if sweep {
+        crate::tokens::sweep_inputs(repo_root, breadth)?
+            .into_iter()
+            .filter(|input| !tolerated.contains(input.src.as_str()))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let mut all = registered.clone();
+    all.extend(swept.iter().cloned());
+
+    let comparison = crate::tokens::compare(repo_root, &all)?;
+    let mut outcomes: BTreeMap<String, Option<bool>> = BTreeMap::new();
+    let mut engine_errors: Vec<(String, String)> = Vec::new();
+    let mut unregistered_failures: Vec<(String, String, String, String)> = Vec::new();
+    let mut swept_agreements = 0usize;
+
+    match &comparison {
+        None => {
+            let reason = crate::tokens::unavailable_reason(repo_root)
+                .unwrap_or_else(|| "the TypeScript engine is unavailable".to_string());
+            if require_ts {
+                return Err(format!(
+                    "the TypeScript reference engine is unavailable and --require-ts was given:\n\
+                     {reason}"
+                ));
+            }
+            for input in &all {
+                outcomes.insert(input.src.clone(), None);
+            }
+        }
+        Some(verdicts) => {
+            for (input, verdict) in all.iter().zip(verdicts) {
+                let registered_here = tolerated.contains(input.src.as_str());
+                match verdict {
+                    crate::tokens::InputVerdict::Agree => {
+                        outcomes.insert(input.src.clone(), Some(false));
+                        if !registered_here {
+                            swept_agreements += 1;
+                        }
+                    }
+                    crate::tokens::InputVerdict::Disagree { at, ts, rs } => {
+                        outcomes.insert(input.src.clone(), Some(true));
+                        if !registered_here {
+                            // Rule 1: a disagreement on an unregistered input
+                            // is a failure, exactly as before the harness
+                            // existed. Either the port is wrong, or the class
+                            // is wider than its entry and the entry must widen
+                            // (which is what happened four times in S2–S5).
+                            unregistered_failures.push((
+                                input.src.clone(),
+                                at.clone(),
+                                ts.clone(),
+                                rs.clone(),
+                            ));
+                        }
+                    }
+                    crate::tokens::InputVerdict::EngineThrew(message) => {
+                        outcomes.insert(input.src.clone(), None);
+                        engine_errors.push((input.src.clone(), message.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    let report = run(&entries, &outcomes);
 
     println!("divergence register — docs/M1.md §5 D3");
     println!("register: {}", spec_dir.join("divergences.json").display());
@@ -617,17 +692,78 @@ pub fn main(repo_root: &Path) -> Result<i32, String> {
         println!();
     }
 
+    // --- rule 1's other half ------------------------------------------------
+    //
+    // The register is a list of tolerated disagreements. On its own, confirming
+    // every entry proves only that the tolerated ones still hold; what makes it
+    // a claim about the port is the set of inputs on which the two engines must
+    // agree *exactly*.
+    if sweep && comparison.is_some() {
+        println!(
+            "  sweep             {} inputs beyond the register — rule 1: a disagreement on any\n\
+             \x20                   of these is a failure, not a divergence",
+            swept.len()
+        );
+        // No silent caps: a bounded run that does not say what it bounded reads
+        // as full coverage.
+        if breadth == crate::tokens::Breadth::Default {
+            println!(
+                "            bounded    1mb.md's and 5mb.md's lines are excluded here; \
+                 --full-sweep\n\
+                 \x20                      adds them (40,982 swept, ~120 s). The nightly soak \
+                 runs it."
+            );
+        }
+        println!("            agree      {swept_agreements}");
+        println!("            disagree   {}", unregistered_failures.len());
+        if !engine_errors.is_empty() {
+            println!("            muya threw {}", engine_errors.len());
+        }
+        println!();
+    }
+
+    for (input, at, ts, rs) in unregistered_failures.iter().take(REPORTED_FAILURES) {
+        println!("  FAIL  unregistered disagreement on {input:?}");
+        println!("        first difference at {at}");
+        println!("        typescript: {ts}");
+        println!("        rust:       {rs}");
+    }
+    if unregistered_failures.len() > REPORTED_FAILURES {
+        println!(
+            "  … and {} more (strings are hex of their UTF-8 bytes; see xtask/src/tokens.rs)",
+            unregistered_failures.len() - REPORTED_FAILURES
+        );
+    }
+    if !unregistered_failures.is_empty() {
+        println!();
+        println!(
+            "  Rule 1: a disagreement on a registered input is expected; a disagreement on\n\
+             \x20 anything else is a failure. Either the port is wrong, or a registered class\n\
+             \x20 is wider than its entry and rule 2 says widen it with concrete inputs that\n\
+             \x20 become tests. S2, S3, S4 and S5 each hit the second case."
+        );
+        println!();
+    }
+
+    for (input, message) in engine_errors.iter().take(REPORTED_FAILURES) {
+        println!("  ERR   muya threw on {input:?}: {message}");
+    }
+    if !engine_errors.is_empty() {
+        println!();
+    }
+
     if report.everything_skipped() {
         println!(
-            "All entries skipped: the differential harness compares block state rather than\n\
-             token streams, so there is no TypeScript token stream to compare against.\n\
-             mt_inline::tokenizer itself has worked since M1 S1. The register is parsed,\n\
-             validated and wired — it begins enforcing on the first run where a comparison\n\
-             can be made. See xtask/src/divergences.rs."
+            "All entries skipped: the TypeScript reference engine was not available, so\n\
+             nothing was compared. Set MARKTEXT_DIR or pass --marktext to the dumper, and\n\
+             pass --require-ts to make a missing engine a failure instead of a skip; CI\n\
+             does. See xtask/src/tokens.rs."
         );
     }
 
-    Ok(if report.is_ci_failure() { 1 } else { 0 })
+    let failed =
+        report.is_ci_failure() || !unregistered_failures.is_empty() || !engine_errors.is_empty();
+    Ok(i32::from(failed))
 }
 
 #[cfg(test)]
@@ -943,17 +1079,69 @@ mod tests {
         assert_eq!(inputs.len(), 27);
     }
 
-    /// Asserted so that the day it changes is the day someone deliberately
-    /// wires the token-stream comparison in.
+    /// The register is now enforced by a comparison against a running engine,
+    /// which `cargo test` cannot make: the marktext clone is not a build
+    /// dependency and CI checks it out as a separate step. So what this asserts
+    /// is the wiring — that an undetermined outcome still blocks the staleness
+    /// call, over the **real** register rather than a synthetic one.
+    ///
+    /// This replaces `every_entry_is_skipped_until_the_harness_compares_token_
+    /// streams`, which was designed to fail the day the comparison worked and
+    /// to tell whoever hit it to delete it. It did, and this is that deletion.
     #[test]
-    fn every_entry_is_skipped_until_the_harness_compares_token_streams() {
+    fn an_engine_that_cannot_be_reached_skips_rather_than_reporting_stale() {
         let entries = load(&spec_dir()).expect("load");
-        let report = run(&entries);
+        let outcomes: BTreeMap<String, Option<bool>> = registered_inputs(&entries)
+            .into_iter()
+            .map(|input| (input.to_string(), None))
+            .collect();
+        let report = run(&entries, &outcomes);
+        assert!(report.everything_skipped());
         assert!(
-            report.everything_skipped(),
-            "the divergence runner can now compare token streams. Good — that means the \
-             register starts enforcing. Delete this test."
+            !report.is_ci_failure(),
+            "a machine with no marktext clone must not fail the build; --require-ts is \
+             what makes it one, and CI passes it"
         );
+    }
+
+    /// The negative control, as a decision-table case: this is the shape a real
+    /// run produces, and it must be green rather than merely not-red.
+    #[test]
+    fn a_register_whose_inputs_all_disagree_is_confirmed_and_green() {
+        let entries = load(&spec_dir()).expect("load");
+        let outcomes: BTreeMap<String, Option<bool>> = registered_inputs(&entries)
+            .into_iter()
+            .map(|input| (input.to_string(), Some(true)))
+            .collect();
+        let report = run(&entries, &outcomes);
+        assert!(!report.everything_skipped());
+        assert!(report.stale().is_empty());
         assert!(!report.is_ci_failure());
+        assert!(
+            report
+                .entries
+                .iter()
+                .all(|e| e.verdict == Verdict::Confirmed)
+        );
+    }
+
+    /// Rule 3 against the real register: revert any one fix and that entry's
+    /// inputs start agreeing, which must fail the build. This is the property
+    /// that could not be checked at all from S0 to S6.
+    #[test]
+    fn reverting_a_fix_makes_its_entry_stale() {
+        let entries = load(&spec_dir()).expect("load");
+        for reverted in &entries {
+            let outcomes: BTreeMap<String, Option<bool>> = entries
+                .iter()
+                .flat_map(|e| {
+                    let agrees = e.id == reverted.id;
+                    e.inputs.iter().map(move |i| (i.clone(), Some(!agrees)))
+                })
+                .collect();
+            let report = run(&entries, &outcomes);
+            assert_eq!(report.stale(), vec![reverted.id.as_str()]);
+            assert!(report.is_ci_failure());
+        }
     }
 }

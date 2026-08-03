@@ -103,7 +103,10 @@ in the differential harness**. Four rules:
 4. `upstream` holds the marktext issue URL once filed. File them.
 
 ```sh
-cargo xtask divergences
+cargo xtask divergences                # the register + a 4,264-input sweep, ~22 s
+cargo xtask divergences --no-sweep     # the register alone, for a fast local loop
+cargo xtask divergences --full-sweep   # 41,009 inputs, ~120 s; the nightly soak
+cargo xtask divergences --require-ts   # fail, don't skip, without the TS engine
 ```
 
 | State | Verdict | CI |
@@ -112,6 +115,11 @@ cargo xtask divergences
 | **Every registered input agrees** | `Stale` | **fails** — implement the fix or delete the entry |
 | Any input could not be compared | `Skipped` | green, and says so |
 | Duplicate id, empty `inputs`, unknown key, shared input | — | **fails** — malformed register |
+| **An unregistered input disagrees** | — | **fails** — rule 1's other half |
+
+The last row is what makes the register a claim about the port rather than about
+itself. Confirming every entry proves only that the *tolerated* disagreements
+still hold; the sweep is the set on which the two engines must agree exactly.
 
 `Stale` is the analogue of the conformance ratchet's `UnexpectedPass`, and it
 fails for the same reason: a register entry that no longer holds is one that
@@ -131,21 +139,31 @@ it here if `xtask` ever needs to report on it.
 Three registers, one shape, on purpose. If you change how one of them decides,
 change the other two or write down why not.
 
-### Current status: skipped-but-present
+### Current status: **enforcing**, as of M1 S7
 
-`xtask diff` compares block state rather than token streams, so there is no
-TypeScript token stream to compare a Rust one against and both entries report
-`Skipped`. (`mt_inline::tokenizer` itself has worked since M1 S1; at S0 both
-halves were missing, now only the harness half is. Both registered entries are
-S2 and S4 behaviours in any case.)
+Three entries, 27 registered inputs, **27 of 27 disagreeing**. The sweep runs
+4,264 further inputs on every commit and 41,009 nightly, and a disagreement on
+any of them is a failure.
 
-Running today still checks that the register parses, that every entry is
-well-formed and uniquely identified, that no two entries claim the same input,
-and (through the runner's unit tests) that a stale entry is actually reported.
-Point `divergences::disagrees` at the token-stream comparator when it exists;
-nothing else needs changing, and
-`divergences::tests::every_entry_is_skipped_until_the_harness_compares_token_streams`
-fails on that day to say so.
+It was not always so, and the history is the reason the rules are worth
+following. From S0 to S6 `xtask diff` compared **block state**, so there was no
+TypeScript token stream to compare a Rust one against, every entry reported
+`Skipped`, and rule 3 could not fire: revert a fix and the runner still exited
+0. Five stages verified by hand instead, and S5 showed what that costs — S4
+probed one divergence class with two inputs, found both agreeing, recorded that
+the entry needed no widening, and 96 of 228 swept inputs disagree. A hand-run
+does not merely have to be repeated; it can return a **false negative** and be
+written down as a result.
+
+S7 built the comparator: `tools/diff/dump-ts-tokens.mjs` loads muya's
+`tokenizer` with a happy-dom `DOMParser` registered, `xtask/src/tokens.rs`
+serializes an `mt_inline::Token` into the same wire shape, and the two are
+compared field by field — which matters, because S6's text-level comparator was
+structurally unable to see `html-tag-attrs-from-a-foster-parented-element` at
+all.
+
+Without a marktext clone the runner still reports `Skipped` and exits 0.
+`--require-ts` makes that a failure, and CI passes it.
 
 ---
 

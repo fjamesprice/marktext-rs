@@ -207,6 +207,31 @@ pub(crate) struct Destination {
 /// Returns the three corrected spans unchanged when there is nothing to
 /// correct, which is muya's "`lastParenIndex === -1`, leave the array alone".
 pub(crate) fn correct_url(origin: &str, whole: Span, url: Span, backlash: Span) -> Destination {
+    // **Second of the milestone's four proved-unreachable branches**, and the
+    // one that is a premise rather than a branch — stated here as an assertion
+    // so the S7 soak can falsify it.
+    //
+    // S3 proved that the `image` and `link` patterns never fill group 5
+    // themselves: the greedy `(.*)` before `(\\*)` always wins the whole run of
+    // backslashes, because the engine tries the largest end position first and
+    // the last `)` in the input always succeeds there. That is what makes
+    // `isLengthEven(imageTo[5])` vacuous *unless* `correctUrl` ran, which in
+    // turn is why muya calls `correctUrl` before the guard rather than
+    // validating the raw capture groups.
+    //
+    // `the_regex_never_fills_group_five_itself` asserts it over a chosen set;
+    // this asserts it over every link and image the fuzzer ever produces. If it
+    // fires, `len` below is computed from a premise that no longer holds and
+    // the truncation is off by the length of the run.
+    debug_assert!(
+        backlash.is_empty(),
+        "group 5 arrived at correct_url non-empty ({:?} = {:?}); M1.md §6 \"S3's \
+         verification\" proves the pattern cannot fill it, and `len` below is derived on \
+         that premise",
+        backlash,
+        backlash.get(origin)
+    );
+
     let Some(last_paren) = find_closing_bracket(url.of(origin), ('(', ')')) else {
         return Destination {
             whole,

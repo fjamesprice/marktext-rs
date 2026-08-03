@@ -96,7 +96,25 @@ fn push_plain_text(out: &mut String, src: &str, tokens: &[Token]) {
             // `correctUrl` group 5 and S5's `if (!email)`.
             TokenKind::HtmlTag(tag) => match (&tag.children, tag.content) {
                 (Some(children), _) => push_plain_text(out, src, children),
-                (None, Some(content)) => out.push_str(content.of(src)),
+                (None, Some(content)) => {
+                    // **Fourth of the milestone's four proved-unreachable
+                    // branches**, stated so the S7 soak can falsify the proof.
+                    // `the_html_tag_content_arm_cannot_fire` asserts it over
+                    // every `html_tag` shape someone thought of; this asserts
+                    // it over every one the fuzzer generates. `debug_assert!`
+                    // rather than `unreachable!` because the exit gate is
+                    // panic-freedom and the transcribed behaviour — emit the
+                    // content — is the right release-build answer either way.
+                    debug_assert!(
+                        false,
+                        "an html_tag reached tokensToPlainText with content {:?} and no \
+                         children. tryHtmlTag's element branch always sets `children` to an \
+                         array and its comment branch sets neither, so no producer can make \
+                         this state.",
+                        content.get(src)
+                    );
+                    out.push_str(content.of(src));
+                }
                 (None, None) => {}
             },
 

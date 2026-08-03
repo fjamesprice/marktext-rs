@@ -1232,7 +1232,21 @@ fn try_auto_link_extension(state: &mut LexState<'_>) -> bool {
     // dead branch of the milestone, after `validateEmphasize`'s rule-16 guard
     // (S2) and `correctUrl`'s group 5 (S3).
     let (raw, www, url) = match email {
-        Some(_) => (whole, www, url),
+        Some(_) => {
+            // **Third of the milestone's four proved-unreachable branches**,
+            // stated so the S7 soak can falsify the proof instead of agreeing
+            // with it. `the_email_alternatives_extent_would_be_unchanged_by_
+            // the_trim_anyway` asserts it over a chosen set; this asserts it
+            // over every email autolink the fuzzer ever produces.
+            debug_assert_eq!(
+                trim_auto_link_extent(whole.of(origin)),
+                whole.len(),
+                "the trim is not the identity on the email match {:?}, so muya's `if (!email)` \
+                 guard is observable after all and this port diverges from it",
+                whole.get(origin)
+            );
+            (whole, www, url)
+        }
         None => {
             let trimmed = trim_auto_link_extent(whole.of(origin));
             if trimmed == whole.len() {
@@ -1257,6 +1271,16 @@ fn try_auto_link_extension(state: &mut LexState<'_>) -> bool {
     // such guard and would loop forever, so there is nothing to register — a
     // divergence needs two behaviours to differ, and a hang has no output.
     if raw.is_empty() {
+        // The fifth unreachable site, and the only one whose consequence is a
+        // **hang** rather than a wrong token — which is what makes the guard
+        // worth having in release and the assertion worth having in the soak.
+        debug_assert!(
+            false,
+            "trim_auto_link_extent returned 0 for {:?}; its own doc proves a `www`/`https?://` \
+             match starts with `w` or `h` and so cannot trim to nothing. muya loops forever \
+             here; this returns false instead.",
+            whole.get(origin)
+        );
         return false;
     }
 

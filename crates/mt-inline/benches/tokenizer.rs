@@ -53,6 +53,7 @@
 //! | S4 | 14 of 16 | **14.9 s** (0.42 MiB/s) | 243.4 s (0.03 MiB/s) | 472 ms |
 //! | S5 | 16 of 16 | **16.3 s** (0.38 MiB/s) | 265.6 s (0.02 MiB/s) | 488 ms |
 //! | S6 | 16 of 16 + 3 post-passes | **16.3 s** (0.38 MiB/s) | 260.1 s (0.02 MiB/s) | 501 ms |
+//! | S7 | 16 of 16 + 3 post-passes (+ 5 `debug_assert!`s) | **16.3 s** (0.38 MiB/s) | 261.1 s (0.02 MiB/s) | 481 ms |
 //!
 //! S5's release rise over S4 is 1.09× as the table reads, but that comparison
 //! is across sessions and this is a wall clock. The trustworthy number is an
@@ -140,6 +141,31 @@
 //!   be visible here first, magnified. **S5 is the first stage it did not
 //!   catch** — 412 ms before and after — and that is information rather than a
 //!   failure: see "What S5 changed" below for why one canary is not enough.
+//!
+//!   **S7 adds the general version of that**, because "one canary is not
+//!   enough" has no fixed answer — the next shape will be blind to whatever
+//!   canaries exist by then. `crates/mt-inline/tests/properties.rs`'s `soak`
+//!   test reports its slowest inputs **per byte**, and libFuzzer runs with
+//!   `-report_slow_units=5`; both are searches for a slow input rather than a
+//!   list of ones someone thought of. Whatever either finds that the
+//!   three-term model does not explain belongs here as a row, tagged with the
+//!   term it exercises or as a fourth.
+//!
+//!   **Run at S7, it found nothing that beats the canary, and by a long way.**
+//!   5,897,280 cases over 331 MB, and the eight slowest land between 2,554 and
+//!   3,146 ns/B — against prose at ~2,510 ns/B, so **1.25× the average**, where
+//!   `[` × 4000 is **41×**. No row was added, and the reason is a limitation of
+//!   the *generator* rather than a fact about the tokenizer: the winners are 68
+//!   to 153 bytes, all three cost terms scale with how far a quantifier scans,
+//!   and that is bounded by the **level length**. `markdownish` concatenates at
+//!   most 24 pieces, so it tops out near 460 bytes and no quantifier ever has
+//!   far to go.
+//!
+//!   Which is a better argument for the Linux soak than "coverage-guided" was:
+//!   `soak.yml` passes `-max_len=65536`, two orders of magnitude past anything
+//!   proptest can reach here, from a seed corpus of megabyte files. **The
+//!   slow-input question is the soak's to answer**; what S7 settles is that the
+//!   short-input space is not where the answer is.
 //! - **Debug is ~12× release at S3, ~16× at S4, and ~16× at S5 — unchanged.**
 //!   Both profiles are recorded because `round_trip.rs` tracks the debug
 //!   figure — that is what a developer waits for — and this file tracks the
@@ -151,6 +177,80 @@
 //!   second charge, and 265.6/16.3 lands on the same 16× S4 did. A ratio is
 //!   worth recording precisely because it is the number that moves when the
 //!   *shape* of the work changes rather than its amount.
+//!
+//! # What S7 changed — nothing measurable, and the *method* needed fixing
+//!
+//! S7 adds no rule, so the three-term model gains no fourth shape. What it does
+//! add to `mt-inline/src/` is **five `debug_assert!`s**, at the four branches
+//! M1.md §6 proves unreachable plus the zero-extent guard — so that a fuzz or
+//! proptest run attacks each proof instead of agreeing with it. That makes the
+//! prediction sharper than "no change":
+//!
+//! 1. **Release: nothing moves.** All five compile out.
+//! 2. **Debug: only the autolink section's email row.**
+//!    `debug_assert_eq!(trim_auto_link_extent(…), whole.len())` runs the
+//!    quadratic trim a *second* time for every email autolink that matches.
+//!
+//! **Release held.** Three alternating `--quick` runs of each tree, one
+//! session, against a `git worktree` at `d258349`:
+//!
+//! | Section | S6 mean | S7 mean | |
+//! |---|---:|---:|---|
+//! | `bench/corpus/` (`--quick`) | 349.0 ms | 334.3 ms | 0.96× |
+//! | `lowerPriority` | 390.3 ms | 394.7 ms | 1.01× |
+//! | autolink | 52.90 ms | 52.98 ms | 1.00× |
+//!
+//! Two full-corpus runs each give 16.43 s against **16.29 s**, 0.99×. Signs
+//! disagree, every ratio is inside the within-binary spread, nothing to
+//! attribute.
+//!
+//! ## Two alternations are not enough — the correction this stage owes
+//!
+//! S5 asked S6 for an A/B rather than a cross-stage subtraction, because the
+//! stage delta had shrunk to the size of session drift. S6 did one, with **two**
+//! alternations. S7 did the same and got a clean-looking, consistent
+//! **1.05–1.10× regression on every autolink row** — small spread, both runs,
+//! and a plausible mechanism ready to hand (a dead call site changes the
+//! inliner's cost model before DCE runs, and fat LTO with one codegen unit
+//! makes inlining global).
+//!
+//! It was the **run order**. The S7 tree was measured first in that session,
+//! straight after its own fresh compile, both times. A third alternation put
+//! every row back on S6's numbers.
+//!
+//! So: the first measurement of a session is systematically slower, and with
+//! two samples that bias lands entirely on whichever tree ran first. **Three
+//! alternations, identical flags, one session** — and if a result survives only
+//! two, it has not survived.
+//!
+//! ## Debug: a direction, not a magnitude
+//!
+//! One run of each, so this is what it is worth:
+//!
+//! | Section | S6 | S7 | |
+//! |---|---:|---:|---|
+//! | `bench/corpus/` total | 257.7 s | 261.1 s | 1.013× |
+//! | `lowerPriority` | 4048.3 ms | 4049.2 ms | **1.000×** |
+//! | autolink | 871.3 ms | 887.9 ms | 1.019× |
+//! | one 4000-character word run | 402.7 ms | 404.3 ms | 1.004× |
+//! | `bare URLs that match` | 13.08 ms | 13.40 ms | 1.024× |
+//! | **`bare emails that match`** | 19.39 ms | 20.03 ms | **1.033×** |
+//! | a trimmable tail | 112.6 ms | 115.0 ms | 1.022× |
+//!
+//! Prediction 2 is **half confirmed and should be read that way**. The email
+//! row is the largest move and it is the one row with an identified mechanism.
+//! But `bare URLs` moved 1.024× and reaches no new assertion, and these are
+//! single runs — where the release section above has just demonstrated a
+//! systematic first-run bias. Debug is somewhere between unchanged and ~3%
+//! slower; the magnitude is not established.
+//!
+//! The unambiguous number is the **`lowerPriority` set at 1.000×**, and it is
+//! the control: no autolink, almost no completed link, so it reaches none of
+//! the five assertions — and it did not move by a microsecond over four seconds
+//! of work.
+//!
+//! The debug/release ratio is 261.1 / 16.3 = **16.0×**, the same as S4's, S5's
+//! and S6's. It has moved once in the milestone, at S4, which added a container.
 //!
 //! # What S3 changed, and it is the opposite of what S2 predicted
 //!

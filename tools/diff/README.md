@@ -1,16 +1,35 @@
 # Differential testing against the TypeScript engine (§11.2)
 
+There are **two** of these, one per layer, and they share everything except what
+they compare.
+
 ```text
-corpus file ──┬──► node harness → @muyajs/core → state JSON ──┐
-              │                                                ├──► assert equal
-              └──► mt-md (via mt-cli --dump-state) ────────────┘
+block state (§11.2) — what mt-md will produce
+corpus file ──┬──► node → @muyajs/core → state JSON ──┐
+              │                                        ├──► assert equal
+              └──► mt-md (via mt-cli --dump-state) ────┘
+
+token stream (M1 §5 D3) — what mt-inline produces
+input string ─┬──► node → muya tokenizer → token JSON ─┐
+              │                                         ├──► assert equal
+              └──► mt_inline::tokenizer ────────────────┘
 ```
 
 ```sh
-cargo xtask diff                    # the whole corpus
+cargo xtask diff                    # block state, the whole corpus
 cargo xtask diff --require-ts       # fail, don't skip, if the TS engine is missing
 cargo xtask diff bench/corpus/cjk.md
+
+cargo xtask divergences             # token streams: the register + a 4,264-input sweep
+cargo xtask divergences --no-sweep  # the register alone, for a fast local loop
+cargo xtask divergences --full-sweep  # 41,009 inputs, ~120 s; the nightly soak runs this
 ```
+
+**Neither subsumes the other.** Block state does not carry inline tokens, and a
+token stream has no blocks. The token-stream half landed at M1 S7 and is what
+makes `spec/divergences.json` enforceable — before it, every register entry
+reported `SKIPPED` and reverting a fix still exited 0. The rest of this document
+is about the block-state half; `xtask/src/tokens.rs` documents the other.
 
 ## Why this is the highest-value test asset in the project
 
@@ -34,6 +53,16 @@ writing any of `mt-inline`.
 | Rust dumper | `mt-cli --dump-state` | Same input, same output shape. Currently a stub. |
 | Comparator | `xtask/src/diff.rs` | Spawns both, compares, reports per-file pass/fail. All the pass/fail logic lives here, in one place. |
 
+The token-stream half has the same three, one layer down — and the third piece
+is a function call rather than a process, because `xtask` can depend on
+`mt-inline` directly:
+
+| Piece | Where | Role |
+|---|---|---|
+| TypeScript dumper | `tools/diff/dump-ts-tokens.mjs` | Loads `tokenizer` from `inlineRenderer/lexer.ts` with a happy-dom `DOMParser` registered, which `getAttributes` needs or `html_tag` throws. |
+| Rust side | `xtask/src/tokens.rs::wire_with` | Serializes an `mt_inline::Token` into muya's wire shape. |
+| Comparator | `xtask/src/divergences.rs` | Runs the register's own inputs as a negative control, then the sweep, and reports per-entry `ok`/`STALE` plus any unregistered disagreement. |
+
 ## Contracts the two dumpers share
 
 Both must agree on all four of these, or a disagreement stops being
@@ -42,7 +71,12 @@ interpretable:
 1. **Options.** `MUYA_DEFAULT_OPTIONS` in the Node script mirrors
    `mt_md::Options::MUYA_DEFAULT`; `SPEC_OPTIONS` mirrors `Options::SPEC`.
    Driving the two engines with different flags produces differences that mean
-   nothing.
+   nothing. The token dumper's `MUYA_DEFAULT_SYNTAX` mirrors
+   `mt_inline::TokenizerOptions::muya_default()` for the same reason — and it
+   accepts per-input `labels` and `footnote` because three of the 26 token types
+   are unreachable without them, so a comparator driven by the defaults alone
+   would ship `reference_link`, `reference_image` and `footnote_identifier`
+   never having been compared at all.
 2. **Input normalisation.** Strip a UTF-8 BOM, normalise CRLF to LF. muya
    normalises to LF internally, so a CRLF corpus file would otherwise
    disagree for a reason that has nothing to do with parsing.

@@ -1,0 +1,59 @@
+[package]
+name = "mt-inline-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+# Its own workspace, deliberately.
+#
+# `cargo fuzz` needs a **nightly** toolchain (`-Zsanitizer`, `-Cpasses=sancov-
+# module`) and `libfuzzer-sys` builds a bundled C++ libFuzzer. Neither belongs
+# in the main lockfile: `rust-toolchain.toml` pins stable so that CI surfaces
+# new clippy lints as they land, and putting a nightly-only dependency in front
+# of every `cargo build` on three platforms — for the sake of one scheduled
+# Linux job — would trade the whole project's build for one job's convenience.
+#
+# The cost of the split is that `cargo test --workspace` does not compile these
+# targets, so a change to `mt-inline`'s public API can break them silently.
+# `.github/workflows/soak.yml` runs `cargo fuzz build` on every dispatch, and
+# `fuzz/README.md` says to run it after an API change.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mt-inline = { path = "../crates/mt-inline" }
+
+[profile.release]
+debug = true
+# **The assertions are the point.** M1.md §6 records four branches this crate
+# proves unreachable and reproduces anyway, each with the proof as a test; S7
+# turned each proof into a `debug_assert!` so a fuzzer can falsify it rather
+# than agree with it. A release profile with assertions compiled out would run
+# faster and check less — and "less" here is precisely the four claims nobody
+# has been able to break by hand.
+debug-assertions = true
+overflow-checks = true
+
+[[bin]]
+name = "tokenize"
+path = "fuzz_targets/tokenize.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "autolink"
+path = "fuzz_targets/autolink.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "backtracking"
+path = "fuzz_targets/backtracking.rs"
+test = false
+doc = false
+bench = false

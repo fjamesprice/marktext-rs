@@ -36,15 +36,44 @@
 //! console.log(tokenizer('#x', {}).map(t => t.type));
 //! ```
 //!
-//! # Why this is not `cargo xtask diff`
+//! # Why this is not `cargo xtask diff` — **decided at S7: this file stays**
 //!
-//! It should be, eventually. The differential harness (§11.2) compares
-//! **block state**, not token streams, so it cannot run these today; when it
-//! grows a token-stream mode this file becomes redundant and should be
-//! deleted in favour of it. Until then, hand-transcribed goldens are the
-//! difference between "the classes are checked against muya" and "the classes
-//! are checked against my reading of ECMA-262", and the first is what the
-//! milestone's verification strategy rests on.
+//! This header used to say:
+//!
+//! > It should be, eventually. The differential harness (§11.2) compares
+//! > **block state**, not token streams, so it cannot run these today; when it
+//! > grows a token-stream mode this file becomes redundant and should be
+//! > deleted in favour of it.
+//!
+//! S7 built that token-stream mode (`cargo xtask divergences`,
+//! `xtask/src/tokens.rs`), so the decision fell due. **The file is kept**, and
+//! the sentence above was wrong about one thing: the two are not the same
+//! check, so one cannot be redundant with respect to the other.
+//!
+//! Two reasons, the first decisive.
+//!
+//! - **This runs on a machine with no marktext clone; the harness does not.**
+//!   `cargo xtask divergences` reports `SKIPPED` and exits 0 without the
+//!   reference engine — that is deliberate and `--require-ts` is what makes CI
+//!   demand it. Delete this file and the C2 expectations — the single most
+//!   trap-laden area of the port, the one §4 C2 calls *"faithful-port traps
+//!   that will not show up as compile errors"* — would be checked by nothing at
+//!   all on a contributor's `cargo test`.
+//! - **A golden and a live comparison fail differently.** This file asserts
+//!   *what muya did*, transcribed by a human; the harness asserts *what muya
+//!   does*, now. A wrong transcription is invisible here and caught there; a
+//!   reference engine that is merely absent is invisible there and caught here.
+//!
+//! So they are wired to complement rather than to overlap. S7 added
+//! `C2_CHARACTERS × C2_CONTEXTS` to the harness's sweep — 35 trap characters in
+//! 27 contexts that each reach a rule using one of the classes, about a
+//! thousand inputs, run against the live engine on every commit. That set is a
+//! **superset in kind** of this file's rows and was written from §4 C2's table
+//! rather than copied from here, which is what makes it capable of catching a
+//! mis-transcription instead of reproducing one.
+//!
+//! What is *not* duplicated is the expectation: the sweep asserts agreement and
+//! names no types, this file names types and asserts nothing about agreement.
 //!
 //! # Scope
 //!
