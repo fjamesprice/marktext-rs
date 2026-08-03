@@ -274,9 +274,11 @@ fn parse_attributes(src: &str) -> Vec<(&str, &str)> {
         pairs.push((name, ""));
     }
 
-    // JS sorts by name only, with a stable sort. `sort_by` in Rust is stable
-    // too, so attributes repeating the same name keep source order in both.
-    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+    // JS sorts by name only, with a stable sort. `sort_by_key` in Rust is
+    // stable too, so attributes repeating the same name keep source order in
+    // both. Sorting by the *name* alone rather than by the pair is the whole
+    // point — comparing `(name, value)` would reorder repeats.
+    pairs.sort_by_key(|(name, _)| *name);
     pairs
 }
 
