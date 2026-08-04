@@ -84,7 +84,25 @@ pub enum Block {
         /// — a fence opened with ```` ```` ```` (four backticks) must be
         /// re-emitted with four, not normalised to three, or a fence
         /// containing a three-backtick sequence silently breaks.
-        fence_len: Option<u8>,
+        ///
+        /// # Widened from `u8` at M2 S4, and the reason is the constraint above
+        ///
+        /// M0 wrote this as `Option<u8>` and M2.md §10's "Owed by S1" recorded
+        /// what that costs: ``"`".repeat(300)`` opens a 300-backtick fence,
+        /// `marked` carries a JavaScript number, and a `u8` saturates at 255 —
+        /// so the serializer would re-emit 255 backticks and the block would no
+        /// longer contain its own body. That is precisely the round-trip loss
+        /// constraint 3 exists to prevent, in the one shape M0's type could not
+        /// express.
+        ///
+        /// It is `u32` rather than `usize` to match
+        /// [`Block::OrderList::start`], which is the other field carrying a
+        /// JavaScript number, and because a fence longer than four billion
+        /// characters is a document nobody has. No fixture in
+        /// `cargo xtask blocks`' 1344 reaches even 256, which is why this
+        /// waited for the stage that would have lost the data rather than
+        /// being fixed where it was found.
+        fence_len: Option<u32>,
 
         text: Text,
     },
@@ -531,7 +549,8 @@ pub enum BlockMeta {
     CodeBlock {
         kind: CodeKind,
         info: String,
-        fence_len: Option<u8>,
+        /// See [`Block::CodeBlock::fence_len`] — widened from `u8` at M2 S4.
+        fence_len: Option<u32>,
     },
     MathBlock {
         style: MathStyle,

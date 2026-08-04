@@ -70,13 +70,33 @@
 //! ([`SourceMap`]). **The first of D6's three ratchets is awake:**
 //! `cargo xtask diff` compares 22 whole documents where it used to skip them.
 //!
-//! **[`serialize`] and [`render_to_static_html`] still return
-//! [`Unimplemented`], deliberately** — docs/M2.md §5 D6 stages the three
-//! ratchets by entry point so that one harness at a time starts complaining,
-//! and those two are S4's and S5's.
-//!
 //! `cargo xtask blocks` is the finer gate and it compares text by default from
 //! S2 on; `--no-text` is what asks for less.
+//!
+//! ## M2 S4 status — `serialize` answers, and the round trip is a fixed point
+//!
+//! [`serialize`] is `stateToMarkdown.ts` transcribed ([`serialize`], 626 lines
+//! of TypeScript) on top of muya's own [`string_width`], and it is **infallible
+//! from this stage**: `stateToMarkdown.spec.ts` asks what happens to a document
+//! `MarkdownToState` cannot produce, twice, and both times the answer is
+//! degraded output rather than an error.
+//!
+//! `crates/mt-md/tests/round_trip.rs` is the gate that wakes with it, and it is
+//! this crate's contract above run for the first time:
+//! `parse(serialize(parse(s))) == parse(s)` over 1346 inputs — 11 corpus files,
+//! 11 round-trip fixtures and all 1324 spec examples — plus the stronger
+//! `serialize(parse(s)) == s` with the set on which it does not hold
+//! enumerated rather than summarised.
+//!
+//! One measurement is worth carrying here rather than only in the plan:
+//! **the port's serialization of all 1346 is byte-identical to
+//! `ExportMarkdown.generate`'s.** That is what makes both exception lists
+//! readable as facts about the *reference* serializer rather than as this
+//! crate's losses.
+//!
+//! **[`render_to_static_html`] still returns [`Unimplemented`],
+//! deliberately** — docs/M2.md §5 D6 stages the three ratchets by entry point
+//! so that one harness at a time starts complaining, and that one is S5's.
 //!
 //! The direction table above is M0's transcription of §4 and **§4 C2 corrects
 //! its first row**: leaf text is not "captured as raw source slices" — it is a
@@ -86,7 +106,9 @@
 
 pub mod block;
 pub mod labels;
+pub mod serialize;
 pub mod state;
+pub mod string_width;
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -102,13 +124,13 @@ use mt_inline::Labels;
 /// change required. That is the M2 flip described in `spec/README.md`, and
 /// §5 D6 stages it one entry point at a time.
 ///
-/// **[`parse`] and [`dump_state`] no longer return this at all**, and their
-/// signatures say so: they are infallible. A `Result` whose `Err` arm no input
-/// can reach is the shape this milestone keeps learning to distrust, so the arm
-/// was removed rather than left as an unreachable branch.
-/// [`serialize`] and [`render_to_static_html`] keep it because for them it is
-/// still the truth, and `mt-cli`'s exit 3 is still how a caller in another
-/// process hears it.
+/// **[`parse`] and [`dump_state`] stopped returning this at S3, and
+/// [`serialize`] at S4.** Their signatures say so: they are infallible. A
+/// `Result` whose `Err` arm no input can reach is the shape this milestone
+/// keeps learning to distrust, so the arm is removed in the stage that opens
+/// the entry point rather than left as an unreachable branch.
+/// [`render_to_static_html`] keeps it because for it that is still the truth,
+/// and `mt-cli`'s exit 3 is still how a caller in another process hears it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Unimplemented;
 
@@ -341,6 +363,44 @@ impl SourceMap {
     }
 }
 
+/// The **file layer's** normalisation: strip a UTF-8 BOM, then fold `\r\n` and
+/// a lone `\r` to `\n`.
+///
+/// # This is not the parser's job, and S3 measured that the obvious reading is
+/// backwards
+///
+/// `marked`'s `Lexer.lex` opens with `src.replace(/\r\n|\r/g, '\n')`, which
+/// reads as though the parser normalises. **muya does not call `lex`** — its
+/// `lexBlock` calls `new Lexer(defaults).blockTokens(src)` directly, skipping
+/// the preprocessing step — so muya's parser sees carriage returns raw, and
+/// asked directly it proves it: `"a\r\nb\r\n"` is one paragraph whose text is
+/// `"a\r\nb\r"`. Putting this inside [`parse`] would make the port disagree
+/// with the reference engine on any string a caller hands it directly.
+///
+/// So this is the transcription of `tools/diff/dump-ts-state.mjs`'s
+/// `readMarkdown`, whose M0 doc comment already said *"The Rust side must do
+/// the same, and `mt-fs` owns that in the real application"*. `mt-cli` is what
+/// calls it today, `mt-fs` is where it moves when there is a file layer, and
+/// `crates/mt-md/tests/round_trip.rs` calls it because it reads the same files.
+///
+/// It is a pure `&str → String`, so it does not put I/O in this crate: §1's
+/// constraint is about `src/` reaching the filesystem, and this function
+/// reaches nothing.
+///
+/// **One consequence for M4**, recorded on [`SourceMap`] as well: the ranges a
+/// parse returns index the string `parse` was given, so a range from a file
+/// read through this function is an offset into the *normalised* text and not
+/// into the bytes on disk.
+#[must_use]
+pub fn normalize_source(text: &str) -> String {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    if text.contains('\r') {
+        text.replace("\r\n", "\n").replace('\r', "\n")
+    } else {
+        text.to_string()
+    }
+}
+
 /// Markdown → [`Parsed`]. Port of `markdownToState.ts`.
 ///
 /// [`block::parse_blocks`] plus [`labels::collect`], which is what S1 recorded
@@ -360,8 +420,20 @@ pub fn parse(markdown: &str, options: Options) -> Parsed {
 }
 
 /// [`Document`] → markdown. Port of `stateToMarkdown.ts`.
-pub fn serialize(_doc: &Document, _options: Options) -> Result<String, Unimplemented> {
-    Err(Unimplemented)
+///
+/// **Infallible from M2 S4**, and the argument is in [`serialize`]'s module
+/// docs rather than here because it is longer than a signature: a `Document`
+/// can be hand-built with a shape `MarkdownToState` cannot express, so "can it
+/// fail" was the wrong question and "what does muya do" is the right one —
+/// `stateToMarkdown.spec.ts` asks it twice, of a table row with too many cells
+/// and of one with too few, and both times the answer is degraded output rather
+/// than an error.
+///
+/// The only option it reads is [`Options::list_indentation`], which is
+/// `ExportMarkdown`'s only constructor argument.
+#[must_use]
+pub fn serialize(doc: &Document, options: Options) -> String {
+    serialize::to_markdown(doc, options)
 }
 
 /// Markdown → static HTML. Port of `renderToStaticHTML.ts`.
@@ -407,30 +479,27 @@ mod tests {
     /// milestone has not reached reports "unimplemented" rather than panicking,
     /// so the harnesses can distinguish *not built yet* from *broken*.
     ///
-    /// **The `dump_state` assertion was deleted at S3**, in the commit where it
-    /// first returned an answer, and `serialize`'s is the reminder for S4. D6's
-    /// order is `parse`+`dump_state`, then `serialize`, then
-    /// `render_to_static_html`; this test shrinks by one line per stage and
-    /// disappears at S5.
+    /// **The `dump_state` assertion was deleted at S3** and **`serialize`'s at
+    /// S4**, each in the commit where the entry point first returned an answer.
+    /// D6's order is `parse`+`dump_state`, then `serialize`, then
+    /// `render_to_static_html`; this test shrinks by one clause per stage and
+    /// disappears at S5, which is the only stage left in it.
     #[test]
     fn entry_points_report_unimplemented_at_m0() {
         assert_eq!(
             render_to_static_html("x", Options::SPEC, false),
             Err(Unimplemented)
         );
-        assert_eq!(
-            serialize(&parse("x", Options::MUYA_DEFAULT).document, Options::SPEC),
-            Err(Unimplemented)
-        );
     }
 
-    /// D6's first ratchet, at its narrowest: the two entry points S3 opened
+    /// D6's ratchets, at their narrowest: the entry points S3 and S4 opened
     /// return an answer at all.
     ///
-    /// The *content* of that answer is `cargo xtask diff`'s claim over 22 whole
-    /// documents and `cargo xtask blocks`'s over 1344 inputs — neither of which
-    /// runs under `cargo test`, which is why this asserts the thing they
-    /// cannot: that the door is open.
+    /// The *content* of those answers is `cargo xtask diff`'s claim over 22
+    /// whole documents, `cargo xtask blocks`'s over 1344 inputs, and
+    /// `tests/round_trip.rs`'s over 1346 — the first two of which do not run
+    /// under `cargo test`, which is why this asserts the thing they cannot:
+    /// that the doors are open.
     #[test]
     fn parse_and_dump_state_answer_from_s3_on() {
         let parsed = parse("# hi\n\n[a]: /u\n", Options::MUYA_DEFAULT);
@@ -440,6 +509,35 @@ mod tests {
 
         let json = dump_state("# hi\n", Options::MUYA_DEFAULT);
         assert!(json.contains("\"atx-heading\""), "{json}");
+    }
+
+    /// D6's second ratchet, the same way.
+    #[test]
+    fn serialize_answers_from_s4_on() {
+        let source = "# hi\n\n- a\n- b\n";
+        let parsed = parse(source, Options::MUYA_DEFAULT);
+        assert_eq!(serialize(&parsed.document, Options::MUYA_DEFAULT), source);
+    }
+
+    /// The file layer's rule, and the assertion that `parse` does **not** apply
+    /// it — muya's `lexBlock` calls `blockTokens` directly and never sees
+    /// `Lexer.lex`'s preprocessing, so its parser keeps carriage returns and so
+    /// does this one.
+    #[test]
+    fn normalize_source_is_the_file_layers_rule_and_not_the_parsers() {
+        assert_eq!(normalize_source("a\r\nb\r\n"), "a\nb\n");
+        assert_eq!(normalize_source("a\rb\r"), "a\nb\n");
+        assert_eq!(normalize_source("\u{feff}# h\n"), "# h\n");
+        // A BOM that is not at position 0 is content, not a BOM.
+        assert_eq!(normalize_source("a\u{feff}b\n"), "a\u{feff}b\n");
+
+        let parsed = parse("a\r\nb\r\n", Options::MUYA_DEFAULT);
+        let text = parsed
+            .document
+            .block(parsed.document.children(parsed.document.root())[0])
+            .and_then(mt_doc::Block::text)
+            .expect("a paragraph");
+        assert_eq!(text.to_str(), "a\r\nb\r", "measured from muya, not chosen");
     }
 
     #[test]

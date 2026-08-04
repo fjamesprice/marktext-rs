@@ -10,6 +10,22 @@ repository.workspace = true
 [dependencies]
 mt-doc.workspace = true
 
+# M2 S4, for one pattern: `/\p{Mn}|\p{Me}/u` in `src/string_width.rs`.
+#
+# muya's `utils/stringWidth.ts` inlines its East-Asian ranges by hand and uses a
+# Unicode general-category escape for combining marks. The ranges are
+# transcribed as a table because they *are* a hand-written list and reproducing
+# the list is the point; the category class is not, because hand-inlining a few
+# hundred `Mn`/`Me` ranges would be a table that drifts from the Unicode version
+# silently. Column width is what `_serializeTable`'s padding is made of, so a
+# one-column disagreement is a byte difference in a round trip that is supposed
+# to be the identity.
+#
+# It adds no crate to the graph: `mt-md` already depends on `mt-inline`, whose
+# own dependency this is, so `cargo xtask deps` still counts 14. Pure — no I/O,
+# no windowing, no GPU — so §1's constraint for `mt-md` holds.
+fancy-regex.workspace = true
+
 # M2 S3, and it was a dev-dependency until this stage. `parse` returns the label
 # map (`src/labels.rs`), whose type and whose regex are both `mt-inline`'s:
 # `Labels` is what `TokenizerOptions::labels` takes, and

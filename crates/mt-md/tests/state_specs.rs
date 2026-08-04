@@ -84,11 +84,10 @@
 //! claim, and this stage deleted it, as its own doc comment said to.
 //!
 //! **From S3** `mt_md::parse` answers, so a listed case fails for one of two
-//! reasons: the entry point it needs is still closed (`serialize` at S4,
-//! `render_to_static_html` at S5) or the port does not agree with muya yet. The
-//! second kind is the interesting one and it is enumerated rather than left in
-//! the pile — see
-//! [`the_only_listed_cases_that_fail_for_their_own_reason_are_the_three_m2_names`].
+//! reasons: the entry point it needs is still closed (`render_to_static_html`
+//! at S5) or the port does not agree with muya yet. The second kind is the
+//! interesting one and it is enumerated rather than left in the pile — see
+//! [`the_only_listed_cases_that_fail_for_their_own_reason_are_the_ten_m2_names`].
 //!
 //! Three of the 187 were **not** listed at S0, because they passed then: the
 //! `strongCjkFlanking` cases that go through the inline tokenizer rather than
@@ -100,6 +99,9 @@
 //!
 //! **S3 delisted 63**, leaving 121 — the arithmetic and the three corrections
 //! it forced on M2.md's §6 and §7 are in that document's "S3's verification".
+//! **S4 delisted 79**, leaving 42: thirty-two of them are S5's
+//! `render_to_static_html`, one is S5's footnote block extension, and the other
+//! nine are the finding S4 turned up, enumerated in `KNOWN` below.
 //!
 //! **Caveat, inherited:** the ratchet uses `catch_unwind`, so
 //! `cargo test --release` aborts rather than catching (the release profile
@@ -194,7 +196,7 @@ fn parse(markdown: &str, options: Options) -> Document {
 }
 
 fn serialize(doc: &Document, options: Options) -> String {
-    mt_md::serialize(doc, options).unwrap_or_else(|e| panic!("mt_md::serialize: {e:?} — {e}"))
+    mt_md::serialize(doc, options)
 }
 
 /// `markdown → state → markdown`, the shape most of these specs assert on.
@@ -629,103 +631,31 @@ const TRANSCRIBED: &[(&str, usize)] = &[
 /// `const` needs no parser, no dependency and no path resolution. Move it to
 /// `spec/` if `xtask` ever needs to report on it.
 const PENDING: &[&str] = &[
-    // block_serialization — 19
-    "block_serialization::round_trips_an_atx_heading_at_every_level",
-    "block_serialization::round_trips_a_setext_h1_with_equals_underline",
-    "block_serialization::round_trips_a_setext_h2_with_dashes_underline",
-    "block_serialization::round_trips_a_thematic_break",
-    "block_serialization::round_trips_a_fenced_code_block_with_a_language_tag",
-    "block_serialization::round_trips_a_fenced_code_block_without_a_language_tag",
-    "block_serialization::round_trips_a_fenced_code_block_containing_blank_lines",
-    "block_serialization::round_trips_a_single_line_blockquote",
-    "block_serialization::round_trips_a_multi_line_blockquote",
-    "block_serialization::round_trips_a_nested_blockquote",
-    "block_serialization::round_trips_a_dollar_dollar_math_block",
-    "block_serialization::round_trips_a_simple_2x2_table_with_default_alignment",
-    "block_serialization::round_trips_a_table_with_explicit_alignment",
-    "block_serialization::round_trips_a_cell_containing_an_escaped_pipe",
-    "block_serialization::serialises_an_empty_trailing_cell_as_a_blank_cell",
-    "block_serialization::round_trips_an_indented_code_block",
-    "block_serialization::round_trips_a_multi_line_indented_code_block",
-    "block_serialization::round_trips_a_yaml_frontmatter_block",
-    // code_fence_info_string — 4
-    "code_fence_info_string::preserves_a_pandoc_style_attribute_info_string",
-    "code_fence_info_string::preserves_a_language_followed_by_attributes",
-    "code_fence_info_string::leaves_a_plain_single_word_language_unchanged",
-    "code_fence_info_string::leaves_a_language_less_fence_unchanged",
-    // code_fence_length — 3
-    "code_fence_length::keeps_a_fence_long_enough_to_wrap_content_containing_a_triple_backtick",
-    "code_fence_length::round_trips_a_long_fenced_block_byte_stably",
-    "code_fence_length::still_uses_a_plain_three_backtick_fence_for_ordinary_blocks",
-    // diagram_flowchart_sequence — 5
-    "diagram_flowchart_sequence::round_trips_a_flowchart_diagram_block",
-    "diagram_flowchart_sequence::round_trips_a_sequence_diagram_block",
-    // footnote_html — 6
-    "footnote_html::emits_a_footnotes_section_with_an_li_for_a_single_ref_and_def_pair",
-    "footnote_html::numbers_inline_references_in_source_order",
-    "footnote_html::leaves_an_orphan_inline_reference_as_plain_text",
-    "footnote_html::points_every_repeated_inline_reference_to_the_same_target",
-    "footnote_html::preserves_a_footnote_definition_containing_a_nested_bullet_list",
-    "footnote_html::does_not_transform_a_literal_reference_inside_a_fenced_code_block",
-    // gitlab_math — 16
-    "gitlab_math::serializes_a_gitlab_styled_math_block_back_to_a_math_fence",
-    "gitlab_math::serializes_a_dollar_dollar_math_block_back_to_dollar_dollar",
-    "gitlab_math::keys_the_fence_purely_on_meta_math_style_not_on_the_option",
-    "gitlab_math::preserves_indentation_when_a_gitlab_math_block_is_nested_in_a_list",
-    "gitlab_math::round_trips_a_math_fence_unchanged_with_gitlab_compatibility_on",
-    "gitlab_math::round_trips_dollar_dollar_unchanged_regardless_of_the_flag",
-    "gitlab_math::a_tilde_math_fence_is_promoted_by_muya_unlike_muyajs",
-    // gitlab_math_toggle — 4
-    // info_string_model — 3
-    // list_marker_option — 6
-    "list_marker_option::default_bullet_list_uses_a_dash_marker",
-    "list_marker_option::a_star_bullet_list_marker_emits_star_markers",
-    "list_marker_option::a_plus_bullet_list_marker_emits_plus_markers",
-    "list_marker_option::default_ordered_list_uses_the_period_delimiter",
-    "list_marker_option::a_paren_order_list_delimiter_emits_paren",
-    "list_marker_option::the_paren_delimiter_carries_to_the_ol_bullet_command_label_too",
-    // list_serialization — 30
-    "list_serialization::keeps_consecutive_empty_task_items_on_separate_lines",
-    "list_serialization::keeps_consecutive_empty_bullet_items_on_separate_lines",
-    "list_serialization::keeps_adjacent_empty_bullet_items_before_a_following_paragraph",
-    "list_serialization::keeps_an_empty_bullet_item_between_populated_sibling_items",
+    // list_serialization — 9 of 30, and they are S4's finding rather than S4's
+    // debt. Every one fails at a **reparse**: the serializer emits what muya
+    // emits, and the port then reads it back differently, because CommonMark
+    // will not let an empty bullet (`  * `) or an ordered marker that is not 1
+    // (`   20. `) interrupt a paragraph inside a list item and `marked` will.
+    // `marked` re-lexes an item's dedented content line by line with
+    // `state.top = false`, so the interruption rules never apply there at all.
+    // That is S1's layer and a wider mechanism than the one §10 owed S4 —
+    // M2.md §10's "Owed by S4" carries it with its reproducers, and
+    // `block::tests::the_three_shapes_the_task_marker_fix_does_not_reach` pins
+    // the neighbouring shapes.
     "list_serialization::uses_an_alternate_nested_marker_instead_of_making_a_tight_list_loose",
     "list_serialization::uses_the_same_safe_marker_under_ordered_and_task_list_parents",
     "list_serialization::handles_a_first_empty_nested_item_followed_by_a_non_empty_item",
-    "list_serialization::does_not_rewrite_nested_dash_lists_whose_first_item_is_not_empty",
-    "list_serialization::keeps_already_loose_parent_lists_on_their_original_dash_marker",
-    "list_serialization::serializes_parser_created_empty_list_items_as_separate_lines",
     "list_serialization::indent_by_1_space_round_trips_the_marktext_fixture",
     "list_serialization::indent_by_2_spaces_round_trips_the_marktext_fixture",
     "list_serialization::indent_by_3_spaces_round_trips_the_marktext_fixture",
-    "list_serialization::round_trips_an_ordered_list_nested_inside_a_blockquote",
-    "list_serialization::round_trips_a_bullet_list_nested_inside_a_blockquote",
-    "list_serialization::round_trips_a_blockquote_nested_inside_a_list_item",
-    "list_serialization::round_trips_a_loose_list_with_a_subsequent_paragraph",
-    "list_serialization::round_trips_a_loose_list_containing_a_fenced_code_block",
-    "list_serialization::does_not_emit_trailing_whitespace_on_blank_lines_inside_a_list_item",
-    "list_serialization::round_trips_an_ordered_list_with_two_digit_item_numbers",
     "list_serialization::indent_by_4_spaces_round_trips_the_marktext_fixture",
     "list_serialization::indent_using_daring_fireball_round_trips_the_marktext_fixture",
     "list_serialization::treats_the_unimplemented_tab_option_as_a_1_space_indent",
-    "list_serialization::inserts_blank_lines_between_items_when_loose_is_true",
-    "list_serialization::keeps_items_adjacent_when_loose_is_false",
-    "list_serialization::keeps_a_non_1_start_number_through_the_round_trip",
-    "list_serialization::emits_the_configured_delimiter_for_an_ordered_list",
-    "list_serialization::combines_a_non_1_start_with_the_paren_delimiter",
-    // markdown_to_state — 32
-    "markdown_to_state::parses_an_empty_task_marker_with_lazy_continuation_text_as_a_task_item",
-    "markdown_to_state::keeps_lazy_continuation_text_on_the_final_empty_task_marker",
+    // markdown_to_state — 1 of 32. `Options::footnote` has no block extension;
+    // §10's "Owed by S3" item 3 puts it at S5, with `footnoteHtml`'s six.
     "markdown_to_state::converts_block_level_footnote_tokens_into_footnote_states",
-    "markdown_to_state::round_trips_a_single_paragraph_footnote_through_state",
-    "markdown_to_state::honours_the_trim_option_through_a_state_to_markdown_round_trip",
-    // math_trailing_space — 3
-    // nested_mixed_lists — 4
-    "nested_mixed_lists::preserves_a_bullet_list_nested_inside_an_ordered_list_item_round_trip",
-    "nested_mixed_lists::preserves_an_ordered_list_nested_inside_a_bullet_list_item_round_trip",
-    // reference_link — 8
-    "reference_link::round_trip_output_contains_the_reference_definition_line",
-    // render_to_static_html — 20
+    // render_to_static_html — 20. S5's, and the largest single block of what is
+    // left.
     "render_to_static_html::renders_a_simple_paragraph",
     "render_to_static_html::renders_headings_with_id_less_h_tags",
     "render_to_static_html::renders_bullet_and_ordered_lists",
@@ -746,29 +676,22 @@ const PENDING: &[&str] = &[
     "render_to_static_html::preserves_arbitrary_raw_html_tags_when_sanitize_is_false",
     "render_to_static_html::does_not_strip_script_when_sanitize_is_false",
     "render_to_static_html::still_strips_script_when_sanitize_is_true",
-    // soft_break_export_html — 3
+    // footnote_html — 6. S5's, and the stage that lands the footnote extension.
+    "footnote_html::emits_a_footnotes_section_with_an_li_for_a_single_ref_and_def_pair",
+    "footnote_html::numbers_inline_references_in_source_order",
+    "footnote_html::leaves_an_orphan_inline_reference_as_plain_text",
+    "footnote_html::points_every_repeated_inline_reference_to_the_same_target",
+    "footnote_html::preserves_a_footnote_definition_containing_a_nested_bullet_list",
+    "footnote_html::does_not_transform_a_literal_reference_inside_a_fenced_code_block",
+    // soft_break_export_html — 3. S5's.
     "soft_break_export_html::keeps_a_paragraph_soft_break_as_a_newline_never_a_br",
     "soft_break_export_html::keeps_a_soft_break_inside_a_tight_list_item_never_a_br",
     "soft_break_export_html::leaves_a_real_hard_break_as_a_br",
-    // state_to_markdown — 11
-    "state_to_markdown::does_not_crash_when_a_body_row_has_more_cells_than_the_header",
-    "state_to_markdown::does_not_crash_when_a_body_row_has_fewer_cells_than_the_header",
-    "state_to_markdown::serialises_a_well_formed_table_normally",
-    "state_to_markdown::aligns_a_column_whose_cells_contain_combining_marks",
-    "state_to_markdown::widens_a_column_to_fit_east_asian_wide_characters",
-    "state_to_markdown::renders_the_delimiter_row_from_per_column_align",
-    "state_to_markdown::the_header_row_drives_the_delimiter_not_body_rows",
-    "state_to_markdown::round_trips_a_left_center_right_table_to_a_byte_stable_delimiter_row",
-    "state_to_markdown::escapes_a_pipe_at_the_very_start_of_a_cell",
-    "state_to_markdown::escapes_both_of_two_consecutive_pipes_in_a_cell",
-    "state_to_markdown::round_trips_a_cell_starting_with_a_pipe_byte_stably",
-    // strong_cjk_flanking — 3 of 6; the other 3 pass today (see the module docs)
+    // strong_cjk_flanking — 3 of 6, the static/export half. The other three go
+    // through the inline tokenizer and passed at S0.
     "strong_cjk_flanking::static_path_recognises_strong_in_the_sanity_cases",
     "strong_cjk_flanking::static_path_recognises_strong_in_cjk_context",
     "strong_cjk_flanking::static_path_does_not_bold_or_italicise_the_negative_cases",
-    // table_escaped_pipe — 4
-    "table_escaped_pipe::round_trips_the_escaped_pipes",
-    "table_escaped_pipe::round_trips_an_escaped_pipe_in_plain_cell_text",
 ];
 
 // ---------------------------------------------------------------------------
@@ -821,8 +744,8 @@ fn every_pending_entry_names_a_transcribed_case() {
     );
     assert_eq!(
         PENDING.len(),
-        121,
-        "187 transcribed; 3 passed at S0 and S3 delisted 63"
+        42,
+        "187 transcribed; 3 passed at S0, S3 delisted 63 and S4 delisted 79"
     );
 }
 
@@ -840,29 +763,54 @@ fn every_pending_entry_names_a_transcribed_case() {
 // does not agree with muya yet — and the second is the whole point of the list.
 // The ratchet's four rows are what guard it from here.
 
-/// **The three listed cases that fail for a reason of their own**, and the
-/// claim that they are the only three.
+/// **The listed cases that fail for a reason of their own**, and the claim that
+/// they are the only ones.
 ///
 /// From S3 a listed case fails for one of two reasons: the entry point it needs
-/// is still closed (`serialize` at S4, `render_to_static_html` at S5), or the
-/// port does not agree with muya yet. The first is bookkeeping and the second
-/// is a finding — and a list of 122 hides the difference, which is exactly how
-/// the S0 test this replaces stopped being able to tell them apart.
+/// is still closed (`render_to_static_html` at S5), or the port does not agree
+/// with muya yet. The first is bookkeeping and the second is a finding — and a
+/// list of 42 hides the difference, which is exactly how the S0 test this
+/// replaces stopped being able to tell them apart.
 ///
 /// So the second kind is enumerated. Each name here is a disagreement M2.md
 /// records, with its measured reproducer and the stage that owes it; the
-/// assertion is that **no fourth one is hiding in the list**. A new name
+/// assertion is that **no further one is hiding in the list**. A new name
 /// appearing means a stage introduced a disagreement, and a name that stops
 /// failing means one was fixed without this being updated.
+///
+/// # It went from three to ten at S4, and that is two events rather than one
+///
+/// **Two came off**: `- [ ] \ntext` folds into the task item now
+/// (`Builder::fold_empty_task_marker_continuations`), which is the fix §10
+/// owed S4.
+///
+/// **Nine went on**, and they were invisible until `serialize` opened: every
+/// one is a `listSerialization` round trip that reaches the *reparse* it could
+/// not reach before. They are one mechanism — `marked` re-lexes a list item's
+/// dedented content line by line, so a list start inside an item never has to
+/// interrupt a paragraph, and CommonMark's rules about which list starts may do
+/// so never apply. Nine cases, two shapes: an **empty** bullet (`  * `) and an
+/// ordered marker that is **not 1** (`   20. `).
+///
+/// That is the shape §6 predicted would appear at every stage and the reason it
+/// asks for the arithmetic to be run rather than read: a file marked S4 whose
+/// cases need S1's layer.
 #[test]
-fn the_only_listed_cases_that_fail_for_their_own_reason_are_the_three_m2_names() {
-    /// M2.md §10, "Owed by S3". Two are the empty-task-marker lazy
-    /// continuation (`- [ ] \ntext`), which `marked` folds into the item and
-    /// GFM does not; one is `Options::footnote`, whose block extension is not
-    /// ported.
+fn the_only_listed_cases_that_fail_for_their_own_reason_are_the_ten_m2_names() {
+    /// M2.md §10. Nine are "Owed by S4" — the port's parse of markdown its own
+    /// serializer produced, where `marked` starts a list inside a list item and
+    /// CommonMark keeps the paragraph open. One is "Owed by S3" item 3,
+    /// `Options::footnote`'s missing block extension, which is S5's.
     const KNOWN: &[&str] = &[
-        "markdown_to_state::parses_an_empty_task_marker_with_lazy_continuation_text_as_a_task_item",
-        "markdown_to_state::keeps_lazy_continuation_text_on_the_final_empty_task_marker",
+        "list_serialization::uses_an_alternate_nested_marker_instead_of_making_a_tight_list_loose",
+        "list_serialization::uses_the_same_safe_marker_under_ordered_and_task_list_parents",
+        "list_serialization::handles_a_first_empty_nested_item_followed_by_a_non_empty_item",
+        "list_serialization::indent_by_1_space_round_trips_the_marktext_fixture",
+        "list_serialization::indent_by_2_spaces_round_trips_the_marktext_fixture",
+        "list_serialization::indent_by_3_spaces_round_trips_the_marktext_fixture",
+        "list_serialization::indent_by_4_spaces_round_trips_the_marktext_fixture",
+        "list_serialization::indent_using_daring_fireball_round_trips_the_marktext_fixture",
+        "list_serialization::treats_the_unimplemented_tab_option_as_a_1_space_indent",
         "markdown_to_state::converts_block_level_footnote_tokens_into_footnote_states",
     ];
 
@@ -880,10 +828,9 @@ fn the_only_listed_cases_that_fail_for_their_own_reason_are_the_three_m2_names()
             .cloned()
             .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
             .unwrap_or_else(|| "<non-string panic payload>".to_string());
-        // The two helpers that still panic name themselves in the panic.
-        if !message.contains("mt_md::serialize")
-            && !message.contains("mt_md::render_to_static_html")
-        {
+        // The one helper that still panics names itself in the panic.
+        // `serialize`'s clause came out at S4, when it stopped being able to.
+        if !message.contains("mt_md::render_to_static_html") {
             found.push((name, message.lines().next().unwrap_or("").to_string()));
         }
     }

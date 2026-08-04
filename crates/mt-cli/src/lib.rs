@@ -186,12 +186,19 @@ where
 ///
 /// `mt-fs` inherits this when it exists; the doc comment moves with it.
 fn read_markdown(text: &str) -> String {
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    if text.contains('\r') {
-        text.replace("\r\n", "\n").replace('\r', "\n")
-    } else {
-        text.to_string()
-    }
+    // **One rule, one implementation, from M2 S4.** S3 wrote this here because
+    // `mt-cli` was the only caller; S4 needs it a second time, in
+    // `mt-md`'s round-trip gate, which reads the same files and would
+    // otherwise be a fourth spelling of a rule that already has three
+    // (`dump-ts-state.mjs`'s `readMarkdown`, this, and `blocks.rs`'s
+    // pre-normalisation). A second spelling is how S3's first `cargo xtask
+    // diff` run came out 11 of 22 red on a `\r`.
+    //
+    // It lives in `mt-md` rather than here because that is the crate both
+    // callers can reach, and it is a **pure string function** — the I/O is
+    // still `std::fs::read_to_string` above, which is still `mt-cli`'s. Its
+    // own docs say why `mt_md::parse` must not call it.
+    mt_md::normalize_source(text)
 }
 
 /// Run a parsed command, writing to `out`. Returns the process exit code.

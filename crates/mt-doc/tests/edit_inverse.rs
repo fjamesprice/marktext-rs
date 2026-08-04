@@ -129,7 +129,7 @@ fn leaf_block() -> impl Strategy<Value = Block> {
         (
             prop_oneof![Just(CodeKind::Fenced), Just(CodeKind::Indented)],
             "[a-z]{0,4}( [a-z]{1,3})?",
-            proptest::option::of(3u8..=6),
+            proptest::option::of(3u32..=6),
             text.clone()
         )
             .prop_map(|(kind, info, fence_len, text)| Block::CodeBlock {

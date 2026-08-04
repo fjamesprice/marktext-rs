@@ -186,6 +186,7 @@ version = "0.1.0"
 name = "mt-md"
 version = "0.1.0"
 dependencies = [
+ "fancy-regex",
  "mt-doc",
  "mt-inline",
  "pulldown-cmark",

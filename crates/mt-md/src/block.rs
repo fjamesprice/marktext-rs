@@ -438,6 +438,7 @@ fn build(markdown: &str, options: Options) -> Vec<Built> {
     let end = root.range.end;
     builder.scan_gap(&mut root, end);
     debug_assert!(builder.stack.is_empty(), "unbalanced frames");
+    builder.fold_empty_task_marker_continuations(&mut root.children);
     top.extend(root.children);
     top
 }
@@ -682,6 +683,9 @@ impl<'a> Builder<'a> {
 
             FrameKind::BlockQuote => {
                 self.absorb_trailing_blank_quote_line(&mut frame);
+                // Before the prefix is popped, because the fold measures the
+                // task marker's column in the *container-stripped* line.
+                self.fold_empty_task_marker_continuations(&mut frame.children);
                 self.prefixes.pop();
                 Built {
                     // Mechanism 2, muya #1735: `>` alone is a block quote
@@ -701,6 +705,7 @@ impl<'a> Builder<'a> {
             } => {
                 let blanks = self.item_blank_lines(&frame);
                 self.record_item_looseness(real_paragraph, blanks);
+                self.fold_empty_task_marker_continuations(&mut frame.children);
                 self.prefixes.pop();
                 let block = match task {
                     Some(checked) => Block::TaskListItem {
@@ -765,6 +770,211 @@ impl<'a> Builder<'a> {
     /// A source range with every enclosing container's prefix removed.
     fn strip(&self, range: &Range<usize>) -> Vec<StrippedLine> {
         strip_lines(self.src, range, &self.prefixes)
+    }
+
+    // -----------------------------------------------------------------------
+    // Mechanism 5 — an empty task marker takes a lazy continuation
+    // -----------------------------------------------------------------------
+
+    /// `- [ ] \ntext` is **one** task item in `marked` and was an item plus a
+    /// paragraph here until S4. This is the fix §10's "Owed by S3" asked for,
+    /// and it is stated as the rule rather than as the symptom.
+    ///
+    /// # The mechanism, from both sides
+    ///
+    /// To `marked` a list item's content is the source text after the bullet —
+    /// for `- [ ] ` that is the string `"[ ] "`, which is **not blank** — so
+    /// `Tokenizer.list`'s continuation loop keeps consuming lines into the item
+    /// exactly as it would after `- a`. The `[ ] ` prefix comes off afterwards,
+    /// in `compatibleTaskList.normalizeEmptyTaskItem`, whose two regexes
+    /// (`EMPTY_TASK_REG` and `TASK_MARKER_PREFIX_REG`) are what make the item a
+    /// task item at all — `marked`'s own `listIsTask` is `/^\[[ xX]\] +\S/` and
+    /// a marker at end of line has no `\S` after it, so `marked` never flags one.
+    ///
+    /// To GFM the `[ ]` is a **task-list marker** rather than paragraph
+    /// content, so `pulldown-cmark` leaves the item empty, closes the list, and
+    /// starts a new block at column 0.
+    ///
+    /// # What is folded, and the four rules that bound it
+    ///
+    /// Only the shape above, and only where `marked`'s loop would have
+    /// consumed the line:
+    ///
+    /// 1. The list's **last** item is a single line that is nothing but a
+    ///    bullet or an ordered marker, a task checkbox, and trailing blanks —
+    ///    [`bare_task_marker_column`]. An item with any content is one both
+    ///    engines already agree about.
+    /// 2. The next sibling is a **paragraph** beginning on the immediately
+    ///    following line. A blank line closes the item's paragraph in `marked`
+    ///    too (`- [ ] \n\ntext` agrees today), and a heading, a quote, a fence
+    ///    or a thematic break breaks the loop by its own rule.
+    /// 3. Each of that paragraph's lines is dedented by the marker's column if
+    ///    it reaches it, and appended verbatim if it does not — which is
+    ///    `nextLineWithoutTabs.slice(indent)` against `nextLine`, the two arms
+    ///    of the loop's one `if`.
+    /// 4. An **ordered** list keeps the marker in the item's text and a bullet
+    ///    list does not, because `compatibleTaskList` only calls
+    ///    `stripTaskTextPrefix` in its bullet branch. `1. [ ] \ntext` is an
+    ///    `order-list` holding `"[ ] \ntext"`; `- [ ] \ntext` is a `task-list`
+    ///    holding `"text"`. Measured, both.
+    ///
+    /// Then, and only then, a following list of the same kind is **merged**
+    /// back: `- [ ] \ntext\n- [ ] b` is one `marked` list all along, and the
+    /// port only saw two because the paragraph interrupted it. A blank line in
+    /// the gap makes the merged list loose, which is where `marked` gets
+    /// looseness from as well.
+    ///
+    /// # What it deliberately does not do
+    ///
+    /// `marked` re-lexes an item's dedented content **line by line** with
+    /// `state.top = false`, so any line at all can start a block inside an
+    /// item, and CommonMark's paragraph-interruption rules do not apply there.
+    /// That is a wider disagreement than this one and S4 found it rather than
+    /// fixing it — M2.md §10's "Owed by S4" names it with its reproducers, and
+    /// `tests::an_empty_task_marker_takes_a_lazy_continuation` pins the
+    /// boundary of what *is* folded.
+    fn fold_empty_task_marker_continuations(&self, children: &mut Vec<Built>) {
+        let mut i = 0;
+        while i + 1 < children.len() {
+            if self.fold_one_task_marker(children, i) {
+                // The same index again: a merge can expose another bare marker
+                // at the end of the merged list. It terminates because a fold
+                // always gives the last item content, and a merge always
+                // removes a sibling.
+                continue;
+            }
+            i += 1;
+        }
+    }
+
+    /// One fold at `i`, or `false` if the shape is not there.
+    fn fold_one_task_marker(&self, children: &mut Vec<Built>, i: usize) -> bool {
+        let Some((indent, marker_line)) = self.bare_task_marker(&children[i]) else {
+            return false;
+        };
+        let ordered = matches!(children[i].block, Block::OrderList { .. });
+
+        let Block::Paragraph { text } = &children[i + 1].block else {
+            return false;
+        };
+        let continuation = text.to_str().into_owned();
+        let paragraph_range = children[i + 1].range.clone();
+
+        // Rule 2, and the boundary it is protecting is one byte wide: an
+        // item's range may or may not include the newline that ends it, so the
+        // gap is measured from the last **content** byte. `- [ ] \n\ntext`
+        // agrees with muya today and must keep agreeing — a blank line closes
+        // the item's paragraph in `marked` as well.
+        let item_end = trim_trailing_blanks(
+            self.src,
+            children[i]
+                .children
+                .last()
+                .expect("bare_task_marker found a last item")
+                .range
+                .end,
+        );
+        if paragraph_range.start < item_end
+            || has_blank_line(&self.src[item_end..paragraph_range.start])
+        {
+            return false;
+        }
+
+        let folded = dedent_continuation(&continuation, indent);
+        let text = if ordered {
+            // Rule 4: `itemContents` starts at the marker, so the ordered
+            // branch's text keeps `"[ ] "` and its trailing blanks.
+            format!("{}\n{folded}", &marker_line[indent..])
+        } else {
+            folded
+        };
+
+        children.remove(i + 1);
+        let list = &mut children[i];
+        list.range.end = list.range.end.max(paragraph_range.end);
+        let item = list
+            .children
+            .last_mut()
+            .expect("bare_task_marker found a last item");
+        item.range.end = item.range.end.max(paragraph_range.end);
+        item.children = vec![Built::leaf(
+            Block::Paragraph {
+                text: Text::from(text),
+            },
+            paragraph_range,
+        )];
+
+        self.merge_interrupted_list(children, i);
+        true
+    }
+
+    /// The list the folded paragraph had interrupted, put back.
+    fn merge_interrupted_list(&self, children: &mut Vec<Built>, i: usize) {
+        if i + 1 >= children.len() || !same_list_kind(&children[i].block, &children[i + 1].block) {
+            return;
+        }
+        // From the last **content** byte, for the reason `trim_trailing_blanks`
+        // gives: a paragraph's range includes the newline that ends it, so an
+        // untrimmed gap is one `\n` short of the blank line it is looking for.
+        let Some(gap_start) = children[i]
+            .children
+            .last()
+            .map(|item| trim_trailing_blanks(self.src, item.range.end))
+        else {
+            return;
+        };
+        let Some(gap_end) = children[i + 1]
+            .children
+            .first()
+            .map(|item| item.range.start)
+        else {
+            return;
+        };
+        if gap_end < gap_start {
+            return;
+        }
+        let blank = has_blank_line(&self.src[gap_start..gap_end]);
+        let next = children.remove(i + 1);
+        let next_loose = list_looseness(&next.block);
+        let list = &mut children[i];
+        list.range.end = list.range.end.max(next.range.end);
+        list.children.extend(next.children);
+        // `marked` reads looseness off the blank line between two items, and
+        // the blank line the port can see is the one this gap holds.
+        if let Some(loose) = list_looseness_mut(&mut list.block) {
+            *loose = *loose || next_loose || blank;
+        }
+    }
+
+    /// The marker column and the item's container-stripped first line, when the
+    /// last item of `list` is nothing but a task marker on one line.
+    fn bare_task_marker(&self, list: &Built) -> Option<(usize, String)> {
+        let ordered = match &list.block {
+            Block::TaskList { .. } => false,
+            Block::OrderList { .. } => true,
+            // A bullet list's items are not task items by construction: a bare
+            // marker line makes `split_list` produce a `TaskList`.
+            _ => return None,
+        };
+        let item = list.children.last()?;
+        // Exactly the empty-container filler, or an item whose only content
+        // `pulldown-cmark` consumed into its `TaskListMarker` event.
+        if item.children.len() != 1 {
+            return None;
+        }
+        match &item.children[0].block {
+            Block::Paragraph { text } if text.to_str().is_empty() => {}
+            _ => return None,
+        }
+
+        let stripped = stripped_raw(&self.strip(&item.range));
+        let mut lines = stripped.split('\n');
+        let first = lines.next()?;
+        if lines.any(|rest| !rest.trim().is_empty()) {
+            return None;
+        }
+        let column = bare_task_marker_column(first, ordered)?;
+        Some((column, first.to_string()))
     }
 
     /// A block quote's **last** line, when stripping it leaves whitespace
@@ -1222,42 +1432,16 @@ fn split_list(
 /// `tokens[0]`, and `listIsTask`'s trailing `\S` guarantees that child is a
 /// paragraph.
 ///
-/// # Known disagreement — an empty task marker takes a lazy continuation
+/// # The empty task marker's lazy continuation is upstream of this function
 ///
-/// Found at S3 by the transcribed spec suite, which is a different denominator
-/// from `cargo xtask blocks`'s 1344 and reaches an input none of them do.
-/// `"- [ ] \ntext\n"`:
-///
-/// ```text
-/// muya      task-list › task-list-item › paragraph "text"
-/// the port  task-list › task-list-item › paragraph ""   +  paragraph "text"
-/// ```
-///
-/// The mechanism is one line of `marked` and it is upstream of everything in
-/// this function: to `marked` the item's content is the string `"[ ] "`, which
-/// is **not blank**, so the item's paragraph is open and `text` is an ordinary
-/// lazy continuation of it — and the `[ ] ` prefix comes off afterwards, here.
-/// To GFM the `[ ]` is a *task-list marker* rather than paragraph content, so
-/// `pulldown-cmark` leaves the item empty and `text` starts a new block at
-/// column 0.
-///
-/// Measured, so that whoever fixes it inherits the rule and not the symptom —
-/// seven of thirteen probes differ and the six that agree are the boundary:
-///
-/// ```text
-/// differ  "- [ ] \ntext"        "- [x] \ntext"       "1. [ ] \ntext"
-///         "- [ ] \ntext\nmore"  "> - [ ] \n> text"   "- [ ] \ntext\n- [ ] b"
-/// agree   "- [ ] \n\ntext"      (a blank line closes the paragraph)
-///         "- [ ] \n# head"      "- [ ] \n> quote"    (a block start is not lazy)
-///         "- [ ] \n  text"      (indented — already inside the item)
-///         "- \ntext"  "- a\ntext"  (no task marker: nothing to disagree about)
-/// ```
-///
-/// **Not registered**, on D4 rule 3: an entry needs a failing *differential*
-/// case and no input in either harness's set reaches this. It is held by two
-/// entries in `state_specs.rs`'s `PENDING` instead, and M2.md §10's "Owed by
-/// S3" carries the reproducers. It is S1's layer rather than S3's, which is why
-/// S3 measured it rather than fixing it.
+/// S3 found `"- [ ] \ntext\n"` disagreeing here and S4 fixed it, but **not in
+/// this function** — the disagreement is about which lines are *in the item*,
+/// which is decided before any marker is stripped. The fix is
+/// [`Builder::fold_empty_task_marker_continuations`], and this function's
+/// contribution to it is rule 4: an ordered list keeps the marker in the item's
+/// text because `compatibleTaskList`'s ordered branch never calls
+/// `stripTaskMarker`, which is the same asymmetry the loose-ordered case above
+/// is about.
 fn strip_task_markers(src: &str, items: Vec<Built>, ordered: bool, loose: bool) -> Vec<Built> {
     items
         .into_iter()
@@ -1291,6 +1475,139 @@ fn strip_task_markers(src: &str, items: Vec<Built>, ordered: bool, loose: bool) 
             item
         })
         .collect()
+}
+
+/// `compatibleTaskList`'s `EMPTY_TASK_REG` — `/^ {0,3}[*+-][ \t]+\[([ x])\][ \t]*$/i` —
+/// widened to the ordered marker `Tokenizer.list` accepts, and answering with
+/// the **column of the `[`** rather than with a boolean.
+///
+/// That column is `marked`'s `indent`, which the continuation loop dedents by,
+/// and it is the same number by two different routes: `marked` computes
+/// `cap[1].length + line.search(/[^ ]/)` — the bullet plus the run of spaces
+/// after it — and that is where the `[` lands.
+///
+/// `line` is the item's **container-stripped** first line, so a task item
+/// inside a block quote measures its column from the quote's content and not
+/// from the file.
+fn bare_task_marker_column(line: &str, ordered: bool) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut at = 0;
+    // ` {0,3}`
+    while at < 3 && bytes.get(at) == Some(&b' ') {
+        at += 1;
+    }
+    if ordered {
+        let digits = bytes[at..]
+            .iter()
+            .take(9)
+            .take_while(|b| b.is_ascii_digit())
+            .count();
+        if digits == 0 || !matches!(bytes.get(at + digits), Some(b'.' | b')')) {
+            return None;
+        }
+        at += digits + 1;
+    } else {
+        if !matches!(bytes.get(at), Some(b'*' | b'+' | b'-')) {
+            return None;
+        }
+        at += 1;
+    }
+    // `[ \t]+`
+    let spaces = bytes[at..]
+        .iter()
+        .take_while(|b| matches!(b, b' ' | b'\t'))
+        .count();
+    if spaces == 0 {
+        return None;
+    }
+    let column = at + spaces;
+    // `\[[ xX]\]`
+    if bytes.get(column) != Some(&b'[')
+        || !matches!(bytes.get(column + 1), Some(b' ' | b'x' | b'X'))
+        || bytes.get(column + 2) != Some(&b']')
+    {
+        return None;
+    }
+    // `[ \t]+$`, and the `+` is `TASK_MARKER_PREFIX_REG`'s rather than
+    // `EMPTY_TASK_REG`'s. The two regexes differ by exactly this quantifier and
+    // the difference decides a real input: `- [ ]` alone is an empty task item
+    // (`EMPTY_TASK_REG`, `[ \t]*$`), but `- [ ]\ntext` is **not a task item at
+    // all** — `TASK_MARKER_PREFIX_REG` needs a blank after the `]` and there is
+    // a newline there, so muya emits a `list-item` whose text is `"[ ]\ntext"`.
+    // Only the prefix form can fold, so only the prefix form is spelled here.
+    let trailing = &bytes[column + 3..];
+    if trailing.is_empty() || trailing.iter().any(|b| !matches!(b, b' ' | b'\t')) {
+        return None;
+    }
+    Some(column)
+}
+
+/// `at`, walked back over trailing blanks and newlines.
+///
+/// A `pulldown-cmark` item range may or may not include the newline that ends
+/// it, and the fold's "is there a blank line between these two blocks" question
+/// is off by one if it does. Measuring from the last content byte makes the
+/// answer independent of that.
+fn trim_trailing_blanks(src: &str, at: usize) -> usize {
+    src[..at].trim_end_matches([' ', '\t', '\r', '\n']).len()
+}
+
+/// The two arms of the continuation loop's one `if`, per line.
+///
+/// A line whose first non-space character is at or past `indent` is **dedented**
+/// by exactly `indent` (`nextLineWithoutTabs.slice(indent)`); a line that does
+/// not reach it is appended **verbatim** (`nextLine`), because that arm is
+/// paragraph continuation rather than item content. Getting this backwards is
+/// the difference between `- [ ] \ntext\n  cont` holding `"text\ncont"` and
+/// holding `"text\n  cont"`, and muya holds the first.
+fn dedent_continuation(text: &str, indent: usize) -> String {
+    text.split('\n')
+        .map(|line| {
+            let lead = line.len() - line.trim_start_matches(' ').len();
+            if lead >= indent {
+                &line[indent..]
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `meta.loose`, for the three list variants that carry it.
+fn list_looseness(block: &Block) -> bool {
+    match block {
+        Block::TaskList { loose, .. }
+        | Block::BulletList { loose, .. }
+        | Block::OrderList { loose, .. } => *loose,
+        _ => false,
+    }
+}
+
+fn list_looseness_mut(block: &mut Block) -> Option<&mut bool> {
+    match block {
+        Block::TaskList { loose, .. }
+        | Block::BulletList { loose, .. }
+        | Block::OrderList { loose, .. } => Some(loose),
+        _ => None,
+    }
+}
+
+/// Whether two lists were one `marked` list before a folded paragraph split
+/// them: the same variant, and the same marker or delimiter.
+///
+/// `- [ ] \ntext\n- b` is deliberately **not** a merge — `compatibleTaskList`
+/// splits a bullet list wherever task-ness changes, so a task list followed by
+/// a bullet list is what muya emits for it too.
+fn same_list_kind(a: &Block, b: &Block) -> bool {
+    match (a, b) {
+        (
+            Block::TaskList { marker: x, .. } | Block::BulletList { marker: x, .. },
+            Block::TaskList { marker: y, .. } | Block::BulletList { marker: y, .. },
+        ) => std::mem::discriminant(a) == std::mem::discriminant(b) && x == y,
+        (Block::OrderList { delimiter: x, .. }, Block::OrderList { delimiter: y, .. }) => x == y,
+        _ => false,
+    }
 }
 
 /// `/^\[[ xX]\] +/` — the prefix, if the text carries one.
@@ -1833,12 +2150,13 @@ fn raw_info(src: &str, range: &Range<usize>) -> String {
 /// `None` here means "no `fenceLength` key" rather than "unknown", and the
 /// serializer does not have to know the rule.
 ///
-/// **Owed to S4.** `fence_len` is a `u8` (M0's shape), so a fence of more than
-/// 255 characters saturates and the serializer would re-emit 255 of them —
-/// a round-trip loss on `"`".repeat(300)`. No fixture in the 1344 has one, and
-/// widening the field is a change to `mt-doc`'s public API that belongs with
-/// the serializer that would lose the data.
-fn fence_length(s: &str, kind: CodeKind) -> Option<u8> {
+/// **Paid at S4.** `fence_len` was a `u8` (M0's shape), so a fence of more than
+/// 255 characters saturated and the serializer would have re-emitted 255 of
+/// them — a round-trip loss on ``"`".repeat(300)``. `mt_doc::Block::CodeBlock`
+/// carries a `u32` from S4 on, and
+/// [`tests::a_fence_longer_than_255_characters_survives_the_widened_field`] is
+/// the reproducer §10 owed.
+fn fence_length(s: &str, kind: CodeKind) -> Option<u32> {
     if kind != CodeKind::Fenced {
         return None;
     }
@@ -1851,7 +2169,7 @@ fn fence_length(s: &str, kind: CodeKind) -> Option<u8> {
         return None;
     }
     let len = after_indent.chars().take_while(|c| *c == fence).count();
-    (len > 3).then(|| u8::try_from(len).unwrap_or(u8::MAX))
+    (len > 3).then(|| u32::try_from(len).unwrap_or(u32::MAX))
 }
 
 /// `markdownToState`'s `html` case, including the `<img>` special case.

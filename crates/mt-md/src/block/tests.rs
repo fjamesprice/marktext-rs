@@ -926,20 +926,110 @@ fn text_of(doc: &Document, id: NodeId) -> String {
         .into_owned()
 }
 
-/// **The known disagreement `strip_task_markers`' docs name**, pinned so it is
-/// findable from the code and so a fix flips a test deliberately rather than
-/// silently.
+/// **The disagreement §10 owed S4, fixed** — and the same thirteen probes S3
+/// measured, now asserting agreement where they asserted the symptom.
 ///
-/// A characterization test: it asserts what the port does **today**, with
-/// muya's measured answer beside it. Two entries in `state_specs.rs`'s
-/// `PENDING` assert muya's, so the pair is a ratchet — the day someone
-/// reproduces `marked`'s lazy continuation, both of those delist and this one
-/// fails, which is the correct order for the two edits to be noticed in.
+/// This test is S3's `an_empty_task_marker_does_not_yet_take_a_lazy_continuation`
+/// with its first half inverted and its second half untouched, which is what
+/// the pair was built for: the two `PENDING` entries that asserted muya's
+/// answer delist in the same commit, and the six probes that already agreed are
+/// the boundary the fix was not allowed to move.
+///
+/// Every expected value here is measured from the running engine, not read off
+/// `Tokenizer.list`. Three of them are not what reading it suggests — see
+/// `Builder::fold_empty_task_marker_continuations` for the rules and
+/// `bare_task_marker_column` for the one-quantifier difference between the two
+/// regexes that decide it.
 #[test]
-fn an_empty_task_marker_does_not_yet_take_a_lazy_continuation() {
-    // muya: task-list › task-list-item › paragraph "text", and nothing after.
+fn an_empty_task_marker_takes_a_lazy_continuation() {
+    let task = ["task-list", "  task-list-item", "    paragraph"];
+
+    // The seven that used to differ. muya: one task item holding the
+    // continuation, and nothing after it.
+    assert_eq!(names("- [ ] \ntext\n", SPEC), task);
+    assert_eq!(texts("- [ ] \ntext\n", SPEC), ["text"]);
+    assert_eq!(texts("- [x] \ntext\n", SPEC), ["text"]);
     assert_eq!(
-        names("- [ ] \ntext\n", SPEC),
+        state("- [x] \ntext\n", SPEC)[0]["children"][0]["meta"],
+        json!({ "checked": true })
+    );
+    // Every line of the continuation, with the ones that reach the marker's
+    // column dedented by it and the ones that do not appended verbatim.
+    assert_eq!(texts("- [ ] \ntext\nmore\n", SPEC), ["text\nmore"]);
+    assert_eq!(texts("- [ ] \ntext\n  cont\n", SPEC), ["text\ncont"]);
+    assert_eq!(texts("  - [ ] \n  text\n", SPEC), ["  text"]);
+    // Inside a block quote, measured from the quote's content column.
+    assert_eq!(texts("> - [ ] \n> text\n", SPEC), ["text"]);
+    // The list the folded paragraph had interrupted, merged back.
+    assert_eq!(texts("- [ ] \ntext\n- [ ] b\n", SPEC), ["text", "b"]);
+    // A blank line in the gap is where the merged list's looseness comes from.
+    assert_eq!(
+        state("- [ ] \ntext\n\n- [ ] b\n", SPEC)[0]["meta"],
+        json!({ "loose": true, "marker": "-" })
+    );
+    // An **ordered** list keeps the marker in the item's text, because
+    // `compatibleTaskList` only strips it in the bullet branch.
+    assert_eq!(
+        names("1. [ ] \ntext\n", SPEC),
+        ["order-list", "  list-item", "    paragraph"]
+    );
+    assert_eq!(texts("1. [ ] \ntext\n", SPEC), ["[ ] \ntext"]);
+    // The four-item spec case, whose last item takes the continuation.
+    assert_eq!(
+        texts("- [ ] a\n\n- [ ] \n- [ ] \n- [ ] \ntext\n", SPEC),
+        ["a", "", "", "text"]
+    );
+
+    // The boundary, where the two engines already agreed and the fix was not
+    // allowed to move anything: a blank line, a block start, an indented line,
+    // and no task marker at all.
+    for (agreed, after) in [
+        ("- [ ] \n\ntext\n", &["paragraph"][..]),
+        ("- [ ] \n# head\n", &["atx-heading"][..]),
+        ("- [ ] \n> quote\n", &["block-quote", "  paragraph"][..]),
+        ("- [ ] \n---\n", &["thematic-break"][..]),
+    ] {
+        let expected: Vec<&str> = task.iter().chain(after).copied().collect();
+        assert_eq!(names(agreed, SPEC), expected, "{agreed:?}");
+    }
+    // Already inside the item, so there was never anything to fold.
+    assert_eq!(texts("- [ ] \n  text\n", SPEC), ["text"]);
+    assert_eq!(texts("- [ ] \n    code\n", SPEC), ["  code"]);
+    // No task marker means no disagreement.
+    assert_eq!(texts("- \ntext\n", SPEC), ["", "text"]);
+    assert_eq!(texts("- a\ntext\n", SPEC), ["a\ntext"]);
+    // Task-ness still splits a list, so a bullet item after a folded task item
+    // is a second list in both engines.
+    assert_eq!(
+        names("- [ ] \ntext\n- b\n", SPEC),
+        [
+            "task-list",
+            "  task-list-item",
+            "    paragraph",
+            "bullet-list",
+            "  list-item",
+            "    paragraph"
+        ]
+    );
+}
+
+/// **The three inputs the fix deliberately leaves disagreeing**, with muya's
+/// answer beside each. M2.md §10's "Owed by S4" carries them; this is the
+/// reproducer half, so a later stage that fixes one flips a test rather than
+/// discovering the shape again.
+///
+/// All three are the same wider mechanism: `marked` re-lexes a list item's
+/// dedented content **line by line** with `state.top = false`, so any line can
+/// start a block inside an item and CommonMark's paragraph-interruption rules
+/// never apply there. Reproducing that is a change to how every list item's
+/// children are built, which is S1's layer and is not what §10 asked S4 for.
+#[test]
+fn the_three_shapes_the_task_marker_fix_does_not_reach() {
+    // 1 — no blank after the `]`, so `TASK_MARKER_PREFIX_REG` does not match
+    // and muya does not make it a task item at all:
+    //     bullet-list › list-item › paragraph "[ ]\ntext"
+    assert_eq!(
+        names("- [ ]\ntext\n", SPEC),
         [
             "task-list",
             "  task-list-item",
@@ -947,21 +1037,23 @@ fn an_empty_task_marker_does_not_yet_take_a_lazy_continuation() {
             "paragraph"
         ]
     );
-    assert_eq!(texts("- [ ] \ntext\n", SPEC), ["", "text"]);
+    assert_eq!(texts("- [ ]\ntext\n", SPEC), ["", "text"]);
 
-    // The boundary, where the two engines already agree and a fix must not
-    // change anything: a blank line, a block start, and an indented line.
-    let task = ["task-list", "  task-list-item", "    paragraph"];
-    for (agreed, after) in [
-        ("- [ ] \n\ntext\n", &["paragraph"][..]),
-        ("- [ ] \n# head\n", &["atx-heading"][..]),
-        ("- [ ] \n> quote\n", &["block-quote", "  paragraph"][..]),
-    ] {
-        let expected: Vec<&str> = task.iter().chain(after).copied().collect();
-        assert_eq!(names(agreed, SPEC), expected, "{agreed:?}");
-    }
-    assert_eq!(texts("- [ ] \n  text\n", SPEC), ["text"]);
-    // And no task marker means no disagreement: `- \ntext` is a separate
-    // paragraph in both engines.
-    assert_eq!(texts("- \ntext\n", SPEC), ["", "text"]);
+    // 2 — a setext underline in the continuation. muya re-lexes the item's
+    // content, so `===` makes a heading *inside* the item:
+    //     task-list › task-list-item › setext-heading "text"
+    assert_eq!(texts("- [ ] \ntext\n===\n", SPEC), ["", "text"]);
+
+    // 3 — and with `---` the underline is an `hr` to `marked`'s continuation
+    // loop, so muya emits task-list › item › paragraph "text" **and** a
+    // thematic break, where the port reads one setext heading.
+    assert_eq!(
+        names("- [ ] \ntext\n---\n", SPEC),
+        [
+            "task-list",
+            "  task-list-item",
+            "    paragraph",
+            "setext-heading"
+        ]
+    );
 }
