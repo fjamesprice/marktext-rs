@@ -480,6 +480,15 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
                 i += 1;
                 only = Some(args.get(i).ok_or("--only requires a substring")?.clone());
             }
+            // Named rather than left to the generic error: `--with-text` is
+            // how S1's commits, S1's plan section and two months of shell
+            // history spell this, and "unrecognised argument" would read as
+            // "leaf text is not compared" rather than "it always is".
+            "--with-text" => {
+                return Err("--with-text was S2's flag and is now the default; \
+                     pass --no-text to compare names and meta only"
+                    .to_string());
+            }
             other => return Err(format!("unrecognised argument: {other}")),
         }
         i += 1;
