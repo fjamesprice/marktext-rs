@@ -19,7 +19,9 @@
 //! 3. An entry with **no failing differential case is stale** — the fix is
 //!    either unimplemented or the divergence was imaginary. This runner says
 //!    so.
-//! 4. `upstream` holds the marktext issue URL once filed.
+//! 4. `upstream` holds the marktext issue URL if one is ever filed. **M2 S1
+//!    decided not to file them** — this is a fork and nothing waits on an
+//!    upstream answer; see `docs/upstream-issues.md`.
 //!
 //! Rule 1's second half belongs to `diff.rs` rather than here: when the
 //! differential harness gains a token-stream mode it consults
@@ -761,10 +763,13 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
         );
         match entry.upstream.as_deref() {
             Some(url) => println!("            upstream {url}"),
-            // Rule 4 is an instruction, not a formality: the two entries D3
-            // names are both real upstream bugs, and an unfiled one is a fix
-            // this project carries alone forever.
-            None => println!("            upstream NOT FILED — rule 4 says file it"),
+            // Rule 4 asked for these to be filed and **M2 S1 decided not to**
+            // — see `docs/upstream-issues.md`. This is a fork (M2.md §5 D11),
+            // nothing in the port waits on an upstream answer, and a runner
+            // that keeps asking for a decision that has been taken is noise
+            // rather than a check. The field stays: if one is ever filed, the
+            // URL belongs here.
+            None => println!("            upstream not filed — decided, docs/upstream-issues.md"),
         }
         if result.verdict == Verdict::Stale {
             println!(

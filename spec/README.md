@@ -100,7 +100,13 @@ in the differential harness**. Four rules:
    asserting the **fixed** behaviour.
 3. An entry with **no failing differential case is stale** — the fix is either
    unimplemented or the divergence was imaginary — and the runner says so.
-4. `upstream` holds the marktext issue URL once filed. File them.
+4. `upstream` holds the marktext issue URL if one is ever filed.
+   ~~File them.~~ — **closed at M2 S1: they are not being filed.** This is a
+   fork (docs/M2.md §5 D11); nothing in the port waits on an upstream answer,
+   and the evidence a bug report would carry is already here, machine-checked,
+   in the entry's own `inputs`. `docs/upstream-issues.md` records the decision
+   and the three cases it covers. The field stays because a URL is still the
+   right place to put one.
 
 ### One register, two layers — added at M2 S0
 
