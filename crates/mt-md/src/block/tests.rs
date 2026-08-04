@@ -853,3 +853,115 @@ fn the_empty_container_filler_has_no_text_to_reconstruct() {
     assert_eq!(texts(">\n", SPEC), [""]);
     assert_eq!(texts("-\n", SPEC), [""]);
 }
+
+// ---------------------------------------------------------------------------
+// The source ranges — M2.md §10's owed item, decided at S3
+// ---------------------------------------------------------------------------
+
+/// **S2's claim about what the ranges are for, as a test.**
+///
+/// M2.md §10's correction says the container half of the reverse offset map is
+/// not lost by deferring it, *"because `strip_lines` needs the source lines and
+/// the ancestors' prefixes; the ancestors are the tree, and their prefixes are
+/// computable from the ancestors' source ranges. So the whole stripper is
+/// re-runnable for one block at a time, lazily, from `(src, tree, ranges)`."*
+///
+/// That sentence is the reason `parse` returns a [`crate::SourceMap`] at all,
+/// and until it was run it was an argument rather than a fact. Here it is run:
+/// the block quote's prefix is rebuilt from **its own range** — not from
+/// anything the parse kept — and `strip_lines` re-derives the inner
+/// paragraph's text from the source.
+///
+/// What this does **not** claim is the per-kind half. An atx heading is rebuilt
+/// from scratch and a code block loses columns after stripping; each needs its
+/// own inverse and each belongs beside its rule. §10 says so and this test is
+/// deliberately about the half that is free.
+#[test]
+fn the_stripper_is_re_runnable_from_src_tree_and_ranges() {
+    let src = "> foo\n> bar\n";
+    let (doc, map) = parse_blocks_with_ranges(src, SPEC);
+
+    let quote = doc.children(doc.root())[0];
+    assert_eq!(doc.block(quote).map(Block::name), Some("block-quote"));
+    let paragraph = doc.children(quote)[0];
+    assert_eq!(text_of(&doc, paragraph), "foo\nbar");
+
+    // Rebuild the ancestor's prefix from its range alone, exactly as a caller
+    // holding only `(src, tree, ranges)` would have to.
+    let quote_range = map.get(quote).expect("the quote has a range");
+    let prefix = Prefix::Quote {
+        first_line: line_start_of(src, quote_range.start),
+    };
+
+    let lines = strip_lines(src, &map.get(paragraph).expect("range"), &[prefix]);
+    assert_eq!(joined_text(&lines), "foo\nbar");
+}
+
+/// The ranges are a fact about one parse, and the map says so by not being
+/// reachable from a [`Document`]. This pins the other half of that contract:
+/// the map a parse hands back is complete for the tree it was built with.
+#[test]
+fn the_map_has_one_entry_per_node_including_the_empty_document_fallback() {
+    let (doc, map) = parse_blocks_with_ranges("", SPEC);
+    assert_eq!(map.len(), 1, "the fallback paragraph carries 0..0");
+    assert_eq!(map.get(doc.children(doc.root())[0]), Some(0..0));
+
+    let src = "# a\n\n- b\n- c\n";
+    let (doc, map) = parse_blocks_with_ranges(src, SPEC);
+    fn count(doc: &Document, id: NodeId) -> usize {
+        doc.children(id)
+            .iter()
+            .map(|c| 1 + count(doc, *c))
+            .sum::<usize>()
+    }
+    assert_eq!(map.len(), count(&doc, doc.root()));
+    assert!(map.get(doc.root()).is_none(), "the root has no block");
+}
+
+fn text_of(doc: &Document, id: NodeId) -> String {
+    doc.block(id)
+        .and_then(Block::text)
+        .expect("a leaf")
+        .to_str()
+        .into_owned()
+}
+
+/// **The known disagreement `strip_task_markers`' docs name**, pinned so it is
+/// findable from the code and so a fix flips a test deliberately rather than
+/// silently.
+///
+/// A characterization test: it asserts what the port does **today**, with
+/// muya's measured answer beside it. Two entries in `state_specs.rs`'s
+/// `PENDING` assert muya's, so the pair is a ratchet — the day someone
+/// reproduces `marked`'s lazy continuation, both of those delist and this one
+/// fails, which is the correct order for the two edits to be noticed in.
+#[test]
+fn an_empty_task_marker_does_not_yet_take_a_lazy_continuation() {
+    // muya: task-list › task-list-item › paragraph "text", and nothing after.
+    assert_eq!(
+        names("- [ ] \ntext\n", SPEC),
+        [
+            "task-list",
+            "  task-list-item",
+            "    paragraph",
+            "paragraph"
+        ]
+    );
+    assert_eq!(texts("- [ ] \ntext\n", SPEC), ["", "text"]);
+
+    // The boundary, where the two engines already agree and a fix must not
+    // change anything: a blank line, a block start, and an indented line.
+    let task = ["task-list", "  task-list-item", "    paragraph"];
+    for (agreed, after) in [
+        ("- [ ] \n\ntext\n", &["paragraph"][..]),
+        ("- [ ] \n# head\n", &["atx-heading"][..]),
+        ("- [ ] \n> quote\n", &["block-quote", "  paragraph"][..]),
+    ] {
+        let expected: Vec<&str> = task.iter().chain(after).copied().collect();
+        assert_eq!(names(agreed, SPEC), expected, "{agreed:?}");
+    }
+    assert_eq!(texts("- [ ] \n  text\n", SPEC), ["text"]);
+    // And no task marker means no disagreement: `- \ntext` is a separate
+    // paragraph in both engines.
+    assert_eq!(texts("- \ntext\n", SPEC), ["", "text"]);
+}

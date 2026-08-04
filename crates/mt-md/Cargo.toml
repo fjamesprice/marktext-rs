@@ -10,6 +10,20 @@ repository.workspace = true
 [dependencies]
 mt-doc.workspace = true
 
+# M2 S3, and it was a dev-dependency until this stage. `parse` returns the label
+# map (`src/labels.rs`), whose type and whose regex are both `mt-inline`'s:
+# `Labels` is what `TokenizerOptions::labels` takes, and
+# `beginRules.reference_definition` is already transcribed there as a begin
+# rule. Owning a second `Labels` here and converting at the boundary would mean
+# a second transcription of that rule — the "two scanners" mistake §5 D3 spends
+# a section on, in a costume where the two really would have to agree.
+#
+# `mt-doc → mt-inline → mt-md → mt-layout` is §1's order, so this is a downward
+# edge and `mt-md`'s own crate doc anticipated it ("on `mt-inline` once inline
+# re-derivation lands"). It adds no third-party crate: `cargo xtask deps` counts
+# 14 before and after, because `mt-inline` was already in the workspace graph.
+mt-inline.workspace = true
+
 # M2 S1, per M2.md §5 D1. Block structure only — the event stream is mapped
 # onto `mt_doc::Block` by `src/block.rs` and the inline events are never read,
 # because muya's leaf text is unparsed inline source (§4 C2) and `mt-inline` is
@@ -23,15 +37,7 @@ pulldown-cmark.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
-# M2 S0. `tests/state_specs.rs` transcribes `state/__tests__/`, and two of its
-# nineteen modules drive the inline tokenizer as well as the parser:
-# `referenceLink` runs the whole markdown → state → label-map → tokenize
-# pipeline (M2.md §5 D3), and `strongCjkFlanking` asserts the live-editor half
-# of #4307 beside the export half.
-#
-# `mt-doc → mt-inline → mt-md → mt-layout` is §1's order, so this is a
-# downward edge and `mt-md`'s own crate doc already anticipates it ("on
-# `mt-inline` once inline re-derivation lands"). A `[dev-dependencies]` entry
-# does not reach `mt-md`'s build; §1's purity constraint is about `src/`, which
-# is what `cargo xtask deps` scans.
-mt-inline.workspace = true
+# M2 S0 listed `mt-inline` here, because `tests/state_specs.rs`'s `referenceLink`
+# and `strongCjkFlanking` modules drive the tokenizer as well as the parser.
+# S3 promoted it to a real dependency — see the note above — so the dev entry is
+# gone rather than duplicated.

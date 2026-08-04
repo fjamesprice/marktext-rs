@@ -14,3 +14,8 @@ path = "src/main.rs"
 [dependencies]
 mt-doc.workspace = true
 mt-md.workspace = true
+
+[dev-dependencies]
+# M2 S3. `dump_state_prints_state_json_and_succeeds` asserts the shape of what
+# `--dump-state` prints rather than a substring of it, which needs a parser.
+serde_json.workspace = true

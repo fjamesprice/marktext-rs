@@ -250,6 +250,64 @@ pub struct Label {
 /// diffable.
 pub type Labels = BTreeMap<String, Label>;
 
+/// muya's `InlineRenderer.getLabelInfo` (`inlineRenderer/index.ts:101`) — one
+/// leaf's text, and the label it defines if it defines one.
+///
+/// `beginRules.reference_definition` run over the **whole** text, then
+/// `label = (tokens[2] + tokens[3]).toLowerCase()`, `href = tokens[6]`,
+/// `title = tokens[10] || ''`. That is the entirety of muya's label pass, and
+/// [`mt_md::labels`](../mt_md/labels/index.html) is what calls it once per
+/// paragraph.
+///
+/// # Why this is not [`tokenizer`] with `has_begin_rules: true`
+///
+/// It nearly is, and the difference is one line. `consumeBeginRules` gates the
+/// `reference_definition` token on `isLengthEven(def[3])` — an odd run of
+/// backslashes escapes the `]`, so the label never closes and the line is not a
+/// definition. **`getLabelInfo` has no such gate**: it reads the raw capture
+/// groups. So `[a\]: /x` yields no `reference_definition` *token* and does
+/// define the label `a\`. Tokenizing to find labels would silently disagree
+/// with muya on exactly that input, which is why this runs the rule directly.
+///
+/// # Three quirks of the rule that are reproduced rather than repaired
+///
+/// - **The title's closing delimiter is `\9`, the opening one.** So
+///   `[a]: /u (t)` matches nothing at all — `(` must be closed by `(` — and
+///   the definition contributes no label even though `marked` happily made a
+///   block out of it.
+/// - **`^` and `$` are not multi-line**, so a paragraph holding a definition
+///   *and* anything else defines nothing. That is what keeps `text\n[a]: /u`,
+///   which `marked` folds into one paragraph, from registering a label.
+/// - **The label is capture 2 *plus* capture 3**, the run of backslashes before
+///   the `]`. Dropping capture 3 loses the trailing `\` of `[a\\]: /u`.
+///
+/// Returns the key already lowercased, as `collectReferenceDefinitions` stores
+/// it. muya's `if (label && info)` guard is not reproduced as a condition
+/// because it cannot fail: capture 2 is `+?`, so a match always has a non-empty
+/// label, and `info` is an object literal.
+pub fn label_info(text: &str) -> Option<(String, Label)> {
+    let id = rules::RuleId::ReferenceDefinition;
+    let caps = rules::exec(rules::rule(id), text)?;
+    let group = |index: usize| caps.get(index).map(|m| m.as_str());
+    let required = |index: usize| {
+        group(index).unwrap_or_else(|| {
+            panic!(
+                "`{}` matched but capture group {index} did not participate",
+                id.name()
+            )
+        })
+    };
+
+    let label = format!("{}{}", required(2), required(3)).to_lowercase();
+    Some((
+        label,
+        Label {
+            href: required(6).to_string(),
+            title: group(10).unwrap_or("").to_string(),
+        },
+    ))
+}
+
 /// `ITokenizerFacOptions` — the two syntax extensions the caller can disable.
 ///
 /// Both are threaded down every nested `tokenizerFac` call unchanged.
@@ -382,5 +440,111 @@ mod tests {
         );
         let options = TokenizerOptions::muya_default().with_labels(labels);
         assert!(options.labels.contains_key(&"REF".to_lowercase()));
+    }
+
+    // --- getLabelInfo (M2 S3) ----------------------------------------------
+    //
+    // Every expectation below was measured against the running engine —
+    // `beginRules.reference_definition.exec(text)` in the marktext clone, with
+    // muya's own `(t[2] + t[3]).toLowerCase()`, `t[6]`, `t[10] || ''` — rather
+    // than read off the pattern. Three of them are not what reading it
+    // suggests.
+
+    fn info(text: &str) -> Option<(String, Label)> {
+        label_info(text)
+    }
+
+    fn label(href: &str, title: &str) -> Label {
+        Label {
+            href: href.into(),
+            title: title.into(),
+        }
+    }
+
+    #[test]
+    fn a_definition_yields_its_label_href_and_title() {
+        assert_eq!(
+            info("[1]: https://example.com \"title\""),
+            Some(("1".into(), label("https://example.com", "title")))
+        );
+        assert_eq!(
+            info("[ref]: https://example.com 'Ref Title'"),
+            Some(("ref".into(), label("https://example.com", "Ref Title")))
+        );
+        assert_eq!(info("[a]: /u"), Some(("a".into(), label("/u", ""))));
+    }
+
+    /// The key is lowercased and the ` {0,3}` indent is not part of it.
+    #[test]
+    fn the_label_is_lowercased_and_the_indent_is_not_part_of_it() {
+        assert_eq!(info("  [FOO]: /a"), Some(("foo".into(), label("/a", ""))));
+    }
+
+    /// **Runs of whitespace inside a label are kept.** This is where the two
+    /// reference-definition scanners part company: `marked`'s `tokens.links`
+    /// key also applies `/\s+/g → ' '`, so it sees one label where this sees
+    /// two. `mt_md::labels`' module docs carry the consequence.
+    #[test]
+    fn a_labels_internal_whitespace_is_not_collapsed() {
+        assert_eq!(
+            info("[foo bar]: /a").map(|(l, _)| l),
+            Some("foo bar".into())
+        );
+        assert_eq!(
+            info("[foo  bar]: /a").map(|(l, _)| l),
+            Some("foo  bar".into())
+        );
+    }
+
+    /// Capture 3 is part of the label. Dropping it loses the trailing
+    /// backslash, and `[a\]: /x` is also the input where this and
+    /// `consumeBeginRules` disagree: the token is gated on an *even* run of
+    /// backslashes and this is not.
+    #[test]
+    fn the_backslash_run_before_the_bracket_is_part_of_the_label() {
+        assert_eq!(info("[a\\]: /x"), Some(("a\\".into(), label("/x", ""))));
+        assert_eq!(info("[a\\\\]: /x"), Some(("a\\\\".into(), label("/x", ""))));
+        // And the token form refuses the odd one, which is the whole reason
+        // this function exists rather than a call to `tokenizer`.
+        assert!(!matches!(
+            tokenize("[a\\]: /x").first().map(|t| &t.kind),
+            Some(TokenKind::ReferenceDefinition(_))
+        ));
+    }
+
+    /// `^` and `$` are not multi-line, so a paragraph that holds a definition
+    /// *and* anything else defines nothing — including a trailing newline.
+    #[test]
+    fn the_rule_matches_the_whole_text_or_nothing() {
+        assert_eq!(info("text\n[a]: /u"), None);
+        assert_eq!(info("[a]: /u\n"), None);
+        assert_eq!(info("[a]:\n/u\n\"t\""), None);
+        assert_eq!(info("[a]:"), None);
+    }
+
+    /// **The `\9` backreference closes the title with whatever opened it**, so
+    /// a parenthesised title matches nothing at all — not the definition
+    /// without a title, the *whole rule* fails. Measured, because reading the
+    /// pattern suggests a partial match.
+    #[test]
+    fn a_parenthesised_title_defeats_the_whole_rule() {
+        assert_eq!(info("[a]: /u (t)"), None);
+        // And an unquoted title is accepted, because capture 9 can be empty.
+        assert_eq!(info("[a]: /u t"), Some(("a".into(), label("/u", "t"))));
+    }
+
+    /// `(<?)` and `(>?)` are separate captures, so the href is the bare URL —
+    /// the angle brackets are not part of it.
+    #[test]
+    fn angle_brackets_around_the_href_are_not_part_of_it() {
+        assert_eq!(info("[a]: <u> \"t\""), Some(("a".into(), label("u", "t"))));
+    }
+
+    /// A measured curiosity, pinned because it is the kind of thing a rewrite
+    /// would "fix": trailing spaces after a title-less href are split between
+    /// captures 8, 10 and 11, and muya's `title` ends up a single space.
+    #[test]
+    fn trailing_spaces_after_a_bare_href_become_a_one_space_title() {
+        assert_eq!(info("[a]: /u   "), Some(("a".into(), label("/u", " "))));
     }
 }

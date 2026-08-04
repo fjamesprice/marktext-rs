@@ -59,20 +59,24 @@
 //! return [`Unimplemented`], which those harnesses report as *skipped* rather
 //! than *failed*. See `spec/README.md` for how the ratchet flips on at M2.
 //!
-//! ## M2 S2 status — the whole block tree exists, the entry points still do not
+//! ## M2 S3 status — `parse` and `dump_state` answer; the other two do not
 //!
 //! [`block::parse_blocks`] maps `pulldown-cmark`'s event stream onto
 //! `mt_doc::Block` and agrees with `MarkdownToState` on the **full `TState`
 //! JSON** — names, `meta` and leaf text — over all 1344 of §4 C1's inputs and
 //! all 4,985 leaves in them; [`state::to_state`] emits that JSON from a
-//! [`Document`]. **[`parse`], [`serialize`], [`dump_state`] and
-//! [`render_to_static_html`] all still return [`Unimplemented`], deliberately**
-//! — docs/M2.md §5 D6 stages the three ratchets by entry point, and the first
-//! `Ok` from any of them wakes one. S3 is where `parse` becomes
-//! `parse_blocks` plus the label-map pass.
+//! [`Document`]. S3 wired both into [`parse`] and [`dump_state`], added the
+//! label-map pass ([`labels`]) and kept the parse's per-node source ranges
+//! ([`SourceMap`]). **The first of D6's three ratchets is awake:**
+//! `cargo xtask diff` compares 22 whole documents where it used to skip them.
 //!
-//! `cargo xtask blocks` is the gate and it compares text by default from S2
-//! on; `--no-text` is what asks for less.
+//! **[`serialize`] and [`render_to_static_html`] still return
+//! [`Unimplemented`], deliberately** — docs/M2.md §5 D6 stages the three
+//! ratchets by entry point so that one harness at a time starts complaining,
+//! and those two are S4's and S5's.
+//!
+//! `cargo xtask blocks` is the finer gate and it compares text by default from
+//! S2 on; `--no-text` is what asks for less.
 //!
 //! The direction table above is M0's transcription of §4 and **§4 C2 corrects
 //! its first row**: leaf text is not "captured as raw source slices" — it is a
@@ -81,16 +85,30 @@
 //! hold, and [`block`] never reads one.
 
 pub mod block;
+pub mod labels;
 pub mod state;
 
-use mt_doc::Document;
+use std::collections::BTreeMap;
+use std::ops::Range;
 
-/// Returned by every entry point in this crate at M0.
+use mt_doc::{Document, NodeId};
+use mt_inline::Labels;
+
+/// Returned by the entry points this milestone has not reached yet.
 ///
 /// Callers in the test harnesses treat this as "skip", not "fail", so the
-/// harnesses can run green in CI before there is a parser. When these
-/// functions start returning `Ok`, the harnesses begin enforcing — no harness
-/// change required. That is the M2 flip described in `spec/README.md`.
+/// harnesses can run green in CI before there is a parser. When one of these
+/// functions starts returning `Ok`, the harnesses begin enforcing — no harness
+/// change required. That is the M2 flip described in `spec/README.md`, and
+/// §5 D6 stages it one entry point at a time.
+///
+/// **[`parse`] and [`dump_state`] no longer return this at all**, and their
+/// signatures say so: they are infallible. A `Result` whose `Err` arm no input
+/// can reach is the shape this milestone keeps learning to distrust, so the arm
+/// was removed rather than left as an unreachable branch.
+/// [`serialize`] and [`render_to_static_html`] keep it because for them it is
+/// still the truth, and `mt-cli`'s exit 3 is still how a caller in another
+/// process hears it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Unimplemented;
 
@@ -225,9 +243,120 @@ impl Default for Options {
     }
 }
 
-/// Markdown → [`Document`]. Port of `markdownToState.ts`.
-pub fn parse(_markdown: &str, _options: Options) -> Result<Document, Unimplemented> {
-    Err(Unimplemented)
+/// Everything one parse knows: the tree, the label map, and where each node
+/// came from.
+///
+/// [`parse`] returns this rather than a bare [`Document`] because two of the
+/// three are facts about *the parse* and not about the document, and there is
+/// nowhere on a `Document` to put them that stays true:
+///
+/// - **`document`** is the model the editor holds and edits.
+/// - **`labels`** is what makes `[text][ref]` a reference link. muya rebuilds
+///   it inside `patch()` — a full depth-first walk of the document on **every
+///   block render**, which is a keystroke. That is a shape to notice rather
+///   than to copy: it is rebuilt here once per parse, and [`labels::collect`]
+///   is public so that an editor which has just changed a definition can redo
+///   it deliberately rather than on every frame.
+/// - **`source_map`** is [`SourceMap`], below.
+///
+/// The alternative shapes were considered and rejected in the same breath: a
+/// side table hung off `Document` would be a field whose invariant no `Edit`
+/// maintains, and a second entry point returning "parse, but with the extras"
+/// would fork the only parse path in the crate so that the interesting half
+/// could be forgotten.
+#[derive(Debug)]
+pub struct Parsed {
+    /// The block tree — `MarkdownToState.generate()`'s `TState[]`, rooted.
+    pub document: Document,
+    /// The reference definitions this document defines, keyed lowercase.
+    pub labels: Labels,
+    /// Where every node's block came from in the markdown that was parsed.
+    pub source_map: SourceMap,
+}
+
+/// Every node's source range, from the parse that built it.
+///
+/// # What it is for
+///
+/// A leaf's `text` is a *reconstruction* (§4 C2), so a byte offset into it does
+/// not map back to a document offset by addition. Three later stages need the
+/// reverse direction and all three need the same thing: S6's region reparse
+/// (§4.1, D7), M4's caret placement from a click, and the per-leaf reverse
+/// offset map M2.md §10 owes M3/M4.
+///
+/// §10's correction at S2 is why this is a map of **ranges** rather than of
+/// offsets: `strip_lines` needs the source lines and the ancestor containers'
+/// prefixes, the ancestors are the tree, and their prefixes are computable from
+/// their ranges — so `(src, tree, ranges)` is enough to re-run the
+/// container-prefix stripper for one block, lazily, at any later stage.
+/// [`block::tests::the_stripper_is_re_runnable_from_src_tree_and_ranges`] is
+/// that claim as a test rather than as a sentence.
+///
+/// # What it does not promise
+///
+/// **It is a fact about one parse, not an invariant of the document.** Nothing
+/// updates it when an [`mt_doc::Edit`] is applied, and it is deliberately not
+/// reachable from a [`Document`] so that it cannot be mistaken for something
+/// that is. After an edit, the ranges of every node at or after the edit are
+/// stale; the fix is another parse (or, at S6, a region reparse that produces
+/// new ranges for the region), not a maintained side table.
+///
+/// The half that is **not** free from this map is the per-kind half: an atx
+/// heading's text is rebuilt from scratch, a code block loses columns *after*
+/// stripping, a table cell is trimmed and unescaped. Each of those needs its
+/// own inverse and each inverse belongs beside its rule — there is no stage at
+/// which that half falls out of anything.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceMap {
+    ranges: BTreeMap<NodeId, Range<usize>>,
+}
+
+impl SourceMap {
+    /// The range `id`'s block was built from, or `None` for the root and for a
+    /// node this map did not build.
+    #[must_use]
+    pub fn get(&self, id: NodeId) -> Option<Range<usize>> {
+        self.ranges.get(&id).cloned()
+    }
+
+    /// How many nodes carry a range. Every live node except the root does.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.ranges.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+
+    /// Every `(node, range)` pair, in `NodeId` order — which for a fresh parse
+    /// is allocation order, which is document order.
+    pub fn iter(&self) -> impl Iterator<Item = (NodeId, Range<usize>)> + '_ {
+        self.ranges.iter().map(|(id, range)| (*id, range.clone()))
+    }
+
+    pub(crate) fn insert(&mut self, id: NodeId, range: Range<usize>) {
+        self.ranges.insert(id, range);
+    }
+}
+
+/// Markdown → [`Parsed`]. Port of `markdownToState.ts`.
+///
+/// [`block::parse_blocks`] plus [`labels::collect`], which is what S1 recorded
+/// this function would be. **Infallible:** every string is a document, exactly
+/// as `MarkdownToState.generate()` is total.
+///
+/// Callers that want only the tree write `parse(md, options).document`.
+#[must_use]
+pub fn parse(markdown: &str, options: Options) -> Parsed {
+    let (document, source_map) = block::parse_blocks_with_ranges(markdown, options);
+    let labels = labels::collect(&document);
+    Parsed {
+        document,
+        labels,
+        source_map,
+    }
 }
 
 /// [`Document`] → markdown. Port of `stateToMarkdown.ts`.
@@ -260,25 +389,57 @@ pub fn render_to_static_html(
 /// the TypeScript `TState` union.
 ///
 /// Exposed on the command line as `mt-cli --dump-state`.
-pub fn dump_state(_markdown: &str, _options: Options) -> Result<String, Unimplemented> {
-    Err(Unimplemented)
+///
+/// [`parse`] plus [`state::to_state_json`], and infallible for the same reason
+/// `parse` is. `mt-cli` therefore no longer exits 3 for this command — the
+/// exit code stays defined because S5's `--to-html` will need it again, and
+/// `cargo xtask diff` still maps it to `SKIP` for the same reason.
+#[must_use]
+pub fn dump_state(markdown: &str, options: Options) -> String {
+    state::to_state_json(&parse(markdown, options).document)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The M0 contract: every entry point reports "unimplemented" rather than
-    /// panicking, so the harnesses can distinguish *not built yet* from
-    /// *broken*. When these start returning `Ok`, this test is the reminder
-    /// to delete it and let the harnesses enforce.
+    /// The M0 contract, minus the half S3 discharged: an entry point this
+    /// milestone has not reached reports "unimplemented" rather than panicking,
+    /// so the harnesses can distinguish *not built yet* from *broken*.
+    ///
+    /// **The `dump_state` assertion was deleted at S3**, in the commit where it
+    /// first returned an answer, and `serialize`'s is the reminder for S4. D6's
+    /// order is `parse`+`dump_state`, then `serialize`, then
+    /// `render_to_static_html`; this test shrinks by one line per stage and
+    /// disappears at S5.
     #[test]
     fn entry_points_report_unimplemented_at_m0() {
         assert_eq!(
             render_to_static_html("x", Options::SPEC, false),
             Err(Unimplemented)
         );
-        assert_eq!(dump_state("x", Options::MUYA_DEFAULT), Err(Unimplemented));
+        assert_eq!(
+            serialize(&parse("x", Options::MUYA_DEFAULT).document, Options::SPEC),
+            Err(Unimplemented)
+        );
+    }
+
+    /// D6's first ratchet, at its narrowest: the two entry points S3 opened
+    /// return an answer at all.
+    ///
+    /// The *content* of that answer is `cargo xtask diff`'s claim over 22 whole
+    /// documents and `cargo xtask blocks`'s over 1344 inputs — neither of which
+    /// runs under `cargo test`, which is why this asserts the thing they
+    /// cannot: that the door is open.
+    #[test]
+    fn parse_and_dump_state_answer_from_s3_on() {
+        let parsed = parse("# hi\n\n[a]: /u\n", Options::MUYA_DEFAULT);
+        assert_eq!(parsed.document.children(parsed.document.root()).len(), 2);
+        assert_eq!(parsed.labels.len(), 1);
+        assert_eq!(parsed.source_map.len(), 2);
+
+        let json = dump_state("# hi\n", Options::MUYA_DEFAULT);
+        assert!(json.contains("\"atx-heading\""), "{json}");
     }
 
     #[test]

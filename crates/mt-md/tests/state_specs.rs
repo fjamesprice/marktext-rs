@@ -74,23 +74,32 @@
 //! same guard is here from the start rather than added at the end: see
 //! [`the_ratchet_fails_a_listed_case_that_starts_passing`].
 //!
-//! # What a green run at S0 does and does not claim
+//! # What a green run claims, and how that changed at S3
 //!
-//! `mt_md::parse`, `serialize`, `dump_state` and `render_to_static_html` all
-//! return `Err(Unimplemented)`, so **every one of the 184 listed cases fails,
-//! and is meant to.** A green `cargo test --workspace` at S0 claims exactly
-//! two things about this file: the cases exist and compile against the real
-//! API, and each one fails because the engine is unimplemented rather than
-//! because a type is missing. [`every_pending_case_fails_because_the_engine_is_unimplemented`]
-//! is that claim, machine-checked.
+//! **At S0** every entry point returned `Err(Unimplemented)`, so all 184 listed
+//! cases failed and were meant to. A green run claimed two things: the cases
+//! compile against the real API, and each failed because the engine was
+//! unimplemented rather than because a type was missing —
+//! `every_pending_case_fails_because_the_engine_is_unimplemented` was that
+//! claim, and this stage deleted it, as its own doc comment said to.
 //!
-//! Three of the 187 are **not** listed, because they pass today: the
+//! **From S3** `mt_md::parse` answers, so a listed case fails for one of two
+//! reasons: the entry point it needs is still closed (`serialize` at S4,
+//! `render_to_static_html` at S5) or the port does not agree with muya yet. The
+//! second kind is the interesting one and it is enumerated rather than left in
+//! the pile — see
+//! [`the_only_listed_cases_that_fail_for_their_own_reason_are_the_three_m2_names`].
+//!
+//! Three of the 187 were **not** listed at S0, because they passed then: the
 //! `strongCjkFlanking` cases that go through the inline tokenizer rather than
 //! through `renderToStaticHTML`. M1 ported the CJK flanking widening
 //! (`crates/mt-inline/src/emphasis.rs`), so those inputs already tokenize to
 //! `strong`/`em`. Row two of the table above demands they be delisted, and
 //! M1's S1 argument applies unchanged: leaving a passing case listed means the
 //! list stops measuring what is implemented.
+//!
+//! **S3 delisted 63**, leaving 121 — the arithmetic and the three corrections
+//! it forced on M2.md's §6 and §7 are in that document's "S3's verification".
 //!
 //! **Caveat, inherited:** the ratchet uses `catch_unwind`, so
 //! `cargo test --release` aborts rather than catching (the release profile
@@ -169,15 +178,19 @@ const RENDER_DEFAULT: Options = Options {
 // Engine entry points, wrapped so a failure names the reason
 // ---------------------------------------------------------------------------
 //
-// Every one of these panics with `Unimplemented` at S0, which is what the
-// listed cases fail on and what
-// `every_pending_case_fails_because_the_engine_is_unimplemented` checks for.
+// At S0 every one of these panicked with `Unimplemented`, which is what the
+// listed cases failed on. **From S3, `parse` is infallible** — it returns
+// `mt_md::Parsed` and this helper keeps only the tree, which is what the
+// TypeScript specs assert against; the label map and the source ranges have
+// their own tests in `mt_md`. `serialize` and `html` still panic, and D6's
+// order is what makes that the interesting fact about the remaining list.
+//
 // They are deliberately not `Result`-returning: a transcribed spec should read
 // like its TypeScript original, and its original does not handle an error the
 // engine cannot produce once it is implemented.
 
 fn parse(markdown: &str, options: Options) -> Document {
-    mt_md::parse(markdown, options).unwrap_or_else(|e| panic!("mt_md::parse: {e:?} — {e}"))
+    mt_md::parse(markdown, options).document
 }
 
 fn serialize(doc: &Document, options: Options) -> String {
@@ -572,10 +585,18 @@ const TRANSCRIBED: &[(&str, usize)] = &[
 ///
 /// Empty is the M2 exit gate (§6's closing table, clause 1).
 ///
-/// # 184 of 187, and the three that are not here
+/// # 121 of 187, from 184 at S0
 ///
-/// At S0 every entry point of `mt_md` returns `Err(Unimplemented)`, so every
-/// case that touches one fails. The three exceptions go through
+/// **S3 delisted 63 in one commit**, which is D6's staging working as designed:
+/// `parse` is one entry point and every case that needed only `parse` stopped
+/// failing on the same day. §6's S3 row predicted 54 and a second reading of §7
+/// predicted 86; neither is the answer, and M2.md's "S3's verification" has the
+/// arithmetic and the three shapes that produced it. What is left needs
+/// `serialize` (S4), `render_to_static_html` (S5), or one of the three
+/// disagreements M2.md §10's "Owed by S3" names.
+///
+/// At S0 every entry point of `mt_md` returned `Err(Unimplemented)`, so every
+/// case that touched one failed. The three exceptions go through
 /// `mt_inline::tokenizer` instead —
 /// `strong_cjk_flanking::editor_path_*` — and M1 already ported the CJK
 /// flanking widening they assert, so they pass. Row two of the ratchet table
@@ -624,7 +645,6 @@ const PENDING: &[&str] = &[
     "block_serialization::round_trips_a_table_with_explicit_alignment",
     "block_serialization::round_trips_a_cell_containing_an_escaped_pipe",
     "block_serialization::serialises_an_empty_trailing_cell_as_a_blank_cell",
-    "block_serialization::parses_a_four_space_indented_block_as_an_indented_code_block",
     "block_serialization::round_trips_an_indented_code_block",
     "block_serialization::round_trips_a_multi_line_indented_code_block",
     "block_serialization::round_trips_a_yaml_frontmatter_block",
@@ -638,11 +658,8 @@ const PENDING: &[&str] = &[
     "code_fence_length::round_trips_a_long_fenced_block_byte_stably",
     "code_fence_length::still_uses_a_plain_three_backtick_fence_for_ordinary_blocks",
     // diagram_flowchart_sequence — 5
-    "diagram_flowchart_sequence::parses_a_flowchart_fence_as_a_diagram_block",
-    "diagram_flowchart_sequence::parses_a_sequence_fence_as_a_diagram_block",
     "diagram_flowchart_sequence::round_trips_a_flowchart_diagram_block",
     "diagram_flowchart_sequence::round_trips_a_sequence_diagram_block",
-    "diagram_flowchart_sequence::still_parses_mermaid_plantuml_and_vega_lite",
     // footnote_html — 6
     "footnote_html::emits_a_footnotes_section_with_an_li_for_a_single_ref_and_def_pair",
     "footnote_html::numbers_inline_references_in_source_order",
@@ -651,31 +668,15 @@ const PENDING: &[&str] = &[
     "footnote_html::preserves_a_footnote_definition_containing_a_nested_bullet_list",
     "footnote_html::does_not_transform_a_literal_reference_inside_a_fenced_code_block",
     // gitlab_math — 16
-    "gitlab_math::promotes_a_math_fence_to_a_gitlab_styled_math_block",
-    "gitlab_math::leaves_a_math_fence_as_a_code_block_when_gitlab_compatibility_is_off",
-    "gitlab_math::leaves_a_math_fence_as_a_code_block_when_math_is_off",
-    "gitlab_math::always_parses_dollar_dollar_as_a_non_gitlab_math_block",
     "gitlab_math::serializes_a_gitlab_styled_math_block_back_to_a_math_fence",
     "gitlab_math::serializes_a_dollar_dollar_math_block_back_to_dollar_dollar",
     "gitlab_math::keys_the_fence_purely_on_meta_math_style_not_on_the_option",
     "gitlab_math::preserves_indentation_when_a_gitlab_math_block_is_nested_in_a_list",
     "gitlab_math::round_trips_a_math_fence_unchanged_with_gitlab_compatibility_on",
     "gitlab_math::round_trips_dollar_dollar_unchanged_regardless_of_the_flag",
-    "gitlab_math::a_three_space_indented_math_fence_is_still_promoted",
-    "gitlab_math::a_four_space_indented_fence_is_an_indented_code_block_not_math",
-    "gitlab_math::a_four_backtick_math_fence_is_promoted",
-    "gitlab_math::an_info_string_after_math_is_not_promoted",
-    "gitlab_math::the_math_language_tag_is_case_sensitive",
     "gitlab_math::a_tilde_math_fence_is_promoted_by_muya_unlike_muyajs",
     // gitlab_math_toggle — 4
-    "gitlab_math_toggle::starts_as_a_code_block_when_gitlab_compatibility_is_off",
-    "gitlab_math_toggle::promotes_a_math_fence_to_a_math_block_when_the_option_is_on",
-    "gitlab_math_toggle::demotes_a_math_fence_back_to_a_code_block_when_the_option_is_off",
-    "gitlab_math_toggle::leaves_dollar_dollar_math_blocks_untouched_across_a_toggle",
     // info_string_model — 3
-    "info_string_model::keeps_a_language_plus_attributes_verbatim",
-    "info_string_model::keeps_a_pandoc_attribute_block_verbatim",
-    "info_string_model::stores_a_plain_language_as_is",
     // list_marker_option — 6
     "list_marker_option::default_bullet_list_uses_a_dash_marker",
     "list_marker_option::a_star_bullet_list_marker_emits_star_markers",
@@ -709,62 +710,21 @@ const PENDING: &[&str] = &[
     "list_serialization::treats_the_unimplemented_tab_option_as_a_1_space_indent",
     "list_serialization::inserts_blank_lines_between_items_when_loose_is_true",
     "list_serialization::keeps_items_adjacent_when_loose_is_false",
-    "list_serialization::list_meta_loose_carries_the_prefer_loose_list_item_flag_verbatim",
     "list_serialization::keeps_a_non_1_start_number_through_the_round_trip",
-    "list_serialization::parses_the_start_number_into_order_list_meta_start",
     "list_serialization::emits_the_configured_delimiter_for_an_ordered_list",
     "list_serialization::combines_a_non_1_start_with_the_paren_delimiter",
     // markdown_to_state — 32
-    "markdown_to_state::keeps_an_empty_unchecked_task_item_after_a_populated_task_item",
-    "markdown_to_state::parses_a_single_empty_unchecked_task_item_as_a_task_list_item",
-    "markdown_to_state::parses_a_single_empty_checked_task_item_as_a_checked_task_list_item",
     "markdown_to_state::parses_an_empty_task_marker_with_lazy_continuation_text_as_a_task_item",
     "markdown_to_state::keeps_lazy_continuation_text_on_the_final_empty_task_marker",
-    "markdown_to_state::does_not_treat_dash_empty_brackets_as_an_empty_task_item",
-    "markdown_to_state::does_not_treat_dash_bracket_space_text_as_a_task_item",
-    "markdown_to_state::keeps_three_levels_of_task_list_nesting",
-    "markdown_to_state::parses_setext_h1_as_setext_heading_level_1",
-    "markdown_to_state::parses_setext_h2_as_setext_heading_level_2",
-    "markdown_to_state::parses_hash_text_as_atx_heading_not_setext",
-    "markdown_to_state::starts_a_new_list_when_the_bullet_marker_changes",
-    "markdown_to_state::starts_a_new_list_when_the_ordered_delimiter_changes",
-    "markdown_to_state::does_not_parse_dash_foo_without_a_space_as_a_list_item",
-    "markdown_to_state::still_parses_dash_space_foo_as_a_list_item",
-    "markdown_to_state::splits_a_mixed_task_and_bullet_sequence_into_two_lists",
     "markdown_to_state::converts_block_level_footnote_tokens_into_footnote_states",
     "markdown_to_state::round_trips_a_single_paragraph_footnote_through_state",
-    "markdown_to_state::keeps_tight_nested_task_lists_nested",
-    "markdown_to_state::retains_surrounding_blank_lines_when_trim_is_false",
-    "markdown_to_state::strips_leading_and_trailing_blank_lines_when_trim_is_true",
-    "markdown_to_state::keeps_interior_blank_lines_while_trimming_the_surrounding_ones",
     "markdown_to_state::honours_the_trim_option_through_a_state_to_markdown_round_trip",
-    "markdown_to_state::parses_text_then_dashes_as_a_single_level_2_setext_heading",
-    "markdown_to_state::parses_text_then_equals_as_a_single_level_1_setext_heading",
-    "markdown_to_state::parses_a_bare_dashes_line_as_a_single_thematic_break",
-    "markdown_to_state::parses_three_dashes_as_a_thematic_break",
-    "markdown_to_state::parses_three_stars_as_a_thematic_break",
-    "markdown_to_state::parses_three_underscores_as_a_thematic_break",
-    "markdown_to_state::does_not_parse_mixed_markers_as_a_thematic_break",
-    "markdown_to_state::lowers_a_lone_img_tag_to_a_paragraph",
-    "markdown_to_state::keeps_other_html_as_an_html_block_state",
     // math_trailing_space — 3
-    "math_trailing_space::parses_a_math_block_whose_closing_fence_has_a_trailing_space",
-    "math_trailing_space::parses_a_math_block_whose_closing_fence_has_a_trailing_tab",
-    "math_trailing_space::still_parses_a_math_block_with_no_trailing_space",
     // nested_mixed_lists — 4
     "nested_mixed_lists::preserves_a_bullet_list_nested_inside_an_ordered_list_item_round_trip",
     "nested_mixed_lists::preserves_an_ordered_list_nested_inside_a_bullet_list_item_round_trip",
-    "nested_mixed_lists::produces_a_bullet_list_state_nested_inside_the_second_order_list_item",
-    "nested_mixed_lists::produces_an_order_list_state_nested_inside_a_bullet_list_item",
     // reference_link — 8
-    "reference_link::loading_markdown_with_a_definition_keeps_it_as_a_paragraph_state",
     "reference_link::round_trip_output_contains_the_reference_definition_line",
-    "reference_link::reference_link_resolves_to_a_token_whose_label_maps_to_href",
-    "reference_link::full_collapsed_and_shortcut_forms_all_produce_reference_link_tokens",
-    "reference_link::a_definitions_title_propagates_through_label_lookup",
-    "reference_link::label_matching_is_case_insensitive",
-    "reference_link::a_duplicate_label_keeps_the_first_definition",
-    "reference_link::an_orphan_reference_link_stays_plain_text",
     // render_to_static_html — 20
     "render_to_static_html::renders_a_simple_paragraph",
     "render_to_static_html::renders_headings_with_id_less_h_tags",
@@ -807,8 +767,6 @@ const PENDING: &[&str] = &[
     "strong_cjk_flanking::static_path_recognises_strong_in_cjk_context",
     "strong_cjk_flanking::static_path_does_not_bold_or_italicise_the_negative_cases",
     // table_escaped_pipe — 4
-    "table_escaped_pipe::an_escaped_pipe_inside_code_is_stored_as_a_bare_pipe",
-    "table_escaped_pipe::keeps_the_table_structure_two_columns_three_rows",
     "table_escaped_pipe::round_trips_the_escaped_pipes",
     "table_escaped_pipe::round_trips_an_escaped_pipe_in_plain_cell_text",
 ];
@@ -861,35 +819,60 @@ fn every_pending_entry_names_a_transcribed_case() {
         unknown.is_empty(),
         "PENDING names cases that do not exist: {unknown:?}"
     );
-    assert_eq!(PENDING.len(), 184, "187 transcribed, 3 already passing");
+    assert_eq!(
+        PENDING.len(),
+        121,
+        "187 transcribed; 3 passed at S0 and S3 delisted 63"
+    );
 }
 
-/// **The S0 gate's third clause**, machine-checked: the listed cases fail
-/// because the engine is unimplemented, not because a type is missing or a
-/// transcription is wrong.
-///
-/// A transcribed case that panics for some other reason — a bad index into a
-/// tree that was never built, a `.expect()` on the wrong `Option` — would
-/// still be "listed and failing", so the ratchet alone cannot tell the two
-/// apart. At S0 it can be checked directly, because there is exactly one
-/// legitimate reason to fail.
-///
-/// **Delete this at S3**, in the commit where `parse` first returns `Ok`.
-/// From then on a listed case fails because the port does not agree with muya
-/// yet, which is the whole point of the list, and this test would fail for the
-/// right reason at the wrong time. `mt_md`'s own
-/// `entry_points_report_unimplemented_at_m0` is the paired reminder.
-#[test]
-fn every_pending_case_fails_because_the_engine_is_unimplemented() {
-    let mut wrong_reason = Vec::new();
+// `every_pending_case_fails_because_the_engine_is_unimplemented` lived here
+// until M2 S3, and its own doc comment named this stage as the one to delete it
+// in. It drove all 184 listed cases and asserted each panic named
+// `Unimplemented` — which was the S0 gate's third clause, machine-checked: at
+// S0 there was exactly one legitimate reason to fail, so "listed and failing
+// for the *right* reason" was checkable and a transcription error was not
+// hiding behind the list.
+//
+// From S3 that is no longer true and the test would fail for the right reason
+// at the wrong time: `parse` answers, so a listed case now fails either because
+// `serialize`/`render_to_static_html` are still closed **or** because the port
+// does not agree with muya yet — and the second is the whole point of the list.
+// The ratchet's four rows are what guard it from here.
 
+/// **The three listed cases that fail for a reason of their own**, and the
+/// claim that they are the only three.
+///
+/// From S3 a listed case fails for one of two reasons: the entry point it needs
+/// is still closed (`serialize` at S4, `render_to_static_html` at S5), or the
+/// port does not agree with muya yet. The first is bookkeeping and the second
+/// is a finding — and a list of 122 hides the difference, which is exactly how
+/// the S0 test this replaces stopped being able to tell them apart.
+///
+/// So the second kind is enumerated. Each name here is a disagreement M2.md
+/// records, with its measured reproducer and the stage that owes it; the
+/// assertion is that **no fourth one is hiding in the list**. A new name
+/// appearing means a stage introduced a disagreement, and a name that stops
+/// failing means one was fixed without this being updated.
+#[test]
+fn the_only_listed_cases_that_fail_for_their_own_reason_are_the_three_m2_names() {
+    /// M2.md §10, "Owed by S3". Two are the empty-task-marker lazy
+    /// continuation (`- [ ] \ntext`), which `marked` folds into the item and
+    /// GFM does not; one is `Options::footnote`, whose block extension is not
+    /// ported.
+    const KNOWN: &[&str] = &[
+        "markdown_to_state::parses_an_empty_task_marker_with_lazy_continuation_text_as_a_task_item",
+        "markdown_to_state::keeps_lazy_continuation_text_on_the_final_empty_task_marker",
+        "markdown_to_state::converts_block_level_footnote_tokens_into_footnote_states",
+    ];
+
+    let mut found = Vec::new();
     for (name, case) in all_cases() {
         if !PENDING.contains(&name) {
             continue;
         }
         let Err(payload) = panic::catch_unwind(AssertUnwindSafe(case)) else {
-            // A listed case that passes is row two's business; the per-case
-            // test reports it with the right message.
+            // Row two's business; the per-case test reports it properly.
             continue;
         };
         let message = payload
@@ -897,18 +880,27 @@ fn every_pending_case_fails_because_the_engine_is_unimplemented() {
             .cloned()
             .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
             .unwrap_or_else(|| "<non-string panic payload>".to_string());
-        if !message.contains("Unimplemented") {
-            wrong_reason.push(format!("{name}: {message}"));
+        // The two helpers that still panic name themselves in the panic.
+        if !message.contains("mt_md::serialize")
+            && !message.contains("mt_md::render_to_static_html")
+        {
+            found.push((name, message.lines().next().unwrap_or("").to_string()));
         }
     }
 
-    assert!(
-        wrong_reason.is_empty(),
-        "{} listed case(s) failed for a reason other than the engine being \
-         unimplemented, which means the transcription is wrong rather than the \
-         engine missing:\n{}",
-        wrong_reason.len(),
-        wrong_reason.join("\n")
+    let names: Vec<&str> = found.iter().map(|(n, _)| *n).collect();
+    assert_eq!(
+        names,
+        KNOWN,
+        "the set of listed cases failing for their own reason changed.\n\
+         Found:\n{}\n\
+         If a name is new, M2.md's owed list needs it before this test does. \
+         If one is gone, delete it from KNOWN in the commit that fixed it.",
+        found
+            .iter()
+            .map(|(n, m)| format!("  {n}: {m}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }
 

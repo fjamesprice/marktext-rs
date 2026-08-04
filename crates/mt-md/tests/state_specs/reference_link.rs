@@ -6,15 +6,28 @@
 //!
 //! M2.md §5 D3 is the decision these cases pin: **`mt_md::block` scans for
 //! definition lines itself and does not read `pulldown-cmark`'s `RefDefs`.**
-//! [`a_duplicate_label_keeps_the_first_definition`] is the reproducer D3 names
-//! — `RefDefs` is keyed by Unicode-case-folded label, so `[dup]: /a` and
+//!
+//! ~~[`a_duplicate_label_keeps_the_first_definition`] is the reproducer D3
+//! names — `RefDefs` is keyed by Unicode-case-folded label, so `[dup]: /a` and
 //! `[dup]: /b` collapse to one entry and the second line is unrecoverable.
-//! muya emits two paragraphs and keeps the first definition as the target.
+//! muya emits two paragraphs and keeps the first definition as the target.~~
+//! **Corrected at S3.** muya emits **one** paragraph and drops the second line
+//! — D3's own correction says so, and this file was written before it. The
+//! duplicate collapse is a rule the port reproduces rather than a reason to
+//! avoid `RefDefs`; the reasons that survive are about *position*, and D3 lists
+//! three. See that case for what the assertion used to claim.
 //!
 //! The label map is built the way muya builds it —
 //! `InlineRenderer.collectReferenceDefinitions`, a regex over paragraph text —
 //! rather than from a parser API, so that the map and the round-tripped
-//! paragraphs cannot disagree.
+//! paragraphs cannot disagree. From S3 that pass ships as
+//! [`mt_md::labels::collect`] and [`mt_md::parse`] returns its result; the
+//! local mirror below is kept because the TypeScript spec has one too, and
+//! because a spec that called the implementation would stop being a check of
+//! it. The two differ in one respect, named on
+//! [`a_duplicate_label_keeps_the_first_definition`]'s sibling in
+//! `mt_md::labels::tests`: this mirror is first-write-wins, like
+//! `referenceLink.spec.ts`'s, and the engine is last-write-wins.
 
 #![allow(unused_imports)]
 use crate::*;
@@ -193,12 +206,27 @@ fn label_matching_is_case_insensitive() {
     );
 }
 
-/// Case 7, and **M2.md §5 D3's reproducer**. `pulldown-cmark`'s
-/// `parser.reference_definitions()` collapses these two lines into one entry
-/// keyed `dup`, so the second is in neither the event stream nor the map —
-/// silent data loss on a document the user typed. The port scans for
-/// definition lines itself for exactly this reason, and the *first* definition
-/// wins.
+/// Case 7 — the first definition wins.
+///
+/// **Corrected at S3, and the correction is S0 inheriting a premise M2.md §5 D3
+/// had already withdrawn.** This case used to assert a second half that the
+/// TypeScript original does not have: that *both* lines survive a round trip,
+/// "which is the half `RefDefs` cannot deliver at all". Asked of the running
+/// engine, muya emits **one** paragraph for these two lines and drops the
+/// second — `marked`'s `def` branch pushes a token only for a label it has not
+/// already seen — so the assertion asserted the opposite of the reference.
+///
+/// D3's correction records exactly this and the port reproduces it
+/// (`block::scan_definitions`); what S0 transcribed was D3's *original* text.
+/// The lesson is the milestone's recurring one and this is its eighth
+/// instance: an assertion nothing had run yet is not evidence, and the
+/// transcription is the place it hid.
+///
+/// What survives is the case the original makes, and D3's actual reason for
+/// scanning rather than reading `RefDefs`: the *first* definition is the live
+/// one, which `RefDefs` also happens to say — its real failure is that a
+/// definition's tree position and its document order are unrecoverable from a
+/// map keyed by case-folded label.
 fn a_duplicate_label_keeps_the_first_definition() {
     let doc = parse(
         "foo [bar][dup]\n\n[dup]: https://first.example\n[dup]: https://second.example\n",
@@ -210,17 +238,9 @@ fn a_duplicate_label_keeps_the_first_definition() {
         Some("https://first.example")
     );
 
-    // And §10's lossless round-trip: both lines survive, which is the half
-    // `RefDefs` cannot deliver at all.
-    let out = round_trip(
-        "foo [bar][dup]\n\n[dup]: https://first.example\n[dup]: https://second.example\n",
-        NO_EXT,
-    );
-    assert!(out.contains("https://first.example"), "{out:?}");
-    assert!(
-        out.contains("https://second.example"),
-        "the duplicate definition must not be dropped: {out:?}"
-    );
+    // And the reason it is the first: the second line never became a block, so
+    // there was no second paragraph for the label pass to overwrite from.
+    assert_eq!(paragraph_texts(&doc).len(), 2);
 }
 
 /// Case 8. No definition, no token — the brackets stay literal text.

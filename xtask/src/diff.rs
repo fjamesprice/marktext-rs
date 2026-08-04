@@ -434,10 +434,15 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
         // No silent caps. M2 has not registered a block divergence yet, and
         // saying so is the difference between "nothing to tolerate" and
         // "tolerance not wired up".
+        // Three stages in and still none, which M2.md now explains rather than
+        // predicts: the mapping layer sits between a structure decider
+        // (`pulldown-cmark`) and a text decider (`marked`) and has no opinion
+        // of its own, so every disagreement so far was the port's to fix. The
+        // first entry, if there is one, comes from a stage that has an opinion.
         println!(
-            "          none registered yet — S1 is the stage that produces them (§4 C1's \
-             four\n          mechanisms), and rule 1 still holds: a disagreement on an \
-             unregistered\n          input is a failure."
+            "          none registered — S1, S2 and S3 each found nothing to register, and \
+             M2.md\n          §6 says why. Rule 1 still holds: a disagreement on an \
+             unregistered input\n          is a failure."
         );
     }
     println!();

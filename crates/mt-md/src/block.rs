@@ -85,7 +85,7 @@ use pulldown_cmark::{
     Alignment, CodeBlockKind, Event, HeadingLevel, Options as CmarkOptions, Parser, Tag, TagEnd,
 };
 
-use crate::Options;
+use crate::{Options, SourceMap};
 
 /// Markdown → [`Document`]: block structure, `meta` and leaf text.
 ///
@@ -95,15 +95,26 @@ use crate::Options;
 /// `parse` will *call* at S3 — S3's remaining work is the label-map pass, not
 /// a rewrite of this — and it is what `cargo xtask blocks` drives today.
 ///
-/// # What is not returned, and what that costs later
+/// # The source ranges are kept, and they are kept beside the document
 ///
-/// The per-node **source ranges**. They exist while this function runs
-/// ([`Built::range`]) and are dropped when the tree becomes a [`Document`],
-/// because [`mt_doc::Block`] maps 1:1 onto the TypeScript `TState` union and
-/// has nowhere to put them. M2.md §10's owed item is stated in terms of a
-/// per-leaf offset map; the ranges are the thing it actually needs, and S3 is
-/// where `parse`'s signature is decided.
+/// They exist while this function runs ([`Built::range`]) and [`mt_doc::Block`]
+/// maps 1:1 onto the TypeScript `TState` union, so there is nowhere on a
+/// `Block` to put them. S3 decided where instead — [`crate::SourceMap`], a side
+/// table returned *with* the document rather than stored *in* it, for the
+/// reason its own docs give: a range is a fact about one parse, and a
+/// `Document` outlives its parse. [`parse_blocks_with_ranges`] is that
+/// signature; this one drops them, for the callers that only want the tree.
 pub fn parse_blocks(markdown: &str, options: Options) -> Document {
+    parse_blocks_with_ranges(markdown, options).0
+}
+
+/// [`parse_blocks`], keeping the per-node source ranges M2.md §10 owes forward.
+///
+/// The ranges are what makes the container-prefix stripper re-runnable one
+/// block at a time from `(src, tree, ranges)` — S6's region reparse, M4's caret
+/// and the reverse offset map §10 asks for are all that same need. See
+/// [`crate::SourceMap`] for what the map does and does not promise.
+pub fn parse_blocks_with_ranges(markdown: &str, options: Options) -> (Document, SourceMap) {
     to_document(build(markdown, options))
 }
 
@@ -152,29 +163,36 @@ impl Built {
 /// been laid out yet — so the cost of going through `apply` is a revision
 /// counter that counts blocks rather than edits, which no consumer reads as
 /// anything but "changed".
-fn to_document(top: Vec<Built>) -> Document {
+fn to_document(top: Vec<Built>) -> (Document, SourceMap) {
     let mut doc = Document::new();
+    let mut ranges = SourceMap::default();
     // `Document::new` is a root holding one empty paragraph, which is exactly
     // `markdownToState`'s own `states.length ? states : [{ name: 'paragraph',
     // text: '' }]` fallback. So an empty parse needs no special case; a
     // non-empty one drops the placeholder.
     if top.is_empty() {
-        return doc;
+        // The fallback paragraph came from nowhere in the source, and `0..0` is
+        // how the map says so — `src[0..0]` is the empty string, which is the
+        // paragraph's text. Recording it keeps the invariant total: **every
+        // live node except the root has a range**, which is what
+        // `every_node_has_a_range_and_the_ranges_nest` checks.
+        ranges.insert(doc.children(doc.root())[0], 0..0);
+        return (doc, ranges);
     }
 
     let root = doc.root();
     let placeholder = doc.children(root)[0];
     for (index, built) in top.into_iter().enumerate() {
-        insert(&mut doc, root, index, built);
+        insert(&mut doc, &mut ranges, root, index, built);
     }
     doc.apply(&[Edit::RemoveNode { node: placeholder }]);
     // `RemoveNode` detaches rather than frees, and nothing here holds an
     // inverse that could name the placeholder again.
     doc.prune_detached();
-    doc
+    (doc, ranges)
 }
 
-fn insert(doc: &mut Document, parent: NodeId, index: usize, built: Built) {
+fn insert(doc: &mut Document, ranges: &mut SourceMap, parent: NodeId, index: usize, built: Built) {
     let inverse = doc.apply(&[Edit::InsertNode {
         parent,
         index,
@@ -184,8 +202,9 @@ fn insert(doc: &mut Document, parent: NodeId, index: usize, built: Built) {
         [Edit::RemoveNode { node }] => *node,
         other => unreachable!("InsertNode's inverse is RemoveNode; got {other:?}"),
     };
+    ranges.insert(id, built.range);
     for (child_index, child) in built.children.into_iter().enumerate() {
-        insert(doc, id, child_index, child);
+        insert(doc, ranges, id, child_index, child);
     }
 }
 
@@ -1202,6 +1221,43 @@ fn split_list(
 /// The marker is only ever removed from the item's **first** child, which is
 /// `tokens[0]`, and `listIsTask`'s trailing `\S` guarantees that child is a
 /// paragraph.
+///
+/// # Known disagreement — an empty task marker takes a lazy continuation
+///
+/// Found at S3 by the transcribed spec suite, which is a different denominator
+/// from `cargo xtask blocks`'s 1344 and reaches an input none of them do.
+/// `"- [ ] \ntext\n"`:
+///
+/// ```text
+/// muya      task-list › task-list-item › paragraph "text"
+/// the port  task-list › task-list-item › paragraph ""   +  paragraph "text"
+/// ```
+///
+/// The mechanism is one line of `marked` and it is upstream of everything in
+/// this function: to `marked` the item's content is the string `"[ ] "`, which
+/// is **not blank**, so the item's paragraph is open and `text` is an ordinary
+/// lazy continuation of it — and the `[ ] ` prefix comes off afterwards, here.
+/// To GFM the `[ ]` is a *task-list marker* rather than paragraph content, so
+/// `pulldown-cmark` leaves the item empty and `text` starts a new block at
+/// column 0.
+///
+/// Measured, so that whoever fixes it inherits the rule and not the symptom —
+/// seven of thirteen probes differ and the six that agree are the boundary:
+///
+/// ```text
+/// differ  "- [ ] \ntext"        "- [x] \ntext"       "1. [ ] \ntext"
+///         "- [ ] \ntext\nmore"  "> - [ ] \n> text"   "- [ ] \ntext\n- [ ] b"
+/// agree   "- [ ] \n\ntext"      (a blank line closes the paragraph)
+///         "- [ ] \n# head"      "- [ ] \n> quote"    (a block start is not lazy)
+///         "- [ ] \n  text"      (indented — already inside the item)
+///         "- \ntext"  "- a\ntext"  (no task marker: nothing to disagree about)
+/// ```
+///
+/// **Not registered**, on D4 rule 3: an entry needs a failing *differential*
+/// case and no input in either harness's set reaches this. It is held by two
+/// entries in `state_specs.rs`'s `PENDING` instead, and M2.md §10's "Owed by
+/// S3" carries the reproducers. It is S1's layer rather than S3's, which is why
+/// S3 measured it rather than fixing it.
 fn strip_task_markers(src: &str, items: Vec<Built>, ordered: bool, loose: bool) -> Vec<Built> {
     items
         .into_iter()

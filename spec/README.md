@@ -132,10 +132,16 @@ until `mt_md::parse` returns `Ok`. Both consult
 `registered_inputs_for(Layer::Block)` and both match on exact input content, so
 an entry works in either.
 
-**The block layer has no entries, and that is S1's measured result.** After the
-mapping layer, the block tree agrees with `MarkdownToState` on all 1344 — there
-was nothing to register, and rule 3 forbids registering an entry with no
-failing case. Because a tolerance that has never fired is a tolerance that
+**The block layer has no entries after three stages, and that is a measured
+result rather than an omission.** After the mapping layer, the block tree
+agrees with `MarkdownToState` on all 1344 (S1, S2) and the block *state* agrees
+on all 22 whole documents (S3) — there was nothing to register, and rule 3
+forbids registering an entry with no failing case. S3 did find one genuine
+`marked`-versus-GFM disagreement (docs/M2.md §10, "Owed by S3": an empty task
+marker takes a lazy continuation in `marked` and not in GFM) and did **not**
+register it, for exactly that reason: no input in either runner's set reaches
+it, so the entry would report `Stale` and fail the build. It is held by two
+entries in `state_specs.rs`'s `PENDING` and by a characterization test instead. Because a tolerance that has never fired is a tolerance that
 might be misspelled,
 `blocks::tests::a_registered_block_divergence_is_tolerated_and_an_unregistered_one_is_not`
 drives one disagreement through the runner's decision both registered and
