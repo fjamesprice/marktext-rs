@@ -18,6 +18,7 @@
 //
 // USAGE
 //   node --import tsx tools/diff/dump-ts-state.mjs [OPTIONS] <FILE...>
+//   node --import tsx tools/diff/dump-ts-state.mjs --inputs <FILE> [OPTIONS]
 //
 //   --bare              Print the bare state array for a single file, the
 //                       same shape `mt-cli --dump-state` prints. Useful by
@@ -25,8 +26,30 @@
 //   --spec-options      Parse with every muya extension off, matching
 //                       commonmark.spec.ts / gfm.spec.ts. Default is muya's
 //                       own DEFAULT_OPTIONS (math and front matter on).
+//   --inputs <FILE>     JSON: an array whose entries are either a plain string
+//                       (parsed with muya's DEFAULT_OPTIONS) or an object
+//                       `{src, options}` where `options` is "muya" or "spec".
+//                       Mutually exclusive with file arguments.
+//   --out <FILE>        Write the envelope here instead of to stdout.
 //   --marktext <DIR>    Path to the marktext clone. Defaults to $MARKTEXT_DIR,
 //                       then to a sibling `../marktext` of this repo.
+//
+// WHY --inputs EXISTS (added at M2 S1)
+//
+// The file mode is `cargo xtask diff`'s: 22 whole documents that live on disk.
+// `cargo xtask blocks` (M2.md §6 S1) compares 1344 inputs, and 1324 of them are
+// **single CommonMark/GFM spec examples** that live inside two JSON fixtures
+// rather than as files — writing 1324 temporary `.md` files to ask a question
+// about them would be a worse harness, not a smaller one. This is the same
+// shape `dump-ts-tokens.mjs --inputs` already uses, and for the same reason: a
+// file rather than argv, because every platform has a command-line length
+// limit and a sweep is thousands of inputs.
+//
+// The per-entry `options` field is what the file mode does not need and this
+// one does: §4 C1's input set is 1324 examples at `SPEC` and 20 documents at
+// `MUYA_DEFAULT`, so one run has to drive both. A `MarkdownToState` is
+// constructed per distinct option set and reused, because the cost here is
+// engine construction, not parsing.
 //
 // EXIT CODES
 //   0  success
@@ -74,6 +97,8 @@ function parseArgs(argv) {
     let bare = false;
     let specOptions = false;
     let marktextDir = null;
+    let inputsPath = null;
+    let outPath = null;
 
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
@@ -85,6 +110,14 @@ function parseArgs(argv) {
             marktextDir = argv[++i];
             if (marktextDir === undefined)
                 throw new Error('--marktext requires a directory argument');
+        } else if (arg === '--inputs') {
+            inputsPath = argv[++i];
+            if (inputsPath === undefined)
+                throw new Error('--inputs requires a file argument');
+        } else if (arg === '--out') {
+            outPath = argv[++i];
+            if (outPath === undefined)
+                throw new Error('--out requires a file argument');
         } else if (arg === '--help' || arg === '-h') {
             return { help: true };
         } else if (arg.startsWith('-')) {
@@ -94,12 +127,46 @@ function parseArgs(argv) {
         }
     }
 
+    if (inputsPath !== null) {
+        // Not a convenience refusal: an --inputs entry carries its own options
+        // and a file argument does not, so accepting both would leave the
+        // envelope's `options` field describing only half the run.
+        if (files.length > 0)
+            throw new Error('--inputs and file arguments are mutually exclusive');
+        if (bare)
+            throw new Error('--bare takes a file, not --inputs');
+        return { files: [], inputsPath, outPath, bare, specOptions, marktextDir, help: false };
+    }
+
     if (files.length === 0)
         throw new Error('no input files; try --help');
     if (bare && files.length !== 1)
         throw new Error('--bare takes exactly one file');
 
-    return { files, bare, specOptions, marktextDir, help: false };
+    return { files, inputsPath, outPath, bare, specOptions, marktextDir, help: false };
+}
+
+/**
+ * Read an `--inputs` file: an array of strings, or of `{src, options}`.
+ *
+ * `options` names an option set rather than spelling one out, so that the two
+ * engines cannot be driven with settings that differ in a field nobody
+ * compared. The names are `mt_md::Options`' two constants.
+ */
+function readInputs(file) {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!Array.isArray(parsed))
+        throw new Error(`${file}: expected a JSON array`);
+    return parsed.map((entry, i) => {
+        if (typeof entry === 'string')
+            return { src: entry, options: 'muya' };
+        if (entry === null || typeof entry !== 'object' || typeof entry.src !== 'string')
+            throw new Error(`${file}: entry ${i} is neither a string nor {src, options}`);
+        const options = entry.options ?? 'muya';
+        if (options !== 'muya' && options !== 'spec')
+            throw new Error(`${file}: entry ${i} has options ${JSON.stringify(options)}; expected "muya" or "spec"`);
+        return { src: entry.src, options };
+    });
 }
 
 /**
@@ -232,6 +299,54 @@ async function main() {
     }
 
     const options = args.specOptions ? SPEC_OPTIONS : MUYA_DEFAULT_OPTIONS;
+
+    // One converter per option set, constructed once. `MarkdownToState` holds
+    // no per-document state — `generate` is a pure call over `_options` — so
+    // reuse is safe, and engine construction is what costs over 1344 inputs.
+    const converters = {
+        muya: new MarkdownToState(MUYA_DEFAULT_OPTIONS),
+        spec: new MarkdownToState(SPEC_OPTIONS),
+    };
+
+    if (args.inputsPath !== null) {
+        let inputs;
+        try {
+            inputs = readInputs(args.inputsPath);
+        } catch (e) {
+            process.stderr.write(`dump-ts-state: ${e.message}\n`);
+            return EXIT_ERROR;
+        }
+
+        const results = inputs.map((input) => {
+            try {
+                // muya's file layer normalises to LF before the parser sees a
+                // document; `readMarkdown` does it for the file mode and this
+                // does it for the inline mode, so a fixture containing CRLF
+                // cannot disagree for a reason that is not the parser's.
+                const src = input.src.replace(/\r\n?/g, '\n');
+                return { state: canonicalize(converters[input.options].generate(src)) };
+            } catch (e) {
+                return { error: `${e.name}: ${e.message}` };
+            }
+        });
+
+        const envelope = {
+            engine: '@muyajs/core',
+            marktextDir,
+            options: { muya: MUYA_DEFAULT_OPTIONS, spec: SPEC_OPTIONS },
+            results,
+        };
+        const text = `${JSON.stringify(envelope)}\n`;
+        if (args.outPath)
+            fs.writeFileSync(args.outPath, text);
+        else
+            process.stdout.write(text);
+        // An engine throw is per-input data, not a run failure: the comparison
+        // runner reports it against the input that caused it, exactly as
+        // `dump-ts-tokens.mjs` does, so one bad input cannot blind a sweep.
+        return EXIT_OK;
+    }
+
     const converter = new MarkdownToState(options);
 
     const results = [];

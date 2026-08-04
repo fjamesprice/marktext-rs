@@ -109,12 +109,19 @@ fn leaf_block() -> impl Strategy<Value = Block> {
     prop_oneof![
         text.clone().prop_map(|text| Block::Paragraph { text }),
         (1u8..=6, text.clone()).prop_map(|(level, text)| Block::AtxHeading { level, text }),
+        // `Underline` carries the run's length as well as its character
+        // (corrected at M2 S1), so the strategy varies both — a generator that
+        // only ever produced `===` would leave the length outside the
+        // property's reach.
         (
-            prop_oneof![Just(Underline::Equals), Just(Underline::Dashes)],
+            prop_oneof![
+                (1u32..=12).prop_map(Underline::Equals),
+                (1u32..=12).prop_map(Underline::Dashes)
+            ],
             text.clone()
         )
             .prop_map(|(underline, text)| Block::SetextHeading {
-                level: if underline == Underline::Equals { 1 } else { 2 },
+                level: underline.level(),
                 underline,
                 text
             }),
@@ -461,9 +468,11 @@ fn mutate(meta: BlockMeta) -> BlockMeta {
         },
         BlockMeta::SetextHeading { level, underline } => BlockMeta::SetextHeading {
             level: 3 - level,
+            // Both halves change, so a `set_meta` that dropped the run
+            // length would still be caught.
             underline: match underline {
-                Underline::Equals => Underline::Dashes,
-                Underline::Dashes => Underline::Equals,
+                Underline::Equals(n) => Underline::Dashes(n % 12 + 1),
+                Underline::Dashes(n) => Underline::Equals(n % 12 + 1),
             },
         },
         BlockMeta::CodeBlock {

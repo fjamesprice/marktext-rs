@@ -10,6 +10,18 @@ repository.workspace = true
 [dependencies]
 mt-doc.workspace = true
 
+# M2 S1, per M2.md §5 D1. Block structure only — the event stream is mapped
+# onto `mt_doc::Block` by `src/block.rs` and the inline events are never read,
+# because muya's leaf text is unparsed inline source (§4 C2) and `mt-inline` is
+# what tokenizes it. `default-features = false` drops the HTML writer, which
+# §4 C3 decides nothing will call.
+pulldown-cmark.workspace = true
+
+# M2 S1. `dump_state` returns muya-compatible state JSON (M0), so the
+# serializer belongs here rather than in the harness that reads it; `src/state.rs`
+# is what `cargo xtask blocks` compares today and what `dump_state` returns at S3.
+serde_json.workspace = true
+
 [dev-dependencies]
 # M2 S0. `tests/state_specs.rs` transcribes `state/__tests__/`, and two of its
 # nineteen modules drive the inline tokenizer as well as the parser:

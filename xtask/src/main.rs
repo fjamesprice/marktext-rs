@@ -9,6 +9,7 @@
 //! | Command | What it does | Plan reference |
 //! |---|---|---|
 //! | `conformance` | CommonMark + GFM ratchet | §11.1 |
+//! | `blocks` | Block-tree differential over 1344 inputs | M2 §6 S1 |
 //! | `diff` | Differential test against the TypeScript engine | §11.2 |
 //! | `divergences` | The register of intentional differences from muya | M1 §5 D3 |
 //! | `corpus` | Generate `bench/corpus/` | §14 step 4 |
@@ -16,6 +17,7 @@
 //! | `deps` | Enforce the dependency-direction constraints | §1 |
 //! | `ci` | All of the above, in order | §9 M0 exit gate |
 
+mod blocks;
 mod conformance;
 mod corpus;
 mod deps;
@@ -44,6 +46,15 @@ cargo xtask <COMMAND> [ARGS...]
 
 COMMANDS:
     conformance          Run the CommonMark + GFM conformance ratchet (§11.1).
+    blocks [OPTIONS]     Compare the block tree against MarkdownToState over
+                         §4 C1's 1344 inputs (docs/M2.md §6 S1).
+        --require-ts       Fail instead of skipping when the TypeScript engine
+                           is unavailable.
+        --with-text        Compare leaf text too. S2's mode; at S1 every leaf
+                           carries the empty string, so the run reports the gap
+                           rather than comparing against it.
+        --only <SUBSTR>    Only inputs whose label contains SUBSTR.
+        --verbose          Print every disagreement rather than the first 20.
     diff [OPTIONS]       Run the differential test against @muyajs/core (§11.2).
         --require-ts       Fail instead of skipping when the TypeScript engine
                            is unavailable.
@@ -64,8 +75,8 @@ COMMANDS:
     fuzz-seed [--check]  Write fuzz/corpus/<target>/ from the differential
                          sweep's inputs (M1 §5 D6). Not part of `ci`.
     deps                 Enforce the §1 dependency-direction constraints.
-    ci                   deps, corpus --check, divergences, conformance, diff —
-                         in order.
+    ci                   deps, corpus --check, divergences, conformance, blocks,
+                         diff — in order.
 ";
 
 fn main() {
@@ -80,6 +91,7 @@ fn main() {
 
     let result = match command {
         "conformance" => conformance::main(&root),
+        "blocks" => blocks::main(&root, rest),
         "diff" => diff::main(&root, rest),
         "divergences" => divergences::main(&root, rest),
         "corpus" => corpus::main(&root, rest),
@@ -139,6 +151,12 @@ fn ci(root: &Path, rest: &[String]) -> Result<i32, String> {
             Box::new(|| divergences::main(root, &engine_flags)),
         ),
         ("conformance", Box::new(|| conformance::main(root))),
+        // Before `diff`, and for the reason D6 gives: this one compares the
+        // block tree over 1344 inputs and `diff` compares 22 whole documents
+        // through an entry point that is still `Err(Unimplemented)`. Until S3
+        // wakes `parse`, `blocks` is the only step here that measures the
+        // parser at all, so it should report before the step that skips.
+        ("blocks", Box::new(|| blocks::main(root, &engine_flags))),
         ("diff", Box::new(|| diff::main(root, rest))),
     ];
 

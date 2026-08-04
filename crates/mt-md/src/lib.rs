@@ -58,6 +58,31 @@
 //! the differential harness can be wired up and run in CI from day one; both
 //! return [`Unimplemented`], which those harnesses report as *skipped* rather
 //! than *failed*. See `spec/README.md` for how the ratchet flips on at M2.
+//!
+//! ## M2 S1 status — the block tree exists, the entry points still do not
+//!
+//! [`block::parse_blocks`] maps `pulldown-cmark`'s event stream onto
+//! `mt_doc::Block` and agrees with `MarkdownToState` on names and `meta` over
+//! all 1344 of §4 C1's inputs; [`state::to_state`] emits muya's `TState[]`
+//! from a [`Document`]. **[`parse`], [`serialize`], [`dump_state`] and
+//! [`render_to_static_html`] all still return [`Unimplemented`], deliberately**
+//! — docs/M2.md §5 D6 stages the three ratchets by entry point, and the first
+//! `Ok` from any of them wakes one. S3 is where `parse` becomes
+//! `parse_blocks` plus leaf text plus the label-map pass.
+//!
+//! Every leaf [`block::parse_blocks`] builds carries the **empty string**:
+//! §4 C2 measured that a leaf's text is a per-kind reconstruction rather than
+//! a source slice, and that reconstruction is S2's. `cargo xtask blocks` is
+//! the gate, and it says which fields it compares rather than quietly
+//! excluding one.
+//!
+//! The direction table above is M0's transcription of §4 and **§4 C2 corrects
+//! its first row**: leaf text is not "captured as raw source slices". The
+//! second half of that sentence — never as parsed inline events — does hold,
+//! and [`block`] never reads one.
+
+pub mod block;
+pub mod state;
 
 use mt_doc::Document;
 
@@ -114,7 +139,7 @@ pub struct Options {
 /// that is not `"dfm"` as 1. That includes the desktop preferences UI's
 /// `'tab'` value, which was never implemented — `listSerialization.spec.ts`
 /// has a characterization case pinning the degraded behaviour, and it is
-/// transcribed as [`ListIndentation::Spaces(1)`] with the same note.
+/// transcribed as [`ListIndentation::Spaces`]`(1)` with the same note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListIndentation {
     /// Clamped to `1..=4` on construction, exactly as muya's constructor does.

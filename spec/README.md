@@ -115,7 +115,25 @@ built twice.
 | `layer` | Runner | What it compares |
 |---|---|---|
 | `"inline"` | `cargo xtask divergences` | token streams (`xtask/src/tokens.rs`) |
-| `"block"` | `cargo xtask diff` | block state (`mt-cli --dump-state`) |
+| `"block"` | `cargo xtask blocks` | the block tree over 1344 inputs (`xtask/src/blocks.rs`) |
+| `"block"` | `cargo xtask diff` | block state, 22 whole documents (`mt-cli --dump-state`) |
+
+**Two runners read the block layer — corrected at M2 S1.** S0's table named
+only `cargo xtask diff`, which is right about the entry point that wakes at S3
+and wrong about which runner sees a block divergence *first*: `cargo xtask
+blocks` compares the same trees over 1344 inputs at S1, and `diff` is skipped
+until `mt_md::parse` returns `Ok`. Both consult
+`registered_inputs_for(Layer::Block)` and both match on exact input content, so
+an entry works in either.
+
+**The block layer has no entries, and that is S1's measured result.** After the
+mapping layer, the block tree agrees with `MarkdownToState` on all 1344 — there
+was nothing to register, and rule 3 forbids registering an entry with no
+failing case. Because a tolerance that has never fired is a tolerance that
+might be misspelled,
+`blocks::tests::a_registered_block_divergence_is_tolerated_and_an_unregistered_one_is_not`
+drives one disagreement through the runner's decision both registered and
+unregistered.
 
 **Each runner runs only its own entries, and the filtering is not cosmetic.**
 An entry is `Stale` when every one of its inputs *agrees*, and a comparator

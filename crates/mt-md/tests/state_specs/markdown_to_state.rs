@@ -144,6 +144,13 @@ fn keeps_three_levels_of_task_list_nesting() {
 }
 
 /// marktext `dec7502e` (PR #741): setext and atx are separate block types.
+///
+/// **The underline is the literal run — corrected at S1.** S0 transcribed
+/// `Underline::Equals` from `types.ts:18`'s comment (`// "===" | "---"`); the
+/// declared type is `string`, `walkTokens` writes the whole matched run, and
+/// muya's answer for this eleven-`=` input is `"==========="`. The TypeScript
+/// spec asserts only `toBeTruthy()`, so the tightening was the transcription's
+/// and so was the error. See `mt_doc::Underline`'s correction note.
 fn parses_setext_h1_as_setext_heading_level_1() {
     let doc = parse("Hello world\n===========\n", NO_EXT);
     let states = top(&doc);
@@ -151,7 +158,7 @@ fn parses_setext_h1_as_setext_heading_level_1() {
     assert_eq!(name(&doc, states[0]), "setext-heading");
     assert_eq!(
         meta(&doc, states[0]),
-        BlockMeta::SetextHeading { level: 1, underline: Underline::Equals }
+        BlockMeta::SetextHeading { level: 1, underline: Underline::Equals(11) }
     );
 }
 
@@ -162,7 +169,7 @@ fn parses_setext_h2_as_setext_heading_level_2() {
     assert_eq!(name(&doc, states[0]), "setext-heading");
     assert_eq!(
         meta(&doc, states[0]),
-        BlockMeta::SetextHeading { level: 2, underline: Underline::Dashes }
+        BlockMeta::SetextHeading { level: 2, underline: Underline::Dashes(11) }
     );
 }
 
@@ -342,7 +349,7 @@ fn parses_text_then_dashes_as_a_single_level_2_setext_heading() {
     assert_eq!(name(&doc, states[0]), "setext-heading");
     assert_eq!(
         meta(&doc, states[0]),
-        BlockMeta::SetextHeading { level: 2, underline: Underline::Dashes }
+        BlockMeta::SetextHeading { level: 2, underline: Underline::Dashes(3) }
     );
     assert_eq!(text(&doc, states[0]), "text");
 }
@@ -354,7 +361,7 @@ fn parses_text_then_equals_as_a_single_level_1_setext_heading() {
     assert_eq!(name(&doc, states[0]), "setext-heading");
     assert_eq!(
         meta(&doc, states[0]),
-        BlockMeta::SetextHeading { level: 1, underline: Underline::Equals }
+        BlockMeta::SetextHeading { level: 1, underline: Underline::Equals(3) }
     );
     assert_eq!(text(&doc, states[0]), "text");
 }

@@ -584,13 +584,73 @@ pub enum CodeKind {
     Fenced,
 }
 
-/// `ISetextHeadingState.meta.underline` — `"==="` | `"---"`.
+/// `ISetextHeadingState.meta.underline` — the **literal underline run**.
+///
+/// # Corrected at M2 S1, against the running engine
+///
+/// M0 transcribed this as a two-value enum (`Equals` | `Dashes`) from
+/// `types.ts:18`, which reads:
+///
+/// ```text
+/// underline: string; // "===" | "---";
+/// ```
+///
+/// The declared type is `string` and the comment is aspirational.
+/// `walkTokens` writes `token.marker = /\n {0,3}(=+|-+)/.exec(raw)![1]` — the
+/// **whole run** — so muya's state for `Hello world\n===========` carries
+/// `underline: "==========="`, and asked directly it does:
+///
+/// ```text
+/// "Foo\n====\n" → { level: 1, underline: "====" }
+/// "Foo\n-\n"    → { level: 2, underline: "-" }
+/// ```
+///
+/// A two-value enum can only answer `"==="`, which is a **round-trip data
+/// loss** on any document whose underline is not exactly three characters —
+/// §10 marks lossless round-trip non-negotiable, so this is a fix rather than
+/// a divergence to register. It is not a rare shape either: 25 of the 652
+/// CommonMark fixtures and 25 of the 672 GFM ones contain an underline run
+/// that is not three characters long.
+///
+/// The character still decides the level (`=` → 1, `-` → 2), which is why the
+/// variants survive; only the length was missing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Underline {
-    /// `===`, level 1.
-    Equals,
-    /// `---`, level 2.
-    Dashes,
+    /// A run of `=`, level 1. The payload is the run's length in characters.
+    Equals(u32),
+    /// A run of `-`, level 2. The payload is the run's length in characters.
+    Dashes(u32),
+}
+
+impl Underline {
+    /// The heading level this underline implies: 1 for `=`, 2 for `-`.
+    pub fn level(self) -> u8 {
+        match self {
+            Underline::Equals(_) => 1,
+            Underline::Dashes(_) => 2,
+        }
+    }
+
+    /// The run's length in characters.
+    ///
+    /// Named `run_len` rather than `len` because a `len` without an
+    /// `is_empty` is a clippy error, and an `is_empty` here would be a method
+    /// that can only answer `false`: a setext underline of zero characters is
+    /// not a setext underline.
+    pub fn run_len(self) -> u32 {
+        match self {
+            Underline::Equals(n) | Underline::Dashes(n) => n,
+        }
+    }
+
+    /// The literal run, which is what `meta.underline` serializes to.
+    pub fn to_source(self) -> String {
+        let c = match self {
+            Underline::Equals(_) => '=',
+            Underline::Dashes(_) => '-',
+        };
+        std::iter::repeat_n(c, self.run_len() as usize).collect()
+    }
 }
 
 /// `IMathMeta.mathStyle` — `""` | `"gitlab"`.
@@ -714,7 +774,7 @@ mod tests {
             },
             Block::SetextHeading {
                 level: 1,
-                underline: Underline::Equals,
+                underline: Underline::Equals(3),
                 text: t(),
             },
             Block::ThematicBreak { text: t() },

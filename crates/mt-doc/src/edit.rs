@@ -1216,7 +1216,7 @@ mod tests {
             node,
             block: Block::SetextHeading {
                 level: 1,
-                underline: Underline::Equals,
+                underline: Underline::Equals(3),
                 text: Text::from("Hello"),
             },
         }]);
@@ -1224,14 +1224,14 @@ mod tests {
             node,
             meta: BlockMeta::SetextHeading {
                 level: 2,
-                underline: Underline::Dashes,
+                underline: Underline::Dashes(3),
             },
         }]);
         assert_eq!(
             doc.block(node).and_then(Block::meta),
             Some(BlockMeta::SetextHeading {
                 level: 2,
-                underline: Underline::Dashes
+                underline: Underline::Dashes(3)
             })
         );
     }
