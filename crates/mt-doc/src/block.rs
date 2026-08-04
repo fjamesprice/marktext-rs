@@ -221,33 +221,283 @@ impl Block {
 
     /// The block's text, if it is a leaf.
     pub fn text(&self) -> Option<&Text> {
-        todo!("M2: mt-doc — see RUST-REWRITE-PLAN.md §9")
+        match self {
+            Block::Paragraph { text }
+            | Block::AtxHeading { text, .. }
+            | Block::SetextHeading { text, .. }
+            | Block::ThematicBreak { text }
+            | Block::CodeBlock { text, .. }
+            | Block::HtmlBlock { text }
+            | Block::MathBlock { text, .. }
+            | Block::Frontmatter { text, .. }
+            | Block::Diagram { text, .. }
+            | Block::TableCell { text, .. } => Some(text),
+            _ => None,
+        }
+    }
+
+    /// The block's text, mutably, if it is a leaf.
+    ///
+    /// The only writer is [`crate::Edit::SpliceText`], which is why this is
+    /// crate-private: a leaf's text must not be reachable except through an
+    /// edit, or the undo stack stops being a complete record of what changed
+    /// (§2.2, and M2.md §5 D9 — "no edit path may bypass `Document::apply`" is
+    /// what keeps the CRDT option open).
+    pub(crate) fn text_mut(&mut self) -> Option<&mut Text> {
+        match self {
+            Block::Paragraph { text }
+            | Block::AtxHeading { text, .. }
+            | Block::SetextHeading { text, .. }
+            | Block::ThematicBreak { text }
+            | Block::CodeBlock { text, .. }
+            | Block::HtmlBlock { text }
+            | Block::MathBlock { text, .. }
+            | Block::Frontmatter { text, .. }
+            | Block::Diagram { text, .. }
+            | Block::TableCell { text, .. } => Some(text),
+            _ => None,
+        }
     }
 
     /// The block's children, if it is a container.
     pub fn children(&self) -> Option<&[NodeId]> {
-        todo!("M2: mt-doc — see RUST-REWRITE-PLAN.md §9")
+        match self {
+            Block::BlockQuote { children }
+            | Block::BulletList { children, .. }
+            | Block::OrderList { children, .. }
+            | Block::ListItem { children }
+            | Block::TaskList { children, .. }
+            | Block::TaskListItem { children, .. }
+            | Block::Table { children }
+            | Block::TableRow { children }
+            | Block::Footnote { children, .. } => Some(children),
+            _ => None,
+        }
+    }
+
+    /// The block's children, mutably, if it is a container.
+    ///
+    /// Crate-private for the same reason as [`Block::text_mut`]: the tree is
+    /// reshaped only by [`crate::Edit`].
+    pub(crate) fn children_mut(&mut self) -> Option<&mut Vec<NodeId>> {
+        match self {
+            Block::BlockQuote { children }
+            | Block::BulletList { children, .. }
+            | Block::OrderList { children, .. }
+            | Block::ListItem { children }
+            | Block::TaskList { children, .. }
+            | Block::TaskListItem { children, .. }
+            | Block::Table { children }
+            | Block::TableRow { children }
+            | Block::Footnote { children, .. } => Some(children),
+            _ => None,
+        }
     }
 
     /// Extract this block's metadata as a [`BlockMeta`], for [`crate::Edit::SetMeta`].
-    pub fn meta(&self) -> BlockMeta {
-        todo!("M2: mt-doc — see RUST-REWRITE-PLAN.md §9")
+    ///
+    /// `None` for the seven variants whose TypeScript interface has no `meta`
+    /// object — paragraph, thematic break, html block, block quote, list item,
+    /// table and table row. There is nothing to set on those, and returning a
+    /// synthetic empty meta would make [`Block::set_meta`] silently accept an
+    /// edit that cannot mean anything.
+    pub fn meta(&self) -> Option<BlockMeta> {
+        Some(match self {
+            Block::AtxHeading { level, .. } => BlockMeta::AtxHeading { level: *level },
+            Block::SetextHeading {
+                level, underline, ..
+            } => BlockMeta::SetextHeading {
+                level: *level,
+                underline: *underline,
+            },
+            Block::CodeBlock {
+                kind,
+                info,
+                fence_len,
+                ..
+            } => BlockMeta::CodeBlock {
+                kind: *kind,
+                info: info.clone(),
+                fence_len: *fence_len,
+            },
+            Block::MathBlock { style, .. } => BlockMeta::MathBlock { style: *style },
+            Block::Frontmatter { lang, style, .. } => BlockMeta::Frontmatter {
+                lang: *lang,
+                style: *style,
+            },
+            Block::Diagram { lang, kind, .. } => BlockMeta::Diagram {
+                lang: *lang,
+                kind: *kind,
+            },
+            Block::TableCell { align, .. } => BlockMeta::TableCell { align: *align },
+            Block::BulletList { marker, loose, .. } => BlockMeta::BulletList {
+                marker: *marker,
+                loose: *loose,
+            },
+            Block::OrderList {
+                start,
+                delimiter,
+                loose,
+                ..
+            } => BlockMeta::OrderList {
+                start: *start,
+                delimiter: *delimiter,
+                loose: *loose,
+            },
+            Block::TaskList { marker, loose, .. } => BlockMeta::TaskList {
+                marker: *marker,
+                loose: *loose,
+            },
+            Block::TaskListItem { checked, .. } => BlockMeta::TaskListItem { checked: *checked },
+            Block::Footnote { identifier, .. } => BlockMeta::Footnote {
+                identifier: identifier.clone(),
+            },
+            Block::Paragraph { .. }
+            | Block::ThematicBreak { .. }
+            | Block::HtmlBlock { .. }
+            | Block::BlockQuote { .. }
+            | Block::ListItem { .. }
+            | Block::Table { .. }
+            | Block::TableRow { .. } => return None,
+        })
     }
 
     /// Apply a [`BlockMeta`] to this block in place.
     ///
-    /// Fails if the meta variant does not match the block variant.
-    pub fn set_meta(&mut self, _meta: BlockMeta) -> Result<(), MetaMismatch> {
-        todo!("M2: mt-doc — see RUST-REWRITE-PLAN.md §9")
+    /// Fails if the meta variant does not match the block variant. Text and
+    /// children are untouched, which is the whole point of `SetMeta` existing
+    /// beside `ReplaceBlock`: changing a heading's level must not cost the
+    /// node its identity, and therefore must not cost `mt-layout` its cache.
+    pub fn set_meta(&mut self, meta: BlockMeta) -> Result<(), MetaMismatch> {
+        match (self, meta) {
+            (Block::AtxHeading { level, .. }, BlockMeta::AtxHeading { level: new }) => {
+                *level = new;
+            }
+            (
+                Block::SetextHeading {
+                    level, underline, ..
+                },
+                BlockMeta::SetextHeading {
+                    level: new_level,
+                    underline: new_underline,
+                },
+            ) => {
+                *level = new_level;
+                *underline = new_underline;
+            }
+            (
+                Block::CodeBlock {
+                    kind,
+                    info,
+                    fence_len,
+                    ..
+                },
+                BlockMeta::CodeBlock {
+                    kind: new_kind,
+                    info: new_info,
+                    fence_len: new_fence_len,
+                },
+            ) => {
+                *kind = new_kind;
+                *info = new_info;
+                *fence_len = new_fence_len;
+            }
+            (Block::MathBlock { style, .. }, BlockMeta::MathBlock { style: new }) => {
+                *style = new;
+            }
+            (
+                Block::Frontmatter { lang, style, .. },
+                BlockMeta::Frontmatter {
+                    lang: new_lang,
+                    style: new_style,
+                },
+            ) => {
+                *lang = new_lang;
+                *style = new_style;
+            }
+            (
+                Block::Diagram { lang, kind, .. },
+                BlockMeta::Diagram {
+                    lang: new_lang,
+                    kind: new_kind,
+                },
+            ) => {
+                *lang = new_lang;
+                *kind = new_kind;
+            }
+            (Block::TableCell { align, .. }, BlockMeta::TableCell { align: new }) => {
+                *align = new;
+            }
+            (
+                Block::BulletList { marker, loose, .. },
+                BlockMeta::BulletList {
+                    marker: new_marker,
+                    loose: new_loose,
+                },
+            ) => {
+                *marker = new_marker;
+                *loose = new_loose;
+            }
+            (
+                Block::OrderList {
+                    start,
+                    delimiter,
+                    loose,
+                    ..
+                },
+                BlockMeta::OrderList {
+                    start: new_start,
+                    delimiter: new_delimiter,
+                    loose: new_loose,
+                },
+            ) => {
+                *start = new_start;
+                *delimiter = new_delimiter;
+                *loose = new_loose;
+            }
+            (
+                Block::TaskList { marker, loose, .. },
+                BlockMeta::TaskList {
+                    marker: new_marker,
+                    loose: new_loose,
+                },
+            ) => {
+                *marker = new_marker;
+                *loose = new_loose;
+            }
+            (Block::TaskListItem { checked, .. }, BlockMeta::TaskListItem { checked: new }) => {
+                *checked = new;
+            }
+            (
+                Block::Footnote { identifier, .. },
+                BlockMeta::Footnote {
+                    identifier: new_identifier,
+                },
+            ) => {
+                *identifier = new_identifier;
+            }
+            _ => return Err(MetaMismatch),
+        }
+        Ok(())
     }
 
     /// The language to hand to the syntax highlighter for a code block: the
     /// **first word** of [`Block::CodeBlock::info`], never the whole string.
     ///
-    /// Mirrors muya's `firstWordOfInfo()`. Returns `None` for non-code blocks
-    /// and for code blocks with an empty info string.
+    /// Mirrors muya's `firstWordOfInfo()` — `info.match(/\S*/)?.[0] ?? ''`,
+    /// `utils/index.ts:58` — which takes the run of non-whitespace at position
+    /// 0 and is therefore the empty string whenever the info string *starts*
+    /// with whitespace, not the first word later in the line. Reproduced
+    /// exactly: `" js"` highlights as nothing, and that is muya's answer too.
+    ///
+    /// Returns `None` for non-code blocks and for code blocks with an empty
+    /// info string.
     pub fn highlight_language(&self) -> Option<&str> {
-        todo!("M2: mt-doc — see RUST-REWRITE-PLAN.md §9")
+        let Block::CodeBlock { info, .. } = self else {
+            return None;
+        };
+        let first = &info[..info.find(char::is_whitespace).unwrap_or(info.len())];
+        (!first.is_empty()).then_some(first)
     }
 }
 
@@ -561,6 +811,170 @@ mod tests {
                 .any(|b| b.name() == "link-reference-definition"),
             "reference definitions must round-trip as Paragraph, not as their own block"
         );
+    }
+
+    /// Every variant answers exactly one of [`Block::text`] and
+    /// [`Block::children`], and `is_leaf` agrees with which. "A block that
+    /// owns both does not exist in muya's model and must not be introduced
+    /// here" is the type's own doc comment; this is it in executable form.
+    #[test]
+    fn every_variant_owns_text_or_children_but_never_both() {
+        for block in every_variant() {
+            let name = block.name();
+            let has_text = block.text().is_some();
+            let has_children = block.children().is_some();
+            assert!(
+                has_text != has_children,
+                "{name} owns text={has_text} children={has_children}"
+            );
+            assert_eq!(has_text, block.is_leaf(), "{name}: is_leaf disagrees");
+        }
+    }
+
+    /// The twelve variants with a `meta` object round-trip through
+    /// [`Block::meta`] and [`Block::set_meta`]; the seven without report
+    /// `None`.
+    ///
+    /// `meta()` returns `Option` rather than `BlockMeta` — a **correction to
+    /// the M0 signature**, recorded in M2.md's S0 section. `BlockMeta` has no
+    /// variant for a paragraph, deliberately ("there is nothing to set"), so
+    /// the original return type was unimplementable for seven of nineteen
+    /// variants.
+    #[test]
+    fn meta_round_trips_for_every_variant_that_has_one() {
+        let mut with_meta = 0;
+        for mut block in every_variant() {
+            let name = block.name();
+            let Some(meta) = block.meta() else {
+                continue;
+            };
+            with_meta += 1;
+            let before = block.clone();
+            assert_eq!(
+                block.set_meta(meta),
+                Ok(()),
+                "{name}: its own meta must apply to it"
+            );
+            assert_eq!(block, before, "{name}: setting its own meta changed it");
+        }
+        assert_eq!(with_meta, 12, "twelve variants carry a meta object");
+    }
+
+    #[test]
+    fn the_seven_variants_without_a_meta_object_report_none() {
+        let without: Vec<&str> = every_variant()
+            .iter()
+            .filter(|b| b.meta().is_none())
+            .map(Block::name)
+            .collect();
+        assert_eq!(
+            without,
+            vec![
+                "paragraph",
+                "thematic-break",
+                "html-block",
+                "block-quote",
+                "list-item",
+                "table",
+                "table.row",
+            ]
+        );
+    }
+
+    #[test]
+    fn set_meta_rejects_a_meta_from_a_different_variant() {
+        let mut heading = Block::AtxHeading {
+            level: 1,
+            text: Text::Inline(String::new()),
+        };
+        assert_eq!(
+            heading.set_meta(BlockMeta::TableCell {
+                align: Align::Center
+            }),
+            Err(MetaMismatch)
+        );
+        assert_eq!(
+            heading,
+            Block::AtxHeading {
+                level: 1,
+                text: Text::Inline(String::new())
+            },
+            "a rejected set_meta must not have half-applied"
+        );
+    }
+
+    /// `SetMeta` exists so that changing a heading's level does not cost the
+    /// node its text — which is what `ReplaceBlock` would cost it.
+    #[test]
+    fn set_meta_leaves_text_and_children_alone() {
+        let mut heading = Block::AtxHeading {
+            level: 1,
+            text: Text::Inline("Title".to_string()),
+        };
+        heading
+            .set_meta(BlockMeta::AtxHeading { level: 3 })
+            .unwrap();
+        assert_eq!(
+            heading,
+            Block::AtxHeading {
+                level: 3,
+                text: Text::Inline("Title".to_string())
+            }
+        );
+    }
+
+    // --- constraint 1: the info string is not the language -----------------
+
+    /// Constraint 1. `meta.lang` holds the **whole** info string; the
+    /// highlight language is its first word. Getting this backwards is the
+    /// #4770 data loss, and `codeFenceInfoString.spec.ts` is its regression.
+    #[test]
+    fn highlight_language_is_the_first_word_of_the_info_string() {
+        let code = |info: &str| Block::CodeBlock {
+            kind: CodeKind::Fenced,
+            info: info.to_string(),
+            fence_len: Some(3),
+            text: Text::Inline(String::new()),
+        };
+        assert_eq!(code("js").highlight_language(), Some("js"));
+        assert_eq!(code("js title=\"app.js\"").highlight_language(), Some("js"));
+        assert_eq!(
+            code("{example, listing1-name}").highlight_language(),
+            Some("{example,")
+        );
+        assert_eq!(code("").highlight_language(), None);
+    }
+
+    /// muya's `firstWordOfInfo` is `info.match(/\S*/)?.[0]`, which is anchored
+    /// at position 0 — so an info string that *starts* with whitespace yields
+    /// the empty string rather than the first word after it. Reproduced
+    /// rather than improved: the port's highlight language must be muya's, and
+    /// this is the input where a "sensible" `split_whitespace().next()` would
+    /// differ.
+    #[test]
+    fn a_leading_space_in_the_info_string_yields_no_language_as_muya_does() {
+        let block = Block::CodeBlock {
+            kind: CodeKind::Fenced,
+            info: " js".to_string(),
+            fence_len: Some(3),
+            text: Text::Inline(String::new()),
+        };
+        assert_eq!(block.highlight_language(), None);
+    }
+
+    #[test]
+    fn highlight_language_is_none_for_every_non_code_block() {
+        for block in every_variant() {
+            if block.name() == "code-block" {
+                continue;
+            }
+            assert_eq!(
+                block.highlight_language(),
+                None,
+                "{} is not a code block",
+                block.name()
+            );
+        }
     }
 
     #[test]

@@ -143,11 +143,62 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+/// Which comparator an entry belongs to.
+///
+/// **Added at M2 S0, per docs/M2.md §5 D4.** M2 produces disagreements at a
+/// second layer — anywhere `marked` and CommonMark differ about *blocks* and
+/// the port follows CommonMark — and `spec/README.md`'s rule is *"three
+/// registers, one shape, on purpose"*. So the block divergences go in this
+/// register rather than in a fourth one, and each runner runs the entries that
+/// are its own.
+///
+/// **The filtering is not cosmetic.** An entry is [`Verdict::Stale`] when
+/// every one of its inputs *agrees*, and a comparator that cannot see a
+/// divergence reports agreement. So an inline entry run through
+/// `cargo xtask diff` — which compares block state, in which a leaf's text is
+/// unparsed inline source (§4 C4) — would be `Stale` on every input and fail
+/// the build for a reason that has nothing to do with the port. M1 S6 hit
+/// exactly this shape: its text-level comparator agreed on all 5,586 inputs
+/// and was *structurally unable* to see the `attrs`-level entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Layer {
+    /// Token streams — `cargo xtask divergences`, via [`crate::tokens`].
+    Inline,
+    /// Block state — `cargo xtask diff`, via [`crate::diff`].
+    Block,
+}
+
+impl Layer {
+    /// The wire spelling, which is what `divergences.json` carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Layer::Inline => "inline",
+            Layer::Block => "block",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Layer> {
+        match s {
+            "inline" => Some(Layer::Inline),
+            "block" => Some(Layer::Block),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for Layer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One registered intentional difference from muya.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Divergence {
     /// Unique, kebab-case.
     pub id: String,
+    /// Which comparator owns this entry. See [`Layer`].
+    pub layer: Layer,
     /// `file:line` and the function, e.g. `lexer.ts:206 tryChunks`.
     pub site: String,
     /// What muya does.
@@ -176,7 +227,9 @@ pub struct Divergence {
 /// The keys an entry may have. Anything else is a typo that would otherwise be
 /// silently ignored — including a misspelled `inputs`, which would empty an
 /// entry without emptying the JSON.
-const ENTRY_KEYS: [&str; 7] = ["id", "site", "muya", "ours", "inputs", "note", "upstream"];
+const ENTRY_KEYS: [&str; 8] = [
+    "id", "layer", "site", "muya", "ours", "inputs", "note", "upstream",
+];
 
 /// What the runner decided about one entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -343,8 +396,18 @@ pub fn parse(value: &serde_json::Value) -> Result<Vec<Divergence>, String> {
                 }
             };
 
+            // Required, not defaulted. A missing `layer` would silently put
+            // the entry in whichever layer the default named, and the runner
+            // that does not own it would never see it — which is the shape of
+            // a register entry that tolerates a disagreement nobody checks.
+            let layer_str = string("layer")?;
+            let layer = Layer::parse(&layer_str).ok_or_else(|| {
+                format!("entry {i}: \"layer\" must be \"inline\" or \"block\", got {layer_str:?}")
+            })?;
+
             Ok(Divergence {
                 id: string("id")?,
+                layer,
                 site: string("site")?,
                 muya: string("muya")?,
                 ours: string("ours")?,
@@ -445,14 +508,32 @@ pub fn validate(entries: &[Divergence]) -> Vec<String> {
     problems
 }
 
-/// Every input the register tolerates a disagreement on.
+/// Every input the register tolerates a disagreement on, at every layer.
 ///
-/// Rule 1's second half: `diff.rs` consults this to decide which differential
-/// disagreements are expected. A disagreement on anything not in this set is
-/// still a failure.
+/// Rule 1's second half. Prefer [`registered_inputs_for`]: a runner should
+/// tolerate the disagreements of **its own** layer, because an input
+/// registered at the other layer is one its comparator has no reason to
+/// disagree on and every reason to be checked against.
 pub fn registered_inputs(entries: &[Divergence]) -> BTreeSet<&str> {
     entries
         .iter()
+        .flat_map(|e| e.inputs.iter().map(String::as_str))
+        .collect()
+}
+
+/// The entries belonging to one comparator.
+///
+/// M2.md §5 D4. See [`Layer`] for why running an entry through the wrong
+/// comparator is a false `Stale` rather than a harmless no-op.
+pub fn entries_for(entries: &[Divergence], layer: Layer) -> Vec<&Divergence> {
+    entries.iter().filter(|e| e.layer == layer).collect()
+}
+
+/// Every input one layer's entries tolerate a disagreement on.
+pub fn registered_inputs_for(entries: &[Divergence], layer: Layer) -> BTreeSet<&str> {
+    entries
+        .iter()
+        .filter(|e| e.layer == layer)
         .flat_map(|e| e.inputs.iter().map(String::as_str))
         .collect()
 }
@@ -534,7 +615,23 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
     }
 
     let spec_dir: PathBuf = repo_root.join("spec");
-    let entries = load(&spec_dir)?;
+    let all_entries = load(&spec_dir)?;
+
+    // Shape problems are a property of the whole register, so they are
+    // computed over every entry and reported here even when the failing entry
+    // belongs to the other layer — otherwise a malformed block entry would be
+    // invisible until S3 wakes `cargo xtask diff`.
+    let register_problems = validate(&all_entries);
+
+    // M2.md §5 D4: this runner compares **token streams**, so it runs the
+    // inline entries. A block entry run here would agree on every input and
+    // report STALE, which is a failure about the comparator rather than about
+    // the port.
+    let entries: Vec<Divergence> = entries_for(&all_entries, Layer::Inline)
+        .into_iter()
+        .cloned()
+        .collect();
+    let block_entries = entries_for(&all_entries, Layer::Block).len();
 
     // The register's own inputs first, then everything else. Both go through
     // one Node process: the engine costs about a second to start and almost
@@ -621,11 +718,23 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
         }
     }
 
-    let report = run(&entries, &outcomes);
+    let mut report = run(&entries, &outcomes);
+    // `run` validated the inline slice; replace that with the whole
+    // register's problems, so a malformed entry cannot hide behind its layer.
+    report.shape_problems = register_problems;
 
-    println!("divergence register — docs/M1.md §5 D3");
+    println!("divergence register — docs/M1.md §5 D3, docs/M2.md §5 D4");
     println!("register: {}", spec_dir.join("divergences.json").display());
-    println!("  entries           {}", entries.len());
+    println!(
+        "  layer             inline — this runner compares token streams; the block entries\n\
+         \x20                   are `cargo xtask diff`'s and are not run here"
+    );
+    println!("  entries           {} inline", entries.len());
+    if block_entries > 0 {
+        println!(
+            "                    {block_entries} block, skipped here — see `cargo xtask diff`"
+        );
+    }
     // Rule 1, stated in the output so the register's scope is never inferred:
     // these are the only inputs on which a differential disagreement is
     // tolerated. `diff.rs` reads the same set from `registered_inputs`.
@@ -777,6 +886,7 @@ mod tests {
     fn entry(id: &str, inputs: &[&str]) -> Divergence {
         Divergence {
             id: id.to_string(),
+            layer: Layer::Inline,
             site: "lexer.ts:1 someHandler".to_string(),
             muya: "does the wrong thing".to_string(),
             ours: "does the right thing".to_string(),
@@ -784,6 +894,142 @@ mod tests {
             note: None,
             upstream: None,
         }
+    }
+
+    // --- the layer field, added at M2 S0 (docs/M2.md §5 D4) ----------------
+
+    fn with_layer(layer: &str) -> String {
+        format!(
+            r#"{{"divergences":[{{"id":"x","layer":{layer},"site":"a:1","muya":"m",
+                "ours":"o","inputs":["a"],"upstream":null}}]}}"#
+        )
+    }
+
+    fn parse_str(json: &str) -> Result<Vec<Divergence>, String> {
+        let value: serde_json::Value = serde_json::from_str(json).expect("valid json");
+        parse(&value)
+    }
+
+    #[test]
+    fn layer_parses_both_spellings() {
+        assert_eq!(
+            parse_str(&with_layer(r#""inline""#)).expect("inline")[0].layer,
+            Layer::Inline
+        );
+        assert_eq!(
+            parse_str(&with_layer(r#""block""#)).expect("block")[0].layer,
+            Layer::Block
+        );
+    }
+
+    /// Required rather than defaulted. A defaulted `layer` would silently file
+    /// an entry under whichever layer the default named, and the runner that
+    /// does not own it would never run it — a tolerated disagreement nobody
+    /// checks, which is the state rule 3 exists to prevent.
+    #[test]
+    fn a_missing_layer_is_a_parse_error() {
+        let json = r#"{"divergences":[{"id":"x","site":"a:1","muya":"m","ours":"o",
+            "inputs":["a"],"upstream":null}]}"#;
+        let err = parse_str(json).expect_err("layer is required");
+        assert!(err.contains("layer"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_layer_is_a_parse_error() {
+        let err = parse_str(&with_layer(r#""html""#)).expect_err("only two layers exist");
+        assert!(err.contains("inline") && err.contains("block"), "{err}");
+    }
+
+    /// The other half of the same guard: an entry may not carry a key the
+    /// runner does not read, because a misspelled `layer` would otherwise be
+    /// silently dropped — the same reason `ENTRY_KEYS` exists at all.
+    #[test]
+    fn a_misspelled_layer_key_is_a_parse_error() {
+        let json = r#"{"divergences":[{"id":"x","layers":"inline","site":"a:1","muya":"m",
+            "ours":"o","inputs":["a"],"upstream":null}]}"#;
+        let err = parse_str(json).expect_err("unknown key");
+        assert!(err.contains("layers"), "{err}");
+    }
+
+    /// The filtering itself: each runner sees only its own entries, and only
+    /// its own tolerated inputs.
+    #[test]
+    fn each_layer_gets_its_own_entries_and_inputs() {
+        let mut block = entry("a-block-thing", &["> [foo]: /a"]);
+        block.layer = Layer::Block;
+        let entries = vec![entry("an-inline-thing", &["**a :smile:**"]), block];
+
+        let inline = entries_for(&entries, Layer::Inline);
+        assert_eq!(inline.len(), 1);
+        assert_eq!(inline[0].id, "an-inline-thing");
+        assert_eq!(
+            registered_inputs_for(&entries, Layer::Inline)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["**a :smile:**"]
+        );
+
+        let block = entries_for(&entries, Layer::Block);
+        assert_eq!(block.len(), 1);
+        assert_eq!(block[0].id, "a-block-thing");
+        assert_eq!(
+            registered_inputs_for(&entries, Layer::Block)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["> [foo]: /a"]
+        );
+
+        // And `registered_inputs` still spans both, for anything that needs
+        // the whole register.
+        assert_eq!(registered_inputs(&entries).len(), 2);
+    }
+
+    /// **Why the filtering is not cosmetic**, as a test rather than as prose.
+    /// Running an entry through a comparator that cannot see its divergence
+    /// makes every input agree, which is `Stale`, which fails CI — for a
+    /// reason that is about the harness rather than about the port. M1 S6 hit
+    /// this shape with a text-level comparator and an `attrs`-level entry.
+    #[test]
+    fn an_entry_run_by_the_wrong_comparator_would_report_stale() {
+        let mut block = entry("a-block-thing", &["> [foo]: /a"]);
+        block.layer = Layer::Block;
+        let entries = vec![entry("an-inline-thing", &["**a :smile:**"]), block];
+
+        // A token-stream comparator: it disagrees on the inline input and has
+        // no opinion about the block one, so it reports agreement there.
+        let compare = |input: &str| Some(input == "**a :smile:**");
+
+        let unfiltered = run_with(&entries, compare);
+        assert_eq!(
+            unfiltered.stale(),
+            vec!["a-block-thing"],
+            "unfiltered, the block entry is falsely stale"
+        );
+        assert!(unfiltered.is_ci_failure());
+
+        let mine: Vec<Divergence> = entries_for(&entries, Layer::Inline)
+            .into_iter()
+            .cloned()
+            .collect();
+        let filtered = run_with(&mine, compare);
+        assert!(filtered.stale().is_empty());
+        assert!(!filtered.is_ci_failure());
+    }
+
+    /// The committed register, as data: three entries, all inline, and the
+    /// block layer empty until S1 produces one. If that changes without this
+    /// test changing, the change was not deliberate.
+    #[test]
+    fn the_committed_register_is_three_inline_entries_and_no_block_entries() {
+        let entries = load(&spec_dir()).expect("the register parses");
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries_for(&entries, Layer::Inline).len(), 3);
+        assert_eq!(
+            entries_for(&entries, Layer::Block).len(),
+            0,
+            "S1 is the stage that registers the first block divergence (§4 C1)"
+        );
+        assert!(validate(&entries).is_empty(), "{:?}", validate(&entries));
     }
 
     /// `note` is optional and, unlike `upstream`, may not be a number or an
@@ -797,7 +1043,7 @@ mod tests {
         };
         let with = |note: &str| {
             format!(
-                r#"{{"divergences":[{{"id":"x","site":"a:1","muya":"m","ours":"o",
+                r#"{{"divergences":[{{"id":"x","layer":"inline","site":"a:1","muya":"m","ours":"o",
                     "inputs":["a"],{note}"upstream":null}}]}}"#
             )
         };
@@ -957,9 +1203,9 @@ mod tests {
     fn upstream_may_be_absent_null_or_a_url() {
         let value: serde_json::Value = serde_json::from_str(
             r#"{"divergences":[
-                {"id":"a","site":"a:1","muya":"m","ours":"o","inputs":["1"]},
-                {"id":"b","site":"a:1","muya":"m","ours":"o","inputs":["2"],"upstream":null},
-                {"id":"c","site":"a:1","muya":"m","ours":"o","inputs":["3"],
+                {"id":"a","layer":"inline","site":"a:1","muya":"m","ours":"o","inputs":["1"]},
+                {"id":"b","layer":"inline","site":"a:1","muya":"m","ours":"o","inputs":["2"],"upstream":null},
+                {"id":"c","layer":"block","site":"a:1","muya":"m","ours":"o","inputs":["3"],
                  "upstream":"https://github.com/marktext/marktext/issues/1"}]}"#,
         )
         .expect("valid json");

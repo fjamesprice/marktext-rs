@@ -1,0 +1,14 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+#
+# The single seed below is the one that found M2 S0's RemoveNode finding: a
+# batch of the shape [SpliceText { node: x }, RemoveNode { node: x }], whose
+# inverse could not be applied while RemoveNode freed the node and returned an
+# InsertNode. It is checked in so that every future run re-tests it before
+# generating anything novel. See Document::apply's "Removal detaches"
+# section, and edit.rs::a_batch_that_edits_a_node_and_then_removes_it_undoes_cleanly.
+cc a92bb420c662818fb317d4e9adaf088c10e04233f3d9023042acd767ebb785cd # shrinks to shapes = [Container(BlockQuote { children: [] }, []), Container(BlockQuote { children: [] }, [Leaf(Paragraph { text: Inline("") })]), Leaf(Paragraph { text: Inline("") })], batches = [[Splice { pick: 0, at: 0, remove: 0, insert: "" }], [Splice { pick: 0, at: 0, remove: 0, insert: "" }], [Splice { pick: 0, at: 0, remove: 0, insert: "" }], [Splice { pick: 1214819520600873338, at: 0, remove: 0, insert: "" }, Remove { pick: 9790079118299221738 }], [Splice { pick: 0, at: 0, remove: 0, insert: "" }]]

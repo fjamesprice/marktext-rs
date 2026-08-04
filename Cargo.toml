@@ -62,9 +62,18 @@ opt-level = "s"
 # needs a nightly toolchain and `-Zbuild-std`, and pulling either into this
 # lockfile would put a nightly-only dependency in front of every `cargo build`
 # on three platforms for the sake of one Linux job.
+# `ropey` is the fourth third-party crate and the third scheduled one. §2.1
+# names it by name — `Rope(Rope),  // ropey, promoted on threshold` — and M0
+# decision 4 wrote `mt_doc::Text::Rope` as a newtype over `String` precisely so
+# that adopting it at M2 would be a body swap with the enum untouched. M2.md
+# §5 D8 is where that falls due, and this is the milestone that needs it.
+#
+# It satisfies §1's purity constraint for `mt-doc`: no I/O, no windowing, no
+# GPU. Its only dependencies are `smallvec` and `str_indices`, both pure.
 [workspace.dependencies]
 fancy-regex = "0.19"
 proptest = "1"
+ropey = "1"
 serde_json = "1"
 
 mt-app = { path = "crates/mt-app", version = "0.1.0" }

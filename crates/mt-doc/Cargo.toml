@@ -8,3 +8,15 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# M2.md §5 D8. §2.1 names `ropey` for `Text::Rope`; M0 wrote the newtype so
+# this would be a body swap. Pure — no I/O, no windowing, no GPU — so §1 is
+# preserved and `cargo xtask deps` stays green.
+ropey.workspace = true
+
+[dev-dependencies]
+# The S0 gate: "a property test showing that applying a generated batch's
+# inverse restores the document byte-for-byte, over ≥ 10⁴ batches"
+# (M2.md §6). `tests/edit_inverse.rs`. `[dev-dependencies]` do not reach
+# `mt-doc`'s own build, and §1's purity constraint is about `src/`, which
+# `cargo xtask deps` is what scans.
+proptest.workspace = true

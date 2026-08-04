@@ -51,6 +51,11 @@ pub enum Outcome {
     /// Both engines produced state and it differed. Carries the JSON path of
     /// the first disagreement.
     Fail { at: String, ts: String, rs: String },
+    /// They differed, and the input is a **registered** block divergence
+    /// (`spec/divergences.json`, `layer: "block"`). Rule 1: expected, not a
+    /// failure. Added at M2 S0 with the `layer` field; the first entries are
+    /// S1's.
+    Registered,
     /// One side is not available. Not a failure.
     Skip { reason: String },
     /// A side errored in a way that is not "not implemented".
@@ -66,6 +71,7 @@ impl Outcome {
         match self {
             Outcome::Pass => "PASS",
             Outcome::Fail { .. } => "FAIL",
+            Outcome::Registered => "DIVG",
             Outcome::Skip { .. } => "SKIP",
             Outcome::Error { .. } => "ERR ",
         }
@@ -386,6 +392,54 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
 
     println!("differential harness — RUST-REWRITE-PLAN.md §11.2");
     println!("corpus: {} file(s)", files.len());
+
+    // --- the register's block layer (docs/M2.md §5 D4) ---------------------
+    //
+    // One register, and each runner runs the entries that are its own. This
+    // harness compares **block state**, so it owns `layer: "block"`; the
+    // inline entries belong to `cargo xtask divergences`, whose comparator
+    // reads token streams. Running an entry through the wrong comparator makes
+    // it report `Stale` — the comparator cannot see the divergence, so every
+    // input "agrees" — which is a failure about the harness rather than about
+    // the port. §4 C4: a block-state comparison has no tokens in it.
+    //
+    // Loaded unconditionally so that a malformed register fails this runner
+    // too, rather than only the one that happens to own the broken entry.
+    let register = crate::divergences::load(&repo_root.join("spec"))?;
+    let problems = crate::divergences::validate(&register);
+    let block_entries =
+        crate::divergences::entries_for(&register, crate::divergences::Layer::Block);
+    let tolerated =
+        crate::divergences::registered_inputs_for(&register, crate::divergences::Layer::Block);
+    println!(
+        "register: {} block entr{}, {} tolerated input(s); {} inline entr{} are \
+         `cargo xtask divergences`'s",
+        block_entries.len(),
+        if block_entries.len() == 1 { "y" } else { "ies" },
+        tolerated.len(),
+        register.len() - block_entries.len(),
+        if register.len() - block_entries.len() == 1 {
+            "y"
+        } else {
+            "ies"
+        }
+    );
+    if !problems.is_empty() {
+        println!("  register is malformed:");
+        for problem in &problems {
+            println!("    FAIL  {problem}");
+        }
+    }
+    if block_entries.is_empty() {
+        // No silent caps. M2 has not registered a block divergence yet, and
+        // saying so is the difference between "nothing to tolerate" and
+        // "tolerance not wired up".
+        println!(
+            "          none registered yet — S1 is the stage that produces them (§4 C1's \
+             four\n          mechanisms), and rule 1 still holds: a disagreement on an \
+             unregistered\n          input is a failure."
+        );
+    }
     println!();
 
     if files.is_empty() {
@@ -434,7 +488,18 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
                         },
                         Ok(Some(rs_state)) => match first_difference(ts_state, &rs_state) {
                             None => Outcome::Pass,
-                            Some((at, ts, rs)) => Outcome::Fail { at, ts, rs },
+                            // Rule 1: a disagreement on a **registered** input
+                            // is expected. A corpus entry is a whole document
+                            // and a registered input is a snippet, so this
+                            // matches on exact content — which is how S1's
+                            // `cargo xtask blocks`, whose inputs *are*
+                            // snippets, will consult the same set.
+                            Some((at, ts, rs)) => match std::fs::read_to_string(path) {
+                                Ok(source) if tolerated.contains(source.as_str()) => {
+                                    Outcome::Registered
+                                }
+                                _ => Outcome::Fail { at, ts, rs },
+                            },
                         },
                     },
                 }
@@ -472,10 +537,16 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
         .filter(|r| r.outcome == Outcome::Pass)
         .count();
     let failed = results.iter().filter(|r| r.outcome.is_failure()).count();
-    let skipped = results.len() - passed - failed;
+    let registered = results
+        .iter()
+        .filter(|r| r.outcome == Outcome::Registered)
+        .count();
+    let skipped = results.len() - passed - failed - registered;
 
     println!();
-    println!("  {passed} passed, {failed} failed, {skipped} skipped");
+    println!(
+        "  {passed} passed, {failed} failed, {registered} registered divergence(s), {skipped} skipped"
+    );
 
     if skipped == results.len() && !results.is_empty() {
         println!();
@@ -496,7 +567,14 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
         }
     }
 
-    Ok(if failed > 0 { 1 } else { 0 })
+    // A malformed register fails this runner too, whichever layer the broken
+    // entry belongs to: `cargo xtask ci` runs both, and a shape problem that
+    // only one of them reports is one a reader can miss.
+    Ok(if failed > 0 || !problems.is_empty() {
+        1
+    } else {
+        0
+    })
 }
 
 #[cfg(test)]

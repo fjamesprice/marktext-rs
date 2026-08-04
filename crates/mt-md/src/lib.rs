@@ -92,6 +92,55 @@ pub struct Options {
     pub gitlab_compatibility: bool,
     pub front_matter: bool,
     pub trim_unnecessary_code_block_empty_lines: bool,
+
+    /// How far a nested list is indented when [`serialize`] emits it.
+    ///
+    /// **Added at M2 S0.** The doc comment above says these names come from
+    /// `MarkdownToState`'s options and `renderToStaticHTML`'s. There is a
+    /// third source and M0 did not have it: `ExportMarkdown`'s constructor
+    /// takes `{ listIndentation }` (`state/stateToMarkdown.ts:64`), which is
+    /// the only option the serializer reads and which five of
+    /// `listSerialization.spec.ts`'s cases vary. Carrying it here rather than
+    /// widening [`serialize`]'s signature keeps one options type for the whole
+    /// crate, which is what makes the differential harness able to drive both
+    /// engines from one struct.
+    pub list_indentation: ListIndentation,
+}
+
+/// `IExportMarkdownOptions.listIndentation` — a space count, or Daring
+/// Fireball's fixed four.
+///
+/// muya's constructor clamps a number to `1..=4` and treats **any** non-number
+/// that is not `"dfm"` as 1. That includes the desktop preferences UI's
+/// `'tab'` value, which was never implemented — `listSerialization.spec.ts`
+/// has a characterization case pinning the degraded behaviour, and it is
+/// transcribed as [`ListIndentation::Spaces(1)`] with the same note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListIndentation {
+    /// Clamped to `1..=4` on construction, exactly as muya's constructor does.
+    Spaces(u8),
+    /// Daring Fireball Markdown: a hard four spaces regardless of marker width.
+    Dfm,
+}
+
+impl ListIndentation {
+    /// muya's clamp: `Math.min(Math.max(listIndentation, 1), 4)`.
+    pub const fn spaces(n: u8) -> Self {
+        ListIndentation::Spaces(if n < 1 {
+            1
+        } else if n > 4 {
+            4
+        } else {
+            n
+        })
+    }
+}
+
+impl Default for ListIndentation {
+    /// `new ExportMarkdown()` with no argument defaults to `{ listIndentation: 1 }`.
+    fn default() -> Self {
+        ListIndentation::Spaces(1)
+    }
 }
 
 impl Options {
@@ -104,6 +153,7 @@ impl Options {
         gitlab_compatibility: true,
         front_matter: true,
         trim_unnecessary_code_block_empty_lines: false,
+        list_indentation: ListIndentation::Spaces(1),
     };
 
     /// The flags the CommonMark and GFM spec runners use: every muya extension
@@ -116,7 +166,16 @@ impl Options {
         gitlab_compatibility: false,
         front_matter: false,
         trim_unnecessary_code_block_empty_lines: false,
+        list_indentation: ListIndentation::Spaces(1),
     };
+
+    /// The same options with a different list indentation — the shape
+    /// `listSerialization.spec.ts`'s five indentation cases need.
+    #[must_use]
+    pub const fn with_list_indentation(mut self, indentation: ListIndentation) -> Self {
+        self.list_indentation = indentation;
+        self
+    }
 }
 
 impl Default for Options {
@@ -192,5 +251,21 @@ mod tests {
         assert!(!o.super_sub_script);
         assert!(!o.gitlab_compatibility);
         assert!(!o.front_matter);
+    }
+
+    /// muya's `ExportMarkdown` constructor clamps to `1..=4` and defaults to 1
+    /// — including for the `'tab'` value the desktop preferences UI offers and
+    /// nothing implements.
+    #[test]
+    fn list_indentation_clamps_the_way_export_markdown_does() {
+        assert_eq!(ListIndentation::spaces(0), ListIndentation::Spaces(1));
+        assert_eq!(ListIndentation::spaces(1), ListIndentation::Spaces(1));
+        assert_eq!(ListIndentation::spaces(4), ListIndentation::Spaces(4));
+        assert_eq!(ListIndentation::spaces(9), ListIndentation::Spaces(4));
+        assert_eq!(ListIndentation::default(), ListIndentation::Spaces(1));
+        assert_eq!(
+            Options::MUYA_DEFAULT.list_indentation,
+            ListIndentation::Spaces(1)
+        );
     }
 }

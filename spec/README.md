@@ -102,6 +102,34 @@ in the differential harness**. Four rules:
    unimplemented or the divergence was imaginary — and the runner says so.
 4. `upstream` holds the marktext issue URL once filed. File them.
 
+### One register, two layers — added at M2 S0
+
+M2 produces disagreements at a second layer: anywhere `marked` and CommonMark
+differ about **blocks** and the port follows CommonMark (docs/M2.md §5 D4).
+Those go in this same file, with a required `layer` field, rather than in a
+fourth register — for the reason the next section gives, and because M1's
+negative control (*run the register's own inputs and fail if none of them
+disagrees*) is what makes a green run mean anything and should not have to be
+built twice.
+
+| `layer` | Runner | What it compares |
+|---|---|---|
+| `"inline"` | `cargo xtask divergences` | token streams (`xtask/src/tokens.rs`) |
+| `"block"` | `cargo xtask diff` | block state (`mt-cli --dump-state`) |
+
+**Each runner runs only its own entries, and the filtering is not cosmetic.**
+An entry is `Stale` when every one of its inputs *agrees*, and a comparator
+that cannot see a divergence reports agreement — so an inline entry run through
+`cargo xtask diff` would be `Stale` on every input and fail the build for a
+reason that has nothing to do with the port. That is not hypothetical: M1 S6
+built a text-level comparator that agreed on all 5,586 inputs and was
+*structurally unable* to see the one entry whose divergence lives in `attrs`.
+
+`layer` is **required**. A default would file an entry under whichever layer
+the default named, and the runner that does not own it would never run it — a
+tolerated disagreement nobody checks, which is the state rule 3 exists to
+prevent. A missing or misspelled `layer` is a parse error.
+
 ```sh
 cargo xtask divergences                # the register + a 4,264-input sweep, ~22 s
 cargo xtask divergences --no-sweep     # the register alone, for a fast local loop
@@ -128,16 +156,26 @@ as `expected-failures.json` — one mechanism to keep honest rather than two.
 
 The runner lives in `xtask/src/divergences.rs`.
 
-### A third instance of the same ratchet
+### The third and fourth instances of the same ratchet
 
 `crates/mt-inline/tests/inline_renderer_specs.rs` carries a `PENDING` list with
-the identical decision table, over the 49 transcribed muya inline specs. It is
-not in `spec/` because it has a single consumer — its own test binary — so it
-is a Rust `const` rather than JSON, with no parser and no path resolution. Move
-it here if `xtask` ever needs to report on it.
+the identical decision table, over the 49 transcribed muya inline specs.
+`crates/mt-md/tests/state_specs.rs` carries a fourth, added at M2 S0, over the
+187 transcribed `state/__tests__` specs. Neither is in `spec/` because each has
+a single consumer — its own test binary — so each is a Rust `const` rather than
+JSON, with no parser and no path resolution. Move one here if `xtask` ever
+needs to report on it.
 
-Three registers, one shape, on purpose. If you change how one of them decides,
-change the other two or write down why not.
+**Four registers, one shape, on purpose.** If you change how one of them
+decides, change the other three or write down why not.
+
+Both `PENDING` lists carry M1 S5's **injected-list variant**: row two of the
+decision table — *a listed case that starts passing fails the build* — needs a
+listed case that passes to test against, and by construction the list never
+contains one. So the table is also driven over an injected list, and over the
+real `spec_case` with a real entry. M1 discovered this when emptying `PENDING`
+would otherwise have switched the ratchet off silently; `mt-md`'s has it from
+the first commit rather than from the last.
 
 ### Current status: **enforcing**, as of M1 S7
 
