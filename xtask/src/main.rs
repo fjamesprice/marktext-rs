@@ -46,13 +46,15 @@ cargo xtask <COMMAND> [ARGS...]
 
 COMMANDS:
     conformance          Run the CommonMark + GFM conformance ratchet (§11.1).
-    blocks [OPTIONS]     Compare the block tree against MarkdownToState over
-                         §4 C1's 1344 inputs (docs/M2.md §6 S1).
+    blocks [OPTIONS]     Compare the full TState tree — names, meta and leaf
+                         text — against MarkdownToState over §4 C1's 1344
+                         inputs (docs/M2.md §6 S1 and S2).
         --require-ts       Fail instead of skipping when the TypeScript engine
                            is unavailable.
-        --with-text        Compare leaf text too. S2's mode; at S1 every leaf
-                           carries the empty string, so the run reports the gap
-                           rather than comparing against it.
+        --no-text          Compare names and meta only. S1's mode, kept
+                           because it is the fastest way to tell a structure
+                           regression from a leaf-text one; it is no longer
+                           the default, because leaf text landed at S2.
         --only <SUBSTR>    Only inputs whose label contains SUBSTR.
         --verbose          Print every disagreement rather than the first 20.
     diff [OPTIONS]       Run the differential test against @muyajs/core (§11.2).

@@ -49,14 +49,19 @@
 //!   and the label-map pass. S3 folds the harness in by pointing `dump_state`
 //!   at the same tree, and this runner keeps working unchanged.
 //!
-//! # What S1 compares, said out loud rather than quietly excluded
+//! # What it compares, said out loud rather than quietly excluded
 //!
-//! Every leaf `parse_blocks` builds carries the **empty string**: §4 C2
-//! measured that a leaf's text is a per-kind reconstruction and D2's rules are
-//! S2's. So at S1 the `text` field is projected out of **both** sides before
-//! they are compared, and the runner prints that it did. `--with-text` turns
-//! the projection off, which is how S2 will run it; today it reports the
-//! 4,419-leaf gap C2 measured rather than pretending there is none.
+//! At S1 every leaf `parse_blocks` built carried the **empty string** — §4 C2
+//! measured that a leaf's text is a per-kind reconstruction, and D2's rules
+//! were S2's — so the `text` field was projected out of **both** sides and the
+//! runner printed that it had, together with the size of the gap it was not
+//! comparing (4,954 of 4,985 leaves).
+//!
+//! **S2 closed the gap and inverted the flag.** A bare run compares the full
+//! `TState` JSON; `--no-text` is what asks for less, and is kept because it is
+//! the fastest way to tell a structure regression from a leaf-text one while
+//! iterating. The projection function stays for that flag rather than being
+//! deleted.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -308,16 +313,12 @@ fn rust_state(input: &Input) -> Value {
     ))
 }
 
-/// Remove every leaf's `text` from a state tree.
+/// Remove every leaf's `text` from a state tree — `--no-text`.
 ///
-/// S1 builds leaves with the empty string, so leaf text is not part of the
-/// comparison **yet**. Projecting it out of both sides is the honest form of
-/// that: the alternative — comparing `""` against muya's real text — would
-/// report 4,419 disagreements that say nothing about block structure and would
-/// bury the ones that do.
-///
-/// S2 deletes the call, not the function: `--with-text` is how the same runner
-/// reports the leaf-text gap today.
+/// Written at S1, when leaves carried the empty string and comparing text
+/// would have reported 4,954 disagreements that said nothing about block
+/// structure. It is no longer on the default path; it is how someone
+/// bisecting a structure change stops leaf text from answering first.
 fn strip_text(value: &mut Value) {
     match value {
         Value::Array(items) => items.iter_mut().for_each(strip_text),
@@ -331,8 +332,12 @@ fn strip_text(value: &mut Value) {
     }
 }
 
-/// How many leaves a tree has, and how many of them differ — the S2 number,
-/// reported at S1 so the gap has a size rather than a promise.
+/// How many leaves a tree has, and how many of them differ.
+///
+/// Counted on the **TypeScript** side and reported on every run, including
+/// runs where the text is inside the comparison: it is the denominator, and a
+/// runner that quietly stopped comparing would otherwise print the same
+/// `1344/1344 agree` line as one that did.
 fn leaf_text_gap(ts: &Value, rs: &Value) -> (usize, usize) {
     fn walk(ts: &Value, rs: &Value, leaves: &mut usize, differing: &mut usize) {
         match (ts, rs) {
@@ -455,14 +460,21 @@ fn classify(path: &str) -> fn(String, String, String) -> Outcome {
 
 pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
     let mut require_ts = false;
-    let mut with_text = false;
+    // **Inverted at S2, and the inversion is the point.** At S1 every leaf
+    // carried the empty string, so comparing text would have reported 4,954
+    // disagreements that said nothing about block structure; the flag was
+    // opt-in and the runner printed that it was. Leaf text now agrees on all
+    // 4,985 leaves, so the full `TState` JSON is what a bare run compares and
+    // `--no-text` is what asks for less. A default that hides the largest
+    // class is a default that stops measuring the moment it is forgotten.
+    let mut with_text = true;
     let mut verbose = false;
     let mut only: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--require-ts" => require_ts = true,
-            "--with-text" => with_text = true,
+            "--no-text" => with_text = false,
             "--verbose" => verbose = true,
             "--only" => {
                 i += 1;
@@ -473,7 +485,7 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
         i += 1;
     }
 
-    println!("block-structure differential harness — docs/M2.md §6 S1");
+    println!("block-structure differential harness — docs/M2.md §6 S1 and S2");
 
     let mut inputs = collect_inputs(repo_root)?;
     if let Some(filter) = &only {
@@ -489,12 +501,12 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
         inputs.len() - spec_count
     );
     if with_text {
-        println!("comparing names, meta AND leaf text (--with-text)");
+        println!("comparing the full TState JSON: names, meta and leaf text");
     } else {
         println!(
-            "comparing names and meta. **Leaf text is excluded**: S1 builds every leaf with\n\
-             the empty string and §4 C2's reconstruction is S2's. Run --with-text to see the\n\
-             gap; it is not hidden, it is not yet closed."
+            "comparing names and meta only (--no-text). **Leaf text is excluded**, which is\n\
+             S1's mode and not the gate: S2 closed it at 0 of 4,985 leaves and a bare run\n\
+             compares it."
         );
     }
 
@@ -644,20 +656,41 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
         }
     );
 
-    // §4 C1's measurement of an *unmapped* `pulldown-cmark`, kept as a floor.
-    // A stage that lowers it has done something wrong and nothing else would
-    // say so (M2.md §6, "On the three numbers to beat").
-    const C1_FLOOR: usize = 1167;
+    // §4 C1's measurement of an *unmapped* `pulldown-cmark`, kept as the
+    // historical marker it is — and **raised to the measured rate at S2**, in
+    // the shape D5 gives for the conformance floor: after a stage measures,
+    // the floor becomes what it measured, or the margin between the two can be
+    // eaten without anything firing.
+    const C1_NAMES: usize = 1167;
+    const NAMES_FLOOR: usize = 1344;
+    // The denominator. Nothing else in this runner notices a comparison that
+    // silently stops comparing: 1344 inputs whose leaves were all projected
+    // away would print the same `1344/1344 agree` line as a real run. S1
+    // printed this number; S2 enforces it, because leaf text is now inside the
+    // gate rather than beside it.
+    const LEAVES_FLOOR: usize = 4985;
+    let mut below_floor = false;
     if inputs.len() == 1344 {
         let names_agreeing = inputs.len() - names_disagreeing.len();
         println!(
-            "  names: {names_agreeing}/1344 — §4 C1 measured {C1_FLOOR}/1344 before any mapping"
+            "  names: {names_agreeing}/1344 — §4 C1 measured {C1_NAMES}/1344 before any mapping"
         );
-        if names_agreeing < C1_FLOOR {
+        if names_agreeing < NAMES_FLOOR {
+            below_floor = true;
             println!(
-                "  FAIL  below C1's floor of {C1_FLOOR}. That number is what an *unmapped*\n\
-                 \x20       pulldown-cmark scored, so a mapping layer under it has broken\n\
-                 \x20       something the mapping layer was not supposed to touch."
+                "  FAIL  below S2's floor of {NAMES_FLOOR}/1344 on names. §4 C1 measured\n\
+                 \x20       {C1_NAMES} for an *unmapped* pulldown-cmark; S1 and S2 both\n\
+                 \x20       measured 1344, so anything less is the mapping layer breaking\n\
+                 \x20       something it was not supposed to touch."
+            );
+        }
+        if leaves < LEAVES_FLOOR {
+            below_floor = true;
+            println!(
+                "  FAIL  {leaves} leaves were compared and {LEAVES_FLOOR} were expected. The\n\
+                 \x20       leaf count is counted on the **TypeScript** side, so a drop is\n\
+                 \x20       either the reference engine producing less or this runner\n\
+                 \x20       comparing less — and a run that compares nothing agrees."
             );
         }
     }
@@ -672,13 +705,14 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
     // adopt and is what is enforced here; the looser one would leave a class
     // that can grow without failing anything.
     //
-    // Leaf text is a failure only under `--with-text`, which is S2's gate.
+    // S2 extends it to leaf text on the same terms, and by default rather than
+    // behind a flag.
     let failed = !names_disagreeing.is_empty()
         || !metas_disagreeing.is_empty()
         || !threw.is_empty()
         || !problems.is_empty()
         || (with_text && !texts_disagreeing.is_empty())
-        || (inputs.len() == 1344 && inputs.len() - names_disagreeing.len() < C1_FLOOR);
+        || below_floor;
     Ok(i32::from(failed))
 }
 

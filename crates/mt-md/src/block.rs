@@ -36,6 +36,7 @@
 //! | 5 | A tight list item carries its inlines with no `Paragraph` wrapper | `Builder::open_synthetic` |
 //! | 6 | Front matter is not markdown and is split off first | `front_matter` |
 //! | 7 | Every `meta` field `pulldown-cmark` does not carry | this whole file |
+//! | 8 | Every leaf's **text**, which is not a source slice | `strip_lines` + D2's per-kind rules |
 //!
 //! Mechanism 5 is the one §4 C1 records as having cost a measurement: a
 //! mapping that only creates nodes for block tags gives every tight item no
@@ -45,19 +46,33 @@
 //! item containing emphasis into several paragraphs, which is 5 more.
 //! `is_block_tag` is where that distinction is written down.
 //!
-//! # Leaf text is S2's
+//! # Leaf text — S2, and where the rules came from
 //!
-//! Every leaf built here carries the **empty string**. §4 C2 measured that a
-//! leaf's text is not a source slice but a per-kind reconstruction, and D2's
-//! eight rules plus the container-prefix stripper are S2's whole content.
-//! `cargo xtask blocks` therefore compares names and `meta` at S1 and says so
-//! rather than quietly excluding the field.
+//! §4 C2 measured that a leaf's `text` is **not** a slice of the document: it
+//! is the block's content with its block and container syntax removed, and in
+//! four cases rewritten. S1 built every leaf with the empty string and S2
+//! filled them in. Two halves:
 //!
-//! Two decisions here nonetheless *read* the source — whether an HTML block is
-//! a lone `<img>`, and whether a paragraph is really a `$$` math block. Both
-//! are decisions about which **block** to build rather than about what text it
-//! holds, and both are muya's own: they are taken on the source range and
-//! nothing is stored.
+//! - [`strip_lines`] — the container-prefix stripper D2 asks for, composed
+//!   outermost-first over the source lines a block's range touches.
+//! - The per-kind rules below it — `atx_text`, `setext_text`, `code_text`,
+//!   `table_cell_text`, `front_matter_text`, and the trims each leaf kind
+//!   applies on top.
+//!
+//! **Both are transcriptions of `marked` 18.0.5 rather than readings of
+//! CommonMark**, because a leaf's text is `marked`'s `token.text` and nothing
+//! else. M2.md's brief describes `marked` as a minified bundle to be probed
+//! through `node -e`; it ships **`lib/marked.esm.js.map` with
+//! `sourcesContent`**, so `Tokenizer.ts`, `Lexer.ts`, `rules.ts` and
+//! `helpers.ts` are readable in full. Every rule here names the function it
+//! came from, and the measured reproducers in `tests.rs` are what proves the
+//! reading — the source said what to look for and the running engine said
+//! whether it was right.
+//!
+//! Two decisions here nonetheless read the source for a *structural* reason —
+//! whether an HTML block is a lone `<img>`, and whether a paragraph is really
+//! a `$$` math block. Both decide which **block** to build rather than what
+//! text it holds, and both are muya's own.
 
 use std::collections::HashSet;
 use std::ops::Range;
@@ -72,16 +87,22 @@ use pulldown_cmark::{
 
 use crate::Options;
 
-/// Markdown → [`Document`], block structure and `meta` only.
+/// Markdown → [`Document`]: block structure, `meta` and leaf text.
 ///
 /// **Not [`crate::parse`].** That entry point stays `Err(Unimplemented)` until
 /// S3, because D6 stages the three ratchets by entry point and `parse`
 /// returning `Ok` is what wakes the first of them. This is the function
-/// `parse` will *call* at S3 — S3's work is the label-map pass and leaf text
-/// on top of this, not a rewrite of it — and it is what `cargo xtask blocks`
-/// drives today.
+/// `parse` will *call* at S3 — S3's remaining work is the label-map pass, not
+/// a rewrite of this — and it is what `cargo xtask blocks` drives today.
 ///
-/// Every leaf's text is the empty string; see this module's header.
+/// # What is not returned, and what that costs later
+///
+/// The per-node **source ranges**. They exist while this function runs
+/// ([`Built::range`]) and are dropped when the tree becomes a [`Document`],
+/// because [`mt_doc::Block`] maps 1:1 onto the TypeScript `TState` union and
+/// has nowhere to put them. M2.md §10's owed item is stated in terms of a
+/// per-leaf offset map; the ranges are the thing it actually needs, and S3 is
+/// where `parse`'s signature is decided.
 pub fn parse_blocks(markdown: &str, options: Options) -> Document {
     to_document(build(markdown, options))
 }
@@ -95,8 +116,8 @@ pub fn parse_blocks(markdown: &str, options: Options) -> Document {
 struct Built {
     block: Block,
     children: Vec<Built>,
-    /// The source range this block came from. Unused at S1 beyond ordering;
-    /// S2 reconstructs leaf text from it and §10 owes M4 a mapping back.
+    /// The source range this block came from — what S2 reconstructs leaf text
+    /// from, and what M2.md §10's owed reverse map would be built out of.
     range: Range<usize>,
 }
 
@@ -346,6 +367,12 @@ struct Builder<'a> {
     /// definition whose label has already been defined **anywhere earlier**
     /// emits no block at all. See `scan_definitions`.
     seen_labels: HashSet<String>,
+    /// The enclosing containers' prefixes, outermost first — D2's stripper.
+    ///
+    /// Kept in step with the frame stack rather than derived from it, because
+    /// a [`Prefix::Item`] is computed once from the item's first line and
+    /// re-deriving it per leaf would be the same scan run once per block.
+    prefixes: Vec<Prefix>,
 }
 
 /// Markdown → the top-level built blocks.
@@ -360,7 +387,7 @@ fn build(markdown: &str, options: Options) -> Vec<Built> {
             Block::Frontmatter {
                 lang,
                 style,
-                text: Text::new(),
+                text: Text::from(front_matter_text(&markdown[text_range.clone()])),
             },
             text_range,
         ));
@@ -377,6 +404,7 @@ fn build(markdown: &str, options: Options) -> Vec<Built> {
             scanned_to: body_at,
         }],
         seen_labels: HashSet::new(),
+        prefixes: Vec::new(),
     };
     builder.walk(body_at);
 
@@ -430,7 +458,13 @@ impl<'a> Builder<'a> {
                 }
                 Event::Rule => {
                     self.close_synthetic();
-                    let block = Block::ThematicBreak { text: Text::new() };
+                    // `hr`'s raw is `rtrim(cap[0], '\n')` and `markdownToState`
+                    // re-applies `/\n+$/`, so the text is the source line —
+                    // **leading indent kept**, trailing spaces and tabs kept.
+                    let raw = stripped_raw(&self.strip(&range));
+                    let block = Block::ThematicBreak {
+                        text: Text::from(raw.trim_end_matches('\n').to_string()),
+                    };
                     self.emit(Built::leaf(block, range));
                 }
                 Event::TaskListMarker(checked) => {
@@ -483,12 +517,84 @@ impl<'a> Builder<'a> {
             },
             _ => FrameKind::Unmodelled,
         };
+        // D2's stripper: a quote and an item add a prefix to every line their
+        // children live on, and the item's is computed once, here, from its
+        // own first line.
+        match kind {
+            FrameKind::BlockQuote => self.prefixes.push(Prefix::Quote {
+                first_line: line_start_of(self.src, range.start),
+            }),
+            FrameKind::Item { .. } => {
+                let prefix = self.item_prefix(&range);
+                self.prefixes.push(prefix);
+            }
+            _ => {}
+        }
         self.stack.push(Frame {
             kind,
             range,
             children: Vec::new(),
             scanned_to,
         });
+    }
+
+    /// `Tokenizer.list`'s per-item `indent`, computed from the item's first
+    /// line with the *outer* containers already stripped off it.
+    ///
+    /// ```js
+    /// let line = expandTabs(cap[2].split('\n', 1)[0], cap[1].length);
+    /// let blankLine = !line.trim();
+    /// if (blankLine)  indent = cap[1].length + 1;
+    /// else { indent = line.search(/[^ ]/); indent = indent > 4 ? 1 : indent;
+    ///        itemContents = line.slice(indent); indent += cap[1].length; }
+    /// ```
+    ///
+    /// `indent > 4 ? 1 : indent` is the rule that keeps `-     foo` — five
+    /// spaces, which would be an indented code block — as one column of marker
+    /// padding and four of content.
+    fn item_prefix(&self, range: &Range<usize>) -> Prefix {
+        let first_line = line_start_of(self.src, range.start);
+        let end = line_end_of(self.src, first_line);
+        let mut text = self.src[first_line..end].to_string();
+        let (mut source_start, mut exact) = (first_line, true);
+        for prefix in &self.prefixes {
+            let next = apply_prefix(*prefix, first_line, None, text, source_start, exact);
+            text = next.0;
+            source_start = next.1;
+            exact = next.2;
+        }
+
+        // `cap[1]` — ` {0,3}` then the bullet or `\d{1,9}[.)]`.
+        let leading = text.bytes().take_while(|b| *b == b' ').count().min(3);
+        let marker_len = match text[leading..].chars().next() {
+            Some('*' | '+' | '-') => leading + 1,
+            Some(c) if c.is_ascii_digit() => {
+                let digits = text[leading..]
+                    .chars()
+                    .take(9)
+                    .take_while(char::is_ascii_digit)
+                    .count();
+                leading + digits + 1
+            }
+            // No marker on the item's first line. `pulldown-cmark` does not
+            // produce one, so this is unreachable rather than tolerated — but
+            // a zero-width prefix is the answer that changes nothing.
+            _ => 0,
+        };
+
+        let rest = text.get(marker_len..).unwrap_or("");
+        let expanded = expand_tabs(rest, marker_len);
+        let indent = if expanded.trim().is_empty() {
+            marker_len + 1
+        } else {
+            let found = expanded.find(|c| c != ' ').unwrap_or(0);
+            marker_len + if found > 4 { 1 } else { found }
+        };
+        Prefix::Item {
+            indent,
+            marker_len,
+            first_line,
+        }
     }
 
     /// `align[i] || 'none'` — the alignment of the cell about to open, by its
@@ -546,20 +652,28 @@ impl<'a> Builder<'a> {
             FrameKind::Heading { level } => self.heading(level, frame.range.clone()),
 
             FrameKind::CodeBlock { ref kind } => {
-                code_block(self.src, kind, &frame.range, self.options)
+                let raw = stripped_raw(&self.strip(&frame.range));
+                code_block(self.src, &raw, kind, &frame.range, self.options)
             }
 
-            FrameKind::HtmlBlock => html_block(self.src, &frame.range),
+            FrameKind::HtmlBlock => {
+                let raw = stripped_raw(&self.strip(&frame.range));
+                html_block(&raw, &frame.range)
+            }
 
-            FrameKind::BlockQuote => Built {
-                // Mechanism 2, muya #1735: `>` alone is a block quote holding
-                // one empty paragraph, not an empty block quote.
-                children: empty_container_filler(frame.children, &frame.range),
-                block: Block::BlockQuote {
-                    children: Vec::new(),
-                },
-                range: frame.range,
-            },
+            FrameKind::BlockQuote => {
+                self.absorb_trailing_blank_quote_line(&mut frame);
+                self.prefixes.pop();
+                Built {
+                    // Mechanism 2, muya #1735: `>` alone is a block quote
+                    // holding one empty paragraph, not an empty block quote.
+                    children: empty_container_filler(frame.children, &frame.range),
+                    block: Block::BlockQuote {
+                        children: Vec::new(),
+                    },
+                    range: frame.range,
+                }
+            }
 
             FrameKind::Item {
                 task,
@@ -568,6 +682,7 @@ impl<'a> Builder<'a> {
             } => {
                 let blanks = self.item_blank_lines(&frame);
                 self.record_item_looseness(real_paragraph, blanks);
+                self.prefixes.pop();
                 let block = match task {
                     Some(checked) => Block::TaskListItem {
                         checked,
@@ -613,16 +728,67 @@ impl<'a> Builder<'a> {
                 range: frame.range,
             },
 
-            FrameKind::TableCell { align } => Built::leaf(
-                Block::TableCell {
-                    align,
-                    text: Text::new(),
-                },
-                frame.range,
-            ),
+            FrameKind::TableCell { align } => {
+                let raw = stripped_raw(&self.strip(&frame.range));
+                Built::leaf(
+                    Block::TableCell {
+                        align,
+                        text: Text::from(table_cell_text(&raw)),
+                    },
+                    frame.range,
+                )
+            }
         };
 
         self.emit(built);
+    }
+
+    /// A source range with every enclosing container's prefix removed.
+    fn strip(&self, range: &Range<usize>) -> Vec<StrippedLine> {
+        strip_lines(self.src, range, &self.prefixes)
+    }
+
+    /// A block quote's **last** line, when stripping it leaves whitespace
+    /// rather than nothing, belongs to the paragraph above it.
+    ///
+    /// `Tokenizer.blockquote` builds the quote's text as `rtrim(cap[0], '\n')`
+    /// with the markers removed, so `">\n> foo\n>  \n"` becomes `"\nfoo\n "` —
+    /// and `marked`'s paragraph rule takes that trailing `" "` as a
+    /// continuation line, because the lookahead that would refuse it (`| +\n`)
+    /// needs a newline the rtrim has already removed. CommonMark, and
+    /// therefore `pulldown-cmark`, calls the same line blank and ends the
+    /// paragraph before it.
+    ///
+    /// **Only the last line**, and that is not a simplification: a
+    /// whitespace-only line in the *middle* does match `| +\n` and does end
+    /// the paragraph, in both engines. `">\n> foo\n>  \n> bar\n"` is two
+    /// paragraphs for muya as well.
+    fn absorb_trailing_blank_quote_line(&self, frame: &mut Frame) {
+        let end = frame.range.end;
+        let last = if self.src[..end].ends_with('\n') {
+            end - 1
+        } else {
+            end
+        };
+        let line = line_start_of(self.src, last.saturating_sub(1).max(frame.range.start));
+        let Some(child) = frame.children.last_mut() else {
+            return;
+        };
+        if child.range.end > line {
+            return;
+        }
+        let Block::Paragraph { text } = &mut child.block else {
+            return;
+        };
+        let stripped = strip_lines(self.src, &(line..last), &self.prefixes);
+        let Some(only) = stripped.first().filter(|_| stripped.len() == 1) else {
+            return;
+        };
+        if only.text.is_empty() || !only.text.bytes().all(|b| b == b' ' || b == b'\t') {
+            return;
+        }
+        *text = Text::from(format!("{}\n{}", text.to_str(), only.text));
+        child.range.end = last;
     }
 
     /// Mechanism 4 — a paragraph that is really a `$$…$$` math block.
@@ -635,43 +801,70 @@ impl<'a> Builder<'a> {
     /// whatever followed the closing delimiter inside the same
     /// `pulldown-cmark` paragraph.
     fn finish_paragraph(&self, frame: &Frame) -> Vec<Built> {
-        let paragraph =
-            |range: Range<usize>| Built::leaf(Block::Paragraph { text: Text::new() }, range);
+        let paragraph = |range: Range<usize>| self.paragraph(range);
         if !self.options.math {
             return vec![paragraph(frame.range.clone())];
         }
-        let logical = LogicalText::of(self.src, frame.range.clone(), false);
-        let Some(consumed) = block_math(&logical.text) else {
+        let logical = LogicalText::of(self.src, frame.range.clone(), &self.prefixes);
+        let Some(math) = block_math(&logical.text) else {
             return vec![paragraph(frame.range.clone())];
         };
 
-        let math_end = logical.source_offset(consumed);
+        let math_end = logical.source_offset(math.consumed);
         let mut out = vec![Built::leaf(
             Block::MathBlock {
                 style: MathStyle::Default,
-                text: Text::new(),
+                // `blockKatex`'s tokenizer: `text: match[2].trim()`.
+                text: Text::from(logical.text[math.content].trim().to_string()),
             },
             frame.range.start..math_end,
         )];
-        if consumed < logical.text.trim_end().len() {
+        if math.consumed < logical.text.trim_end().len() {
             out.push(paragraph(math_end..frame.range.end));
         }
         out
     }
 
+    /// A paragraph, with `marked`'s `Tokenizer.paragraph` text.
+    ///
+    /// `text` is `cap[1]` minus a trailing newline, where `cap[1]` is the run
+    /// of non-blank lines the paragraph rule matched. `pulldown-cmark`'s range
+    /// can carry a trailing blank line that `marked`'s `cap[1]` cannot — the
+    /// paragraph rule's negative lookahead includes ` +\n` — so trailing blank
+    /// lines come off here rather than being sliced in.
+    fn paragraph(&self, range: Range<usize>) -> Built {
+        let lines = self.strip(&range);
+        Built::leaf(
+            Block::Paragraph {
+                text: Text::from(joined_text(&lines)),
+            },
+            range,
+        )
+    }
+
     fn heading(&self, level: HeadingLevel, range: Range<usize>) -> Built {
+        let lines = self.strip(&range);
         // `walkTokens`'s test, transcribed: `/\n {0,3}(=+|-+)/.exec(token.raw)`.
         // Unanchored and on the whole raw, which is what tells atx from setext
         // — an atx heading's raw is one line, so it cannot match.
-        let block = match setext_underline(&self.src[range.clone()]) {
+        let block = match setext_underline(&stripped_raw(&lines)) {
             Some(underline) => Block::SetextHeading {
                 level: underline.level(),
                 underline,
-                text: Text::new(),
+                // `Tokenizer.lheading`: `cap[1].trim()`, where `cap[1]` is
+                // every line above the underline. `trim()` is of the whole
+                // string, so the first line loses its indent and the others
+                // keep theirs — measured on `   Foo\n   bar\n  ===`, whose
+                // text is `Foo\n   bar`.
+                text: Text::from(setext_text(&lines)),
             },
             None => Block::AtxHeading {
                 level: heading_level(level),
-                text: Text::new(),
+                // **Reconstructed, not sliced** — `${'#'.repeat(depth)} ${text}`.
+                // So `##   Foo   ##` is `## Foo`, and a bare `#` is `"# "`
+                // with the trailing space, which is measured rather than
+                // tidied.
+                text: Text::from(atx_text(&lines, heading_level(level))),
             },
         };
         Built::leaf(block, range)
@@ -717,7 +910,11 @@ impl<'a> Builder<'a> {
         let Some(range) = synthetic.take() else {
             return;
         };
-        let built = Built::leaf(Block::Paragraph { text: Text::new() }, range.clone());
+        // `marked` gives a tight item a run of one-line `text` tokens which the
+        // lexer merges with `\n`, and `markdownToState`'s `text` case merges
+        // any that survive again with `\n` — so the text is the item's own
+        // lines, de-indented, joined. Which is what the stripper produces.
+        let built = self.paragraph(range.clone());
         // Emitted through the same path as a real child so that the gap before
         // it is scanned for reference definitions.
         self.emit(built);
@@ -819,8 +1016,7 @@ impl<'a> Builder<'a> {
             return;
         }
         let gap = frame.scanned_to..up_to;
-        let in_list_item = matches!(frame.kind, FrameKind::Item { .. });
-        let found = scan_definitions(self.src, gap.clone(), in_list_item, &mut self.seen_labels);
+        let found = scan_definitions(self.src, gap.clone(), &self.prefixes, &mut self.seen_labels);
         frame.children.extend(found);
         frame.scanned_to = up_to;
     }
@@ -910,6 +1106,7 @@ fn split_list(
     items: Vec<Built>,
     range: &Range<usize>,
 ) -> Vec<Built> {
+    let items = strip_task_markers(src, items, start.is_some(), loose);
     if items.is_empty() {
         // `compatibleTaskList`'s bullet branch pushes nothing when a list has
         // no items — `cache` is never assigned — so the list disappears. The
@@ -976,6 +1173,90 @@ fn split_list(
         out.push(bullet_or_task_list(src, group_is_task, loose, group));
     }
     out
+}
+
+/// The task marker comes out of the item's text — except in the one case where
+/// `marked` puts it back and nothing takes it off again.
+///
+/// The mechanism is three passes deep and the net effect is not the obvious
+/// one, so it is written out:
+///
+/// 1. `Tokenizer.list` sets `item.task` from `/^\[[ xX]\] +\S/` and strips
+///    `/^\[[ xX]\] +/` off both the item's text and its first token's.
+/// 2. It then **puts the marker back** — normalised to exactly one space —
+///    when the list is `loose`, by unshifting a `checkbox` token and
+///    prepending its raw to `tokens[0].text`.
+/// 3. `compatibleTaskList.stripTaskMarker` removes it again — but only in the
+///    **bullet** branch. The ordered branch (`token.ordered === true`) never
+///    calls it.
+///
+/// So a loose *ordered* list keeps the marker in its text and every other
+/// combination loses it. Measured against the running engine:
+///
+/// ```text
+/// "1. [ ] a\n"              → order-list, list-item, paragraph "a"
+/// "1. [ ] a\n\n2. [x] b\n"  → order-list, list-item, paragraph "[ ] a"
+/// "- [ ] a\n\n- [x] b\n"    → task-list, task-list-item, paragraph "a"
+/// ```
+///
+/// The marker is only ever removed from the item's **first** child, which is
+/// `tokens[0]`, and `listIsTask`'s trailing `\S` guarantees that child is a
+/// paragraph.
+fn strip_task_markers(src: &str, items: Vec<Built>, ordered: bool, loose: bool) -> Vec<Built> {
+    items
+        .into_iter()
+        .map(|mut item| {
+            if !matches!(item.block, Block::TaskListItem { .. }) {
+                return item;
+            }
+            let Some(first) = item.children.first_mut() else {
+                return item;
+            };
+            let Block::Paragraph { text } = &mut first.block else {
+                return item;
+            };
+            let body = text.to_str().into_owned();
+            // **Not `let Some(…) else { return }`.** `pulldown-cmark` consumes
+            // the marker into its own `TaskListMarker` event, so a loose item's
+            // `Paragraph` range often starts *after* it and there is nothing to
+            // strip — while the restore below still has to happen. Gating the
+            // restore on the strip having fired is the bug that made
+            // `1. [ ] a\n\n2. [x] b\n` come out as muya's tight answer.
+            let stripped = strip_task_prefix(&body).unwrap_or(&body);
+            *text = if ordered && loose {
+                // `checkboxToken.raw = taskRaw[0] + ' '`, where `taskRaw` is
+                // `/\[[ xX]\]/.exec(item.raw)` — so the marker's own case is
+                // kept and its spacing is normalised to one space.
+                let marker = task_checkbox(&src[item.range.clone()]).unwrap_or("[ ]");
+                Text::from(format!("{marker} {stripped}"))
+            } else {
+                Text::from(stripped.to_string())
+            };
+            item
+        })
+        .collect()
+}
+
+/// `/^\[[ xX]\] +/` — the prefix, if the text carries one.
+fn strip_task_prefix(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix('[')?;
+    let mut chars = rest.chars();
+    let mark = chars.next()?;
+    if !matches!(mark, ' ' | 'x' | 'X') || chars.next()? != ']' {
+        return None;
+    }
+    let after = &rest[2..];
+    let spaces = after.bytes().take_while(|b| *b == b' ').count();
+    (spaces > 0).then(|| &after[spaces..])
+}
+
+/// `/\[[ xX]\]/.exec(raw)?.[0]` — the first checkbox anywhere in the item.
+fn task_checkbox(raw: &str) -> Option<&str> {
+    let bytes = raw.as_bytes();
+    (0..bytes.len().saturating_sub(2)).find_map(|i| {
+        (bytes[i] == b'[' && matches!(bytes[i + 1], b' ' | b'x' | b'X') && bytes[i + 2] == b']')
+            .then(|| &raw[i..i + 3])
+    })
 }
 
 /// A task item inside an ordered list is a plain list item.
@@ -1092,10 +1373,10 @@ fn marker_char(src: &str, range: &Range<usize>) -> Option<char> {
 fn scan_definitions(
     src: &str,
     gap: Range<usize>,
-    in_list_item: bool,
+    prefixes: &[Prefix],
     seen: &mut HashSet<String>,
 ) -> Vec<Built> {
-    let logical = LogicalText::of(src, gap, in_list_item);
+    let logical = LogicalText::of(src, gap, prefixes);
     let text = logical.text.as_str();
     let mut out = Vec::new();
 
@@ -1132,8 +1413,14 @@ fn scan_definitions(
         // `marked` registers the label in `this.tokens.links` and pushes a
         // token only if it was not already there; a repeat emits nothing.
         if seen.insert(label) {
+            // `markdownToState`'s `def` case is `token.raw.replace(/\n+$/, '')`
+            // and `Tokenizer.def`'s raw is already `rtrim(cap[0], '\n')`, so
+            // the text is the definition's lines including its own ` {0,3}`
+            // indent — which `cap[0]` starts with.
             out.push(Built::leaf(
-                Block::Paragraph { text: Text::new() },
+                Block::Paragraph {
+                    text: Text::from(text[at..end].trim_end_matches('\n').to_string()),
+                },
                 logical.source_offset(at)..logical.source_offset(end),
             ));
         }
@@ -1248,6 +1535,7 @@ fn normalise_label(label: &str) -> String {
 
 fn code_block(
     src: &str,
+    raw: &str,
     kind: &CodeBlockKind<'_>,
     range: &Range<usize>,
     options: Options,
@@ -1266,6 +1554,8 @@ fn code_block(
         CodeBlockKind::Fenced(_) => (CodeKind::Fenced, raw_info(src, range)),
     };
 
+    let text = code_text(raw, code_kind, options);
+
     // `walkTokens` runs before `markdownToState`, so a ```` ```math ```` fence
     // never reaches `_buildCodeState` at all: it is rewritten in place into a
     // `multiplemath` token with `mathStyle: 'gitlab'`. The test is
@@ -1276,7 +1566,8 @@ fn code_block(
         return Built::leaf(
             Block::MathBlock {
                 style: MathStyle::Gitlab,
-                text: Text::new(),
+                // The `multiplemath` case trims; `_buildCodeState` does not.
+                text: Text::from(text.trim().to_string()),
             },
             range.clone(),
         );
@@ -1300,7 +1591,9 @@ fn code_block(
             Block::Diagram {
                 lang,
                 kind,
-                text: Text::new(),
+                // `_buildCodeState`'s diagram branch uses `value`, the same
+                // string the code branch does — no trim.
+                text: Text::from(text),
             },
             range.clone(),
         );
@@ -1310,11 +1603,153 @@ fn code_block(
         Block::CodeBlock {
             kind: code_kind,
             info,
-            fence_len: fence_length(src, range, code_kind),
-            text: Text::new(),
+            fence_len: fence_length(raw, code_kind),
+            text: Text::from(text),
         },
         range.clone(),
     )
+}
+
+/// `marked`'s `token.text` for a code block, then `markdownToState`'s two
+/// post-passes.
+///
+/// Three rules, not one, and the first is the one §4 C2 measured 263 cases of:
+///
+/// - **Indented.** `raw.replace(/^(?: {1,4}| {0,3}\t)/gm, '')` — one to four
+///   spaces, *or* up to three spaces and a tab, off each line. Then
+///   `markdownToState` does `text.replace(/\n$/, '')` because marked ≥17
+///   appends a trailing newline that a fenced block does not have.
+/// - **Fenced.** The lines between the fences, then `indentCodeCompensation`.
+/// - **`trimUnnecessaryCodeBlockEmptyLines`** (muya #1265) — off in both of
+///   S1's option sets, so no fixture reaches it; implemented anyway, because a
+///   flag that exists and does nothing is the shape this milestone keeps
+///   finding out about the hard way.
+fn code_text(raw: &str, kind: CodeKind, options: Options) -> String {
+    let mut value = match kind {
+        CodeKind::Indented => {
+            let trimmed = trim_trailing_blank_lines(raw);
+            let text = trimmed
+                .split('\n')
+                .map(strip_code_indent)
+                .collect::<Vec<_>>()
+                .join("\n");
+            // `codeBlockStyle === 'indented' ? text.replace(/\n$/, '') : text`.
+            text.strip_suffix('\n').map_or(text.clone(), str::to_string)
+        }
+        CodeKind::Fenced => fenced_code_text(raw),
+    };
+
+    // Fix #1265: `if (trim && (endsWith('\n') || startsWith('\n')))`, then
+    // **both** ends come off regardless of which one triggered it.
+    if options.trim_unnecessary_code_block_empty_lines
+        && (value.ends_with('\n') || value.starts_with('\n'))
+    {
+        value = value
+            .trim_end_matches('\n')
+            .trim_start_matches('\n')
+            .to_string();
+    }
+    value
+}
+
+/// `/^(?: {1,4}| {0,3}\t)/` off one line — `marked`'s `codeRemoveIndent`.
+///
+/// **The alternation is ordered and the order is load-bearing.** ` {1,4}` is
+/// tried first and is greedy, so `"  \tfoo"` loses its two spaces and keeps the
+/// tab; only a line with no leading space at all reaches the ` {0,3}\t` arm,
+/// where the `{0,3}` can therefore only ever be zero.
+fn strip_code_indent(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    let spaces = bytes.iter().take_while(|b| **b == b' ').count();
+    if spaces > 0 {
+        return &line[spaces.min(4)..];
+    }
+    if bytes.first() == Some(&b'\t') {
+        return &line[1..];
+    }
+    line
+}
+
+/// `marked`'s `trimTrailingBlankLines`: drop trailing blank lines but **keep a
+/// single one**, because `lines.length - end <= 2` returns the string untouched.
+fn trim_trailing_blank_lines(s: &str) -> String {
+    let lines: Vec<&str> = s.split('\n').collect();
+    let mut end = lines.len() as isize - 1;
+    while end >= 0 && lines[end as usize].trim_matches([' ', '\t']).is_empty() {
+        end -= 1;
+    }
+    if lines.len() as isize - end <= 2 {
+        return s.to_string();
+    }
+    lines[..(end + 1) as usize].join("\n")
+}
+
+/// `cap[3]` of the fences rule, then `indentCodeCompensation`.
+///
+/// `cap[3]` is everything between the info line's newline and the newline that
+/// precedes the closing fence — so it never ends with a newline, and an
+/// unclosed fence simply runs to the end of the block.
+fn fenced_code_text(raw: &str) -> String {
+    let mut lines: Vec<&str> = raw.split('\n').collect();
+    // A trailing newline in `raw` gives a final empty element that is not a
+    // line of content.
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    let Some(open) = lines.first().copied() else {
+        return String::new();
+    };
+    let indent = open.bytes().take_while(|b| *b == b' ').count();
+    let after_indent = &open[indent..];
+    let Some(fence_char) = after_indent
+        .chars()
+        .next()
+        .filter(|c| *c == '`' || *c == '~')
+    else {
+        return String::new();
+    };
+    let fence_len = after_indent
+        .chars()
+        .take_while(|c| *c == fence_char)
+        .count();
+
+    let is_closing = |line: &str| {
+        let i = line.bytes().take_while(|b| *b == b' ').count();
+        if i > 3 {
+            return false;
+        }
+        let rest = &line[i..];
+        rest.chars().take_while(|c| *c == fence_char).count() >= fence_len
+            && rest
+                .trim_start_matches(fence_char)
+                .trim_start_matches(['`', '~'])
+                .chars()
+                .all(|c| c == ' ')
+    };
+
+    let mut body = &lines[1.min(lines.len())..];
+    if body.last().is_some_and(|line| is_closing(line)) {
+        body = &body[..body.len() - 1];
+    }
+    let text = body.join("\n");
+
+    // `indentCodeCompensation(raw, text)` — `/^(\s+)(?:```)/` on the **raw**,
+    // so a `~~~` fence never compensates however indented it is. Transcribed,
+    // because it is `marked`'s and it is what muya shows.
+    if indent == 0 || fence_char != '`' {
+        return text;
+    }
+    text.split('\n')
+        .map(|node| {
+            let node_indent = node.len() - node.trim_start().len();
+            if node_indent >= indent {
+                &node[indent..]
+            } else {
+                node
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The info string as the source spells it, entities and escapes intact.
@@ -1347,11 +1782,10 @@ fn raw_info(src: &str, range: &Range<usize>) -> String {
 /// a round-trip loss on `"`".repeat(300)`. No fixture in the 1344 has one, and
 /// widening the field is a change to `mt-doc`'s public API that belongs with
 /// the serializer that would lose the data.
-fn fence_length(src: &str, range: &Range<usize>, kind: CodeKind) -> Option<u8> {
+fn fence_length(s: &str, kind: CodeKind) -> Option<u8> {
     if kind != CodeKind::Fenced {
         return None;
     }
-    let s = &src[range.clone()];
     let after_indent = s.trim_start_matches(' ');
     if s.len() - after_indent.len() > 3 {
         return None;
@@ -1371,18 +1805,149 @@ fn fence_length(src: &str, range: &Range<usize>, kind: CodeKind) -> Option<u8> {
 ///
 /// `/^<img[^<>]+>$/` against the **trimmed** text, so `<img src="x">` is a
 /// paragraph and `<img>\n<img>` is an html block.
-fn html_block(src: &str, range: &Range<usize>) -> Built {
-    let text = src[range.clone()].trim();
+fn html_block(raw: &str, range: &Range<usize>) -> Built {
+    // `Tokenizer.html` sets `text = trimTrailingBlankLines(cap[0])` and the
+    // `html` case then trims, so both passes are here.
+    let text = trim_trailing_blank_lines(raw).trim().to_string();
     let single_image = text.starts_with("<img")
         && text.ends_with('>')
         && text.len() > 5
         && !text[4..text.len() - 1].contains(['<', '>']);
     let block = if single_image {
-        Block::Paragraph { text: Text::new() }
+        Block::Paragraph {
+            text: Text::from(text),
+        }
     } else {
-        Block::HtmlBlock { text: Text::new() }
+        Block::HtmlBlock {
+            text: Text::from(text),
+        }
     };
     Built::leaf(block, range.clone())
+}
+
+// ---------------------------------------------------------------------------
+// D2 — the per-kind rules that are not a strip
+// ---------------------------------------------------------------------------
+
+/// The stripped lines joined into a paragraph's text.
+///
+/// `Tokenizer.paragraph`'s `cap[1]` cannot end in a blank line — the rule's
+/// negative lookahead includes ` +\n` — but `pulldown-cmark`'s paragraph range
+/// can, so trailing blank lines come off here.
+///
+/// **Only genuinely empty lines**, not whitespace-only ones. `">\n> foo\n>  \n"`
+/// strips to `"\nfoo\n "` and muya's paragraph text is `"foo\n "`, trailing
+/// space and all — a whitespace-only line is content once its `> ` is gone.
+/// # And the four spaces an absorbed code block loses
+///
+/// `blockTokens`'s `code` branch merges an indented code block into a
+/// preceding paragraph with `lastToken.text += '\n' + token.text` — and
+/// `token.text` has already had `codeRemoveIndent` applied. So the same four
+/// spaces survive at the top level, where the `paragraph` rule swallows the
+/// line whole, and vanish wherever `marked` restarts its scan at that line:
+///
+/// ```text
+/// "foo\n    bar\n"                       → "foo\n    bar"   (one paragraph token)
+/// "  1.  A paragraph\n    with two lines." → "A paragraph\nwith two lines."
+/// "> foo\n    - bar\n"                   → "foo\n- bar"
+/// ```
+///
+/// [`StrippedLine::starts_scan`] is what tells the two apart, and it is set by
+/// the container rather than guessed from the indent.
+fn joined_text(lines: &[StrippedLine]) -> String {
+    let mut end = lines.len();
+    while end > 0 && lines[end - 1].text.is_empty() {
+        end -= 1;
+    }
+    let mut out: Vec<&str> = Vec::with_capacity(end);
+    let mut in_code = false;
+    for (index, line) in lines[..end].iter().enumerate() {
+        let text = line.text.as_str();
+        if index > 0 && (line.starts_scan || in_code) && is_code_line(text) {
+            in_code = true;
+            out.push(strip_code_indent(text));
+        } else {
+            if line.starts_scan {
+                in_code = false;
+            }
+            out.push(text);
+        }
+    }
+    out.join("\n")
+}
+
+/// `marked`'s `code` rule head: `(?: {4}| {0,3}\t)[^\n]+`.
+fn is_code_line(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let spaces = bytes.iter().take_while(|b| **b == b' ').count();
+    let indent = if spaces >= 4 {
+        4
+    } else if bytes.get(spaces) == Some(&b'\t') {
+        spaces + 1
+    } else {
+        return false;
+    };
+    bytes.len() > indent
+}
+
+/// `Tokenizer.lheading`: every line above the underline, then `.trim()`.
+fn setext_text(lines: &[StrippedLine]) -> String {
+    let mut content: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+    // Drop trailing blank lines, then the underline itself.
+    while content.last().is_some_and(|l| l.trim().is_empty()) {
+        content.pop();
+    }
+    content.pop();
+    content.join("\n").trim().to_string()
+}
+
+/// `markdownToState`'s atx branch: `` `${'#'.repeat(+depth)} ${text}` ``, where
+/// `text` is `Tokenizer.heading`'s.
+///
+/// **A rebuild, not a slice**, which is why `##   Foo   ##` is `## Foo` and a
+/// bare `#` is `"# "` — the trailing space is muya's answer, measured, and
+/// tidying it away would be a divergence with no register entry.
+fn atx_text(lines: &[StrippedLine], level: u8) -> String {
+    let line = lines.first().map_or("", |l| l.text.as_str());
+    // `/^ {0,3}(#{1,6})(?=\s|$)(.*)/` — `cap[2]`, then `.trim()`.
+    let indent = line.bytes().take_while(|b| *b == b' ').count().min(3);
+    let after_hashes = line[indent..].trim_start_matches('#');
+    let mut text = after_hashes.trim().to_string();
+
+    // The closing sequence: `rtrim(text, '#')`, kept only when what is left is
+    // empty or ends in a space. CommonMark requires the space, and `marked`
+    // implements the requirement by testing for it after the fact.
+    if text.ends_with('#') {
+        let trimmed = text.trim_end_matches('#');
+        if trimmed.is_empty() || trimmed.ends_with(' ') {
+            text = trimmed.trim().to_string();
+        }
+    }
+    format!("{} {text}", "#".repeat(level as usize))
+}
+
+/// `splitCells`'s per-cell tail: `cells[i].trim().replace(/\\\|/g, '|')`.
+///
+/// muya's own comment says why the resolved form is what is stored: *"so the
+/// editor shows `` `|` `` rather than the escaped `` `\|` `` inside inline
+/// code (#4849). `escapeText` re-adds the `\|` escape on serialization."*
+fn table_cell_text(raw: &str) -> String {
+    raw.trim().replace("\\|", "|")
+}
+
+/// `markdownToState`'s frontmatter branch:
+/// `text.replace(/^\s+/, '').replace(/\s$/, '')`.
+///
+/// **The second is `\s$`, one character, not `\s+$`** — so `"a\n\n"` becomes
+/// `"a\n"`. Transcribed rather than corrected: it is what muya stores and what
+/// the serializer will be asked to round-trip.
+fn front_matter_text(text: &str) -> String {
+    let leading = text.trim_start();
+    let mut out = leading.to_string();
+    if out.chars().next_back().is_some_and(char::is_whitespace) {
+        out.pop();
+    }
+    out
 }
 
 /// `walkTokens`'s setext test: `/\n {0,3}(=+|-+)/` over the heading's raw.
@@ -1434,13 +1999,21 @@ fn owned_code_kind(kind: &CodeBlockKind<'_>) -> CodeBlockKind<'static> {
 // Mechanism 4 — the block math rule
 // ---------------------------------------------------------------------------
 
+/// [`block_math`]'s answer: the span of `match[2]`, and `match[0].length`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BlockMath {
+    content: Range<usize>,
+    consumed: usize,
+}
+
 /// muya's `blockKatex` rule, transcribed:
 ///
 /// ```text
 /// /^(\${1,2})\n((?:\\[\s\S]|[^\\])+?)\n\1[ \t]*(?:\n|$)/
 /// ```
 ///
-/// Returns how many bytes of `text` the match consumed, or `None`.
+/// Returns `match[2]`'s span and how many bytes of `text` the match consumed,
+/// or `None`.
 ///
 /// Two details that fall out of the regex rather than out of intuition:
 ///
@@ -1450,7 +2023,7 @@ fn owned_code_kind(kind: &CodeBlockKind<'_>) -> CodeBlockKind<'static> {
 /// - `(?:\\[\s\S]|[^\\])+?` means a backslash **consumes the next character**,
 ///   so a `\` immediately before a newline makes that newline part of the
 ///   content and unable to close the block.
-fn block_math(text: &str) -> Option<usize> {
+fn block_math(text: &str) -> Option<BlockMath> {
     let bytes = text.as_bytes();
     let dollars = bytes.iter().take_while(|b| **b == b'$').count().min(2);
     for open in (1..=dollars).rev() {
@@ -1477,9 +2050,20 @@ fn block_math(text: &str) -> Option<usize> {
                     .take_while(|b| **b == b' ' || **b == b'\t')
                     .count();
                 after += trailing;
+                let content = content_start..at;
                 match bytes.get(after) {
-                    Some(b'\n') => return Some(after + 1),
-                    None => return Some(after),
+                    Some(b'\n') => {
+                        return Some(BlockMath {
+                            content,
+                            consumed: after + 1,
+                        });
+                    }
+                    None => {
+                        return Some(BlockMath {
+                            content,
+                            consumed: after,
+                        });
+                    }
                     _ => {}
                 }
             }
@@ -1490,114 +2074,404 @@ fn block_math(text: &str) -> Option<usize> {
 }
 
 // ---------------------------------------------------------------------------
-// Source-scanning helpers
+// D2 — the container-prefix stripper
 // ---------------------------------------------------------------------------
 
-/// A source line inside a range, as absolute offsets. `end` excludes the
-/// newline.
-#[derive(Debug, Clone)]
-struct Line {
-    start: usize,
-    end: usize,
-}
-
-struct Lines {
-    at: usize,
-    end: usize,
-    src_end: usize,
-    newlines: Vec<usize>,
-}
-
-impl Lines {
-    fn new(src: &str, range: Range<usize>) -> Self {
-        let newlines = src[range.clone()]
-            .bytes()
-            .enumerate()
-            .filter(|(_, b)| *b == b'\n')
-            .map(|(i, _)| range.start + i)
-            .collect();
-        Lines {
-            at: range.start,
-            end: range.end,
-            src_end: range.end,
-            newlines,
-        }
-    }
-}
-
-impl Iterator for Lines {
-    type Item = Line;
-
-    fn next(&mut self) -> Option<Line> {
-        if self.at >= self.end {
-            return None;
-        }
-        let next_newline = self
-            .newlines
-            .iter()
-            .copied()
-            .find(|n| *n >= self.at)
-            .unwrap_or(self.src_end);
-        let line = Line {
-            start: self.at,
-            end: next_newline.min(self.end),
-        };
-        self.at = next_newline + 1;
-        Some(line)
-    }
-}
-
-/// Where a line's content starts, after the container syntax a gap scan has to
-/// look past.
+/// What one enclosing container removes from each line inside it.
 ///
-/// **This is not D2's container-prefix stripper**, which is S2's and has to be
-/// exact because a leaf's text depends on it. This one only has to find the
-/// first character that could begin a reference definition, so it strips
-/// indentation and block-quote markers and — on a list item's first line only
-/// — the bullet.
-fn content_start(src: &str, line: &Line, strip_marker: bool) -> usize {
-    let mut at = line.start;
-    let bytes = src.as_bytes();
-    loop {
-        while at < line.end && (bytes[at] == b' ' || bytes[at] == b'\t') {
-            at += 1;
-        }
-        if at < line.end && bytes[at] == b'>' {
-            at += 1;
-            continue;
-        }
-        break;
-    }
-    if strip_marker {
-        let rest = &src[at..line.end];
-        if let Some(marker) = marker_char(
-            src,
-            &Range {
-                start: at,
-                end: line.end,
-            },
-        ) {
-            let width = if matches!(marker, '.' | ')') {
-                rest.chars().take_while(char::is_ascii_digit).count() + 1
-            } else {
-                1
-            };
-            let mut after = at + width;
-            while after < line.end && (bytes[after] == b' ' || bytes[after] == b'\t') {
-                after += 1;
+/// # This is the scanner M2.md §5 D2 calls for, and it is the only one
+///
+/// D2: *"the prefix stripper is the piece with no counterpart in
+/// `pulldown-cmark`. It is the same operation for a block quote and a list
+/// item, it composes … and it is the one part of D2 that is a scanner rather
+/// than a rewrite. Write it once."*
+///
+/// S1 shipped two functions that looked like it and were not — `content_start`
+/// and a `LogicalText` built on it, written for *detection*: finding a
+/// reference definition in a gap, deciding whether a paragraph is really a
+/// `$$` math block. Both stripped **all** leading whitespace and **every** `>`
+/// run on a line, which is right for "where might a `[` be?" and wrong for
+/// "what does this block's text say": a definition's own ` {0,3}` indent is
+/// part of `marked`'s `cap[0]` and therefore part of the paragraph's text, and
+/// a line carrying two `>` inside a singly-nested quote has one of them as
+/// content.
+///
+/// **They are deleted rather than kept beside this**, and `LogicalText` is
+/// re-based on [`strip_lines`]. Promoting them as-is would have been wrong;
+/// keeping them beside the real stripper would have been two scanners that
+/// agree on the fixtures and drift on the next one. What the detection callers
+/// actually needed was the exact answer all along — the def scan is *more*
+/// correct for seeing the indent, because that indent is the text it is about
+/// to emit.
+///
+/// # Why a per-line prefix reproduces `marked` at all
+///
+/// `marked` does not strip per line at leaf level: `Tokenizer.blockquote`
+/// removes `/^ {0,3}>[ \t]?/gm` from the whole quote and **re-lexes** the
+/// result, and `Tokenizer.list` de-indents each item's raw and re-lexes that.
+/// A leaf token's `text` is therefore a slice of an already-stripped string,
+/// and the stripping of every level above it was a per-line prefix removal.
+/// Composing the levels outermost-first over the original source lines gives
+/// the same bytes, and keeps the map back to source offsets that a re-lex
+/// throws away (M2.md §10).
+///
+/// The two places the composition is *not* a pure prefix removal are named on
+/// the variants: `expandTabs` inside a list item rewrites content, and it is
+/// the only thing that sets [`StrippedLine::exact`] to `false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Prefix {
+    /// A block quote. `marked`'s `blockquoteSetextReplace2`,
+    /// `/^ {0,3}>[ \t]?/gm`, applied once per nesting level — a line that does
+    /// not match is a lazy continuation and keeps every byte.
+    ///
+    /// `first_line` is the quote's own first source line, which the
+    /// setext-protection substitution needs; see [`setext_protected`].
+    Quote { first_line: usize },
+    /// A list item, with the three numbers `Tokenizer.list` computes per item.
+    Item {
+        /// `cap[1].length + indent` — the columns a *continuation* line loses.
+        indent: usize,
+        /// `cap[1].length` — ` {0,3}` plus the bullet or `1.`, in bytes.
+        marker_len: usize,
+        /// Where the item's first line starts in the source. That line takes
+        /// the tab-stop-aware `expandTabs(rest, cap[1].length)` path; every
+        /// other line takes the flat `\t → four spaces` one, which is
+        /// `marked`'s asymmetry and not this port's.
+        first_line: usize,
+    },
+}
+
+/// One line of a leaf's text, and where it came from.
+#[derive(Debug, Clone)]
+struct StrippedLine {
+    text: String,
+    /// The source offset `text` begins at.
+    ///
+    /// This is half of the reverse map M2.md §10 owes M4 — see the note there
+    /// on why it is half and why the other half is not S2's. It is exact
+    /// except on a line where a tab inside a list item was expanded to spaces,
+    /// which is the one case where `text` is not a slice of the source.
+    source_start: usize,
+    /// Whether a `\n` followed this line *inside the range* — so that
+    /// [`stripped_raw`] can rebuild `marked`'s `token.raw` newline for newline.
+    terminated: bool,
+    /// Whether `marked` restarts `blockTokens` at this line, so that `code` is
+    /// tried before `paragraph`. See [`joined_text`].
+    starts_scan: bool,
+}
+
+/// `marked`'s `expandTabs`: tab-stop aware, starting at column `col`.
+fn expand_tabs(s: &str, mut col: usize) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c == '\t' {
+            let added = 4 - (col % 4);
+            for _ in 0..added {
+                out.push(' ');
             }
-            at = after;
+            col += added;
+        } else {
+            out.push(c);
+            col += 1;
         }
     }
-    at
+    out
+}
+
+fn line_start_of(src: &str, at: usize) -> usize {
+    src[..at].rfind('\n').map_or(0, |i| i + 1)
+}
+
+fn line_end_of(src: &str, at: usize) -> usize {
+    src[at..].find('\n').map_or(src.len(), |i| at + i)
+}
+
+/// Apply one container's prefix to one whole source line.
+///
+/// Takes and returns `(text, source_start, exact)` so the levels compose.
+/// `/^ {0,3}>/` — the line is a quoted line rather than a lazy continuation.
+fn is_quoted_line(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let i = bytes.iter().take(3).take_while(|b| **b == b' ').count();
+    bytes.get(i) == Some(&b'>')
+}
+
+/// `blockquoteSetextReplace`: `/\n {0,3}((?:=+|-+) *)(?=\n|$)/g → '\n    $1'`,
+/// applied to a quote's raw **before** the `>` markers come off.
+///
+/// It exists so a lazy continuation line that is nothing but `===` cannot turn
+/// the paragraph above it into a setext heading — four spaces make it indented
+/// code instead, and the `code` branch of `blockTokens` then folds it back into
+/// the paragraph. The four spaces survive into the paragraph's text, which is
+/// why this is here and not an implementation detail: `> foo\nbar\n===` has
+/// muya's text as `"foo\nbar\n    ==="`.
+///
+/// The `\n` the pattern starts with is what makes the *first* line of a
+/// continuation group ineligible, and `Tokenizer.blockquote`'s loop only ever
+/// puts un-quoted lines at the **start** of a group — so the condition is
+/// exactly "this line and the one before it are both lazy". Measured:
+///
+/// ```text
+/// "> foo\nbar\n===\n"  → "foo\nbar\n    ==="   (bar is lazy, === follows it)
+/// "> foo\n===\n"       → "foo\n==="            (=== starts its own group)
+/// "> a\n> b\n===\n"    → "a\nb\n==="           (likewise)
+/// ```
+fn setext_protected(text: &str) -> Option<String> {
+    let indent = text.bytes().take(4).take_while(|b| *b == b' ').count();
+    if indent > 3 {
+        return None;
+    }
+    let rest = &text[indent..];
+    let marker = rest.chars().next().filter(|c| *c == '=' || *c == '-')?;
+    let run = rest.chars().take_while(|c| *c == marker).count();
+    if !rest[run..].chars().all(|c| c == ' ') {
+        return None;
+    }
+    // `$1` is `((?:=+|-+) *)`, so the ` {0,3}` the pattern matched is replaced
+    // by exactly four spaces rather than added to.
+    Some(format!("    {rest}"))
+}
+
+fn apply_prefix(
+    prefix: Prefix,
+    line_start: usize,
+    previous: Option<&str>,
+    text: String,
+    source_start: usize,
+    exact: bool,
+) -> (String, usize, bool) {
+    match prefix {
+        Prefix::Quote { first_line } => {
+            if !is_quoted_line(&text)
+                && line_start > first_line
+                && previous.is_some_and(|p| !is_quoted_line(p))
+                && let Some(protected) = setext_protected(&text)
+            {
+                return (protected, source_start, false);
+            }
+            let bytes = text.as_bytes();
+            let mut i = 0;
+            while i < 3 && bytes.get(i) == Some(&b' ') {
+                i += 1;
+            }
+            if bytes.get(i) != Some(&b'>') {
+                // A lazy continuation line. `/^ {0,3}>[ \t]?/gm` does not match
+                // it and `marked` keeps it whole.
+                return (text, source_start, exact);
+            }
+            i += 1;
+            if matches!(bytes.get(i), Some(b' ' | b'\t')) {
+                i += 1;
+            }
+            let rest = text[i..].to_string();
+            (
+                rest,
+                if exact {
+                    source_start + i
+                } else {
+                    source_start
+                },
+                exact,
+            )
+        }
+        Prefix::Item {
+            indent,
+            marker_len,
+            first_line,
+        } => {
+            if line_start == first_line {
+                // `itemContents = expandTabs(cap[2], cap[1].length).slice(indent)`,
+                // where `indent` here already includes `cap[1].length`.
+                if marker_len >= text.len() {
+                    return (String::new(), source_start + text.len(), exact);
+                }
+                let rest = &text[marker_len..];
+                if rest.trim().is_empty() {
+                    // `blankLine` — `itemContents` is never assigned and stays
+                    // empty, whatever spaces the line held.
+                    return (String::new(), source_start + text.len(), exact);
+                }
+                let cut = indent - marker_len;
+                if rest.contains('\t') {
+                    let expanded = expand_tabs(rest, marker_len);
+                    let sliced = expanded.get(cut..).unwrap_or("").to_string();
+                    (sliced, source_start + marker_len, false)
+                } else {
+                    let sliced = rest.get(cut..).unwrap_or("").to_string();
+                    (
+                        sliced,
+                        if exact {
+                            source_start + marker_len + cut.min(rest.len())
+                        } else {
+                            source_start
+                        },
+                        exact,
+                    )
+                }
+            } else if text.contains('\t') {
+                // `nextLineWithoutTabs = nextLine.replace(/\t/g, '    ')` —
+                // **not** tab-stop aware, and applied to the whole line rather
+                // than to its indent. Transcribed, not improved.
+                let expanded = text.replace('\t', "    ");
+                let first_non_space = expanded.find(|c| c != ' ');
+                let dedent = first_non_space.is_some_and(|i| i >= indent) || text.trim().is_empty();
+                if dedent {
+                    (
+                        expanded.get(indent..).unwrap_or("").to_string(),
+                        source_start,
+                        false,
+                    )
+                } else {
+                    // Paragraph continuation: `marked` keeps the *un-expanded*
+                    // line here, which is why this arm returns `text`.
+                    (text, source_start, exact)
+                }
+            } else {
+                let first_non_space = text.find(|c| c != ' ');
+                let dedent = first_non_space.is_some_and(|i| i >= indent) || text.trim().is_empty();
+                if dedent {
+                    let cut = indent.min(text.len());
+                    (
+                        text[cut..].to_string(),
+                        if exact {
+                            source_start + cut
+                        } else {
+                            source_start
+                        },
+                        exact,
+                    )
+                } else {
+                    (text, source_start, exact)
+                }
+            }
+        }
+    }
+}
+
+/// A source range with every enclosing container's prefix removed, line by
+/// line.
+///
+/// Whole source lines are stripped and *then* clipped to `range`, because the
+/// prefix is at the start of the line and a range may begin after it — a tight
+/// list item's synthetic paragraph starts at its first inline event, which is
+/// already past the marker.
+fn strip_lines(src: &str, range: &Range<usize>, prefixes: &[Prefix]) -> Vec<StrippedLine> {
+    let mut out = Vec::new();
+    if range.is_empty() {
+        return out;
+    }
+    let mut at = line_start_of(src, range.start);
+    // The previous source line as it looked *before* each prefix was applied.
+    // `Prefix::Quote`'s setext protection asks about its own level's previous
+    // line, and at level `i` that is `previous[i]`.
+    let mut previous: Vec<String> = Vec::new();
+    if at > 0 {
+        let mut text = src[line_start_of(src, at - 1)..at - 1].to_string();
+        let (mut start, mut exact) = (line_start_of(src, at - 1), true);
+        for prefix in prefixes {
+            previous.push(text.clone());
+            let next = apply_prefix(*prefix, start, None, text, start, exact);
+            text = next.0;
+            start = next.1;
+            exact = next.2;
+        }
+    }
+
+    while at < range.end {
+        let end = line_end_of(src, at);
+        let mut text = src[at..end].to_string();
+        let mut source_start = at;
+        let mut exact = true;
+        let mut stages: Vec<String> = Vec::with_capacity(prefixes.len());
+        for (depth, prefix) in prefixes.iter().enumerate() {
+            stages.push(text.clone());
+            let next = apply_prefix(
+                *prefix,
+                at,
+                previous.get(depth).map(String::as_str),
+                text,
+                source_start,
+                exact,
+            );
+            text = next.0;
+            source_start = next.1;
+            exact = next.2;
+        }
+
+        // Where `marked` restarts its block scan, which is what decides
+        // whether an indented line is a `code` token or a paragraph line.
+        let starts_scan = match prefixes.last() {
+            // A list item is lexed with `state.top = false`, so the top-level
+            // `paragraph` branch is skipped and `text` matches **one line**.
+            // Every line is therefore a fresh scan position.
+            Some(Prefix::Item { .. }) => true,
+            // `Tokenizer.blockquote` lexes each continuation group with its
+            // own `blockTokens` call, and a group starts at the first
+            // un-quoted line after a quoted one.
+            Some(Prefix::Quote { first_line }) => {
+                let depth = prefixes.len() - 1;
+                at > *first_line
+                    && !is_quoted_line(&stages[depth])
+                    && previous.get(depth).is_some_and(|p| is_quoted_line(p))
+            }
+            None => false,
+        };
+        previous = stages;
+
+        // Clip to the range. Only the first and last line can need it.
+        if exact {
+            let mut lo = source_start.max(range.start);
+            // **`pulldown-cmark`'s ranges start at the block's first
+            // non-whitespace byte and `marked`'s `cap[0]` starts at the line's
+            // ` {0,3}` indent**, which is 30 of S2's 47 first-run
+            // disagreements: ` ***` as a thematic break, `   foo` as a
+            // paragraph, and every indented code block's own indent, without
+            // which `codeRemoveIndent` and `indentCodeCompensation` are both
+            // measuring from the wrong column.
+            //
+            // Only whitespace is taken back, so a block that genuinely begins
+            // mid-line — a table cell after its `|`, the paragraph a `$$` math
+            // block leaves behind — keeps the start it was given.
+            if lo > source_start
+                && src[source_start..lo]
+                    .bytes()
+                    .all(|b| b == b' ' || b == b'\t')
+            {
+                lo = source_start;
+            }
+            let hi = end.min(range.end).max(lo);
+            text = src[lo..hi].to_string();
+            source_start = lo;
+        }
+        out.push(StrippedLine {
+            text,
+            source_start,
+            terminated: end < range.end,
+            starts_scan,
+        });
+        at = end + 1;
+    }
+    out
+}
+
+/// The lines rejoined as `marked`'s `token.raw` — newlines exactly where the
+/// source had them inside the range.
+fn stripped_raw(lines: &[StrippedLine]) -> String {
+    let mut out = String::new();
+    for line in lines {
+        out.push_str(&line.text);
+        if line.terminated {
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// A source range with its container syntax removed line by line, plus the map
 /// back to source offsets.
 ///
-/// Used only by mechanism 4, which needs to ask whether a paragraph *is* a
-/// math block. Same caveat as [`content_start`]: it is a detection aid, not
-/// D2's stripper.
+/// Built from [`strip_lines`], which is D2's stripper — see its header for why
+/// there is one scanner here and not two.
 struct LogicalText {
     text: String,
     /// `(logical offset, source offset)` at the start of each line.
@@ -1605,16 +2479,12 @@ struct LogicalText {
 }
 
 impl LogicalText {
-    /// `strip_marker` also removes a list marker from the **first** line,
-    /// which is what a gap inside a list item needs and what a paragraph's
-    /// range must not have.
-    fn of(src: &str, range: Range<usize>, strip_marker: bool) -> Self {
+    fn of(src: &str, range: Range<usize>, prefixes: &[Prefix]) -> Self {
         let mut text = String::new();
         let mut lines = Vec::new();
-        for (index, line) in Lines::new(src, range).enumerate() {
-            let at = content_start(src, &line, strip_marker && index == 0);
-            lines.push((text.len(), at));
-            text.push_str(&src[at..line.end]);
+        for line in strip_lines(src, &range, prefixes) {
+            lines.push((text.len(), line.source_start));
+            text.push_str(&line.text);
             text.push('\n');
         }
         LogicalText { text, lines }

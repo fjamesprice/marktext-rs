@@ -283,8 +283,20 @@ fn a_math_fence_is_gitlab_math_under_muya_defaults() {
 #[test]
 fn three_dollars_are_not_a_math_fence() {
     assert_eq!(block_math("$$$\nx\n$$$\n"), None);
-    assert_eq!(block_math("$\nx\n$\n"), Some(6));
-    assert_eq!(block_math("$$\nx\n$$\n"), Some(8));
+    assert_eq!(
+        block_math("$\nx\n$\n"),
+        Some(BlockMath {
+            content: 2..3,
+            consumed: 6
+        })
+    );
+    assert_eq!(
+        block_math("$$\nx\n$$\n"),
+        Some(BlockMath {
+            content: 3..4,
+            consumed: 8
+        })
+    );
     // A backslash consumes the following newline, so it cannot close the block.
     assert_eq!(block_math("$$\nx\\\n$$\n"), None);
 }
@@ -574,7 +586,7 @@ fn the_placeholder_paragraph_does_not_survive_a_non_empty_parse() {
 #[test]
 fn logical_offsets_map_back_to_source_offsets() {
     let src = "> $$\n> x\n> $$\n";
-    let logical = LogicalText::of(src, 0..src.len(), false);
+    let logical = LogicalText::of(src, 0..src.len(), &[Prefix::Quote { first_line: 0 }]);
     assert_eq!(logical.text, "$$\nx\n$$\n");
     assert_eq!(logical.source_offset(0), 2);
     assert_eq!(logical.source_offset(3), 7);
@@ -593,4 +605,251 @@ fn has_blank_line_needs_two_newlines_with_only_spaces_between() {
     assert!(has_blank_line("a\n  \nb"));
     assert!(!has_blank_line("a\nb\n"));
     assert!(!has_blank_line("\n"));
+}
+
+// ===========================================================================
+// S2 — leaf text (M2.md §5 D2)
+// ===========================================================================
+//
+// One reproducer per rule, each measured against the running engine before it
+// was written down. The wide claim — 4,985 of 4,985 leaves agree — is
+// `cargo xtask blocks`'s; these name the mechanism a regression broke.
+
+/// Every leaf's text, in document order, so a rule can be asserted without
+/// spelling out the whole `TState` tree.
+fn texts(src: &str, options: Options) -> Vec<String> {
+    fn walk(value: &Value, out: &mut Vec<String>) {
+        for block in value.as_array().into_iter().flatten() {
+            if let Some(text) = block.get("text").and_then(Value::as_str) {
+                out.push(text.to_string());
+            }
+            if let Some(children) = block.get("children") {
+                walk(children, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&state(src, options), &mut out);
+    out
+}
+
+// --- the container-prefix stripper ------------------------------------------
+
+/// D2's *"one part that is a scanner rather than a rewrite"*, and the reason
+/// `content_start` was deleted rather than promoted: it stripped **all**
+/// leading whitespace and **every** `>` run, and both of those are content
+/// here.
+#[test]
+fn container_prefixes_come_off_and_the_blocks_own_indent_stays() {
+    assert_eq!(texts("> hello\n> world\n", SPEC), ["hello\nworld"]);
+    assert_eq!(texts("- foo\n  bar\n", SPEC), ["foo\nbar"]);
+    // One `>` per level, and no more: the second is content at depth one.
+    assert_eq!(texts("> > a\n", SPEC), ["a"]);
+    // The block's own ` {0,3}` indent is `marked`'s `cap[0]` and survives —
+    // `pulldown-cmark`'s range starts after it, which was 30 of S2's first 47
+    // disagreements.
+    assert_eq!(texts("  aaa\n bbb\n", SPEC), ["  aaa\n bbb"]);
+    assert_eq!(texts(" ***\n", SPEC), [" ***"]);
+    assert_eq!(texts(">    not code\n", SPEC), ["   not code"]);
+}
+
+/// `Tokenizer.list`'s `indent > 4 ? 1 : indent`, which keeps a six-space item
+/// from swallowing what is really an indented code block.
+#[test]
+fn a_list_items_dedent_is_capped_at_four_columns() {
+    assert_eq!(
+        texts("1.      indented code\n\n   paragraph\n", SPEC),
+        [" indented code", "paragraph"]
+    );
+}
+
+/// `nextLineWithoutTabs = nextLine.replace(/\t/g, '    ')` — flat, not
+/// tab-stop aware, and applied to the whole line rather than to its indent.
+#[test]
+fn a_tab_in_a_list_items_continuation_line_becomes_four_spaces() {
+    assert_eq!(texts("- foo\n\n\tbar\n", SPEC), ["foo", "  bar"]);
+}
+
+/// `blockquoteSetextReplace`, which inserts four spaces rather than removing
+/// anything — and only for a lazy line that follows another lazy line.
+#[test]
+fn a_lazy_setext_underline_inside_a_quote_is_pushed_to_four_spaces() {
+    assert_eq!(texts("> foo\nbar\n===\n", SPEC), ["foo\nbar\n    ==="]);
+    // The first line of a continuation group has no `\n` before it inside
+    // `currentRaw`, so the pattern cannot match.
+    assert_eq!(texts("> foo\n===\n", SPEC), ["foo\n==="]);
+    assert_eq!(texts("> a\n> b\n===\n", SPEC), ["a\nb\n==="]);
+}
+
+/// `rtrim(cap[0], '\n')` leaves a whitespace-only last line inside the quote's
+/// text, and `marked`'s paragraph rule takes it as a continuation because the
+/// lookahead that would refuse it needs the newline the rtrim removed.
+#[test]
+fn a_quotes_last_whitespace_only_line_belongs_to_the_paragraph() {
+    assert_eq!(texts(">\n> foo\n>  \n", SPEC), ["foo\n "]);
+    // In the middle it is a blank line for both engines.
+    assert_eq!(texts(">\n> foo\n>  \n> bar\n", SPEC), ["foo", "bar"]);
+}
+
+/// The four spaces an absorbed indented code block loses — and keeps, at the
+/// top level, where `paragraph` swallows the line before `code` is tried.
+#[test]
+fn an_indented_continuation_line_is_dedented_only_where_marked_restarts_its_scan() {
+    assert_eq!(texts("foo\n    bar\n", SPEC), ["foo\n    bar"]);
+    assert_eq!(texts("> foo\n    - bar\n", SPEC), ["foo\n- bar"]);
+    assert_eq!(
+        texts("  1.  A paragraph\n    with two lines.\n", SPEC),
+        ["A paragraph\nwith two lines."]
+    );
+}
+
+// --- the per-kind rules -----------------------------------------------------
+
+/// **Reconstructed, not sliced.** `'#'` repeated, a space, then the heading's
+/// content — so the closing sequence goes and the run of spaces collapses, and
+/// a bare `#` is `"# "`, trailing space included, which is measured rather
+/// than tidied.
+#[test]
+fn an_atx_heading_is_rebuilt_rather_than_sliced() {
+    assert_eq!(texts("##   Foo   ##\n", SPEC), ["## Foo"]);
+    assert_eq!(texts("#\n", SPEC), ["# "]);
+    assert_eq!(texts("# \n", SPEC), ["# "]);
+    // CommonMark wants a space before the closing run; without one the hashes
+    // are content.
+    assert_eq!(texts("# foo#\n", SPEC), ["# foo#"]);
+}
+
+/// `Tokenizer.lheading`'s `cap[1].trim()` — of the whole string, so the first
+/// line loses its indent and the rest keep theirs.
+#[test]
+fn a_setext_headings_text_is_the_lines_above_the_underline() {
+    assert_eq!(texts("Foo\nbar\n===\n", SPEC), ["Foo\nbar"]);
+    assert_eq!(texts("   Foo\n   bar\n  ===\n", SPEC), ["Foo\n   bar"]);
+}
+
+/// `codeRemoveIndent`'s alternation is ordered: ` {1,4}` is tried first and is
+/// greedy, so a line with any leading space never reaches the ` {0,3}\t` arm.
+#[test]
+fn indented_code_loses_one_to_four_columns_per_line_and_its_trailing_newline() {
+    assert_eq!(texts("    let a = 1\n", SPEC), ["let a = 1"]);
+    assert_eq!(texts("        foo\n    bar\n", SPEC), ["    foo\nbar"]);
+    assert_eq!(strip_code_indent("  \tfoo"), "\tfoo");
+    assert_eq!(strip_code_indent("\tfoo"), "foo");
+    assert_eq!(strip_code_indent("     foo"), " foo");
+}
+
+/// `indentCodeCompensation` tests the **raw** against a backtick fence, so a
+/// tilde fence never compensates however indented it is.
+#[test]
+fn a_fences_indent_is_compensated_for_backticks_and_not_for_tildes() {
+    assert_eq!(texts("  ```js\n    x\n  ```\n", SPEC), ["  x"]);
+    assert_eq!(
+        texts("   ```\n   aaa\n    aaa\n  aaa\n   ```\n", SPEC),
+        ["aaa\n aaa\n  aaa"]
+    );
+    // A tilde fence keeps every column, which is `marked`'s and is transcribed.
+    assert_eq!(texts("  ~~~\n    x\n  ~~~\n", SPEC), ["    x"]);
+}
+
+/// muya #1265, and the reason it is implemented rather than skipped: the flag
+/// is `false` in **both** option sets the gate drives, so no fixture can reach
+/// it and nothing but this test would ever say whether it works. The expected
+/// values were measured against the running engine with the flag flipped.
+#[test]
+fn trim_unnecessary_code_block_empty_lines_is_off_in_both_option_sets_and_works() {
+    let trimming = Options {
+        trim_unnecessary_code_block_empty_lines: true,
+        ..MUYA
+    };
+    const { assert!(!MUYA.trim_unnecessary_code_block_empty_lines) };
+    const { assert!(!SPEC.trim_unnecessary_code_block_empty_lines) };
+    assert_eq!(texts("```\n\n\na\n\n\n```\n", MUYA), ["\n\na\n\n"]);
+    assert_eq!(texts("```\n\n\na\n\n\n```\n", trimming), ["a"]);
+    assert_eq!(texts("```\n\nx\n\n```\n", trimming), ["x"]);
+    // Both ends come off whichever one triggered the branch.
+    assert_eq!(texts("~~~\n\n\n~~~\n", trimming), [""]);
+}
+
+/// #4849: the table pipe escape is resolved into the stored text so the editor
+/// shows a literal pipe inside inline code; `escapeText` re-adds it on
+/// serialize.
+#[test]
+fn a_table_cell_is_trimmed_and_its_pipe_escape_resolved() {
+    assert_eq!(
+        texts("|a\\|b|c|\n|---|---|\n| d | e |\n", SPEC),
+        ["a|b", "c", "d", "e"]
+    );
+}
+
+/// The frontmatter rule strips all leading whitespace and **exactly one**
+/// trailing whitespace character.
+#[test]
+fn front_matter_loses_all_leading_whitespace_and_exactly_one_trailing() {
+    // `/^\s+/` is greedy over *all* leading whitespace, the space included.
+    assert_eq!(front_matter_text("\n\n a\n\n"), "a\n");
+    assert_eq!(front_matter_text("a"), "a");
+    assert_eq!(texts("---\ntitle: x\n\n---\n\n", MUYA), ["title: x\n"]);
+}
+
+/// `hr`'s text is the source line minus trailing newlines — leading indent and
+/// inner spacing both kept.
+#[test]
+fn a_thematic_breaks_text_keeps_its_indent_and_its_spacing() {
+    assert_eq!(
+        texts("   - - -  - --   --- --- ----\n", SPEC),
+        ["   - - -  - --   --- --- ----"]
+    );
+}
+
+/// A definition's paragraph is its raw with trailing newlines removed, and
+/// `Tokenizer.def`'s match **starts at the indent** — which is why the gap
+/// scanner had to stop stripping leading whitespace.
+#[test]
+fn a_reference_definitions_paragraph_keeps_its_own_indent() {
+    assert_eq!(texts("  [foo]: /a\n", SPEC), ["  [foo]: /a"]);
+    assert_eq!(texts("> [foo]: /a\n", SPEC), ["[foo]: /a"]);
+    // A repeated label emits nothing at all — `tokens.links` is global.
+    assert_eq!(
+        texts("[foo]: /a\n[foo]: /b\n\n[foo]\n", SPEC),
+        ["[foo]: /a", "[foo]"]
+    );
+}
+
+/// The task marker comes off the item's text — except in the one combination
+/// where `marked` puts it back and `compatibleTaskList` never takes it off,
+/// because its ordered branch does not call `stripTaskMarker`.
+#[test]
+fn the_task_marker_survives_only_in_a_loose_ordered_list() {
+    assert_eq!(texts("- [ ] a\n", SPEC), ["a"]);
+    assert_eq!(texts("- [ ] a\n\n- [x] b\n", SPEC), ["a", "b"]);
+    assert_eq!(texts("1. [ ] a\n", SPEC), ["a"]);
+    assert_eq!(texts("1. [ ] a\n\n2. [x] b\n", SPEC), ["[ ] a", "[x] b"]);
+    // The restored marker keeps its own case and is re-spaced to one space.
+    assert_eq!(texts("1.  [X]   a\n\n2. b\n", SPEC), ["[X] a", "b"]);
+}
+
+/// The block-math tokenizer trims its content, and the gitlab fence's
+/// `multiplemath` case trims where `_buildCodeState` does not.
+#[test]
+fn a_math_blocks_text_is_trimmed_by_both_routes_in() {
+    assert_eq!(texts("$$\n  x^2\n$$\n", MUYA), ["x^2"]);
+    assert_eq!(texts("```math\n  x^2\n```\n", MUYA), ["x^2"]);
+    // Not math: a plain fence keeps its indentation.
+    assert_eq!(texts("```\n  x^2\n```\n", MUYA), ["  x^2"]);
+}
+
+/// An html block's text is trimmed after `trimTrailingBlankLines`; and the
+/// lone-image special case is a **paragraph** carrying the same text.
+#[test]
+fn an_html_blocks_text_is_trimmed_and_a_lone_img_is_a_paragraph() {
+    assert_eq!(texts("<div>\n  a\n</div>\n", SPEC), ["<div>\n  a\n</div>"]);
+    assert_eq!(names("<img src=\"x\">\n", SPEC), ["paragraph"]);
+    assert_eq!(texts("<img src=\"x\">\n", SPEC), ["<img src=\"x\">"]);
+}
+
+/// The empty-container filler carries `end..end` and its text must stay `""`.
+#[test]
+fn the_empty_container_filler_has_no_text_to_reconstruct() {
+    assert_eq!(texts(">\n", SPEC), [""]);
+    assert_eq!(texts("-\n", SPEC), [""]);
 }

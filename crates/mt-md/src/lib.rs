@@ -59,27 +59,26 @@
 //! return [`Unimplemented`], which those harnesses report as *skipped* rather
 //! than *failed*. See `spec/README.md` for how the ratchet flips on at M2.
 //!
-//! ## M2 S1 status — the block tree exists, the entry points still do not
+//! ## M2 S2 status — the whole block tree exists, the entry points still do not
 //!
 //! [`block::parse_blocks`] maps `pulldown-cmark`'s event stream onto
-//! `mt_doc::Block` and agrees with `MarkdownToState` on names and `meta` over
-//! all 1344 of §4 C1's inputs; [`state::to_state`] emits muya's `TState[]`
-//! from a [`Document`]. **[`parse`], [`serialize`], [`dump_state`] and
+//! `mt_doc::Block` and agrees with `MarkdownToState` on the **full `TState`
+//! JSON** — names, `meta` and leaf text — over all 1344 of §4 C1's inputs and
+//! all 4,985 leaves in them; [`state::to_state`] emits that JSON from a
+//! [`Document`]. **[`parse`], [`serialize`], [`dump_state`] and
 //! [`render_to_static_html`] all still return [`Unimplemented`], deliberately**
 //! — docs/M2.md §5 D6 stages the three ratchets by entry point, and the first
 //! `Ok` from any of them wakes one. S3 is where `parse` becomes
-//! `parse_blocks` plus leaf text plus the label-map pass.
+//! `parse_blocks` plus the label-map pass.
 //!
-//! Every leaf [`block::parse_blocks`] builds carries the **empty string**:
-//! §4 C2 measured that a leaf's text is a per-kind reconstruction rather than
-//! a source slice, and that reconstruction is S2's. `cargo xtask blocks` is
-//! the gate, and it says which fields it compares rather than quietly
-//! excluding one.
+//! `cargo xtask blocks` is the gate and it compares text by default from S2
+//! on; `--no-text` is what asks for less.
 //!
 //! The direction table above is M0's transcription of §4 and **§4 C2 corrects
-//! its first row**: leaf text is not "captured as raw source slices". The
-//! second half of that sentence — never as parsed inline events — does hold,
-//! and [`block`] never reads one.
+//! its first row**: leaf text is not "captured as raw source slices" — it is a
+//! per-kind reconstruction, and S2 is the stage that wrote the eight rules.
+//! The second half of that sentence — never as parsed inline events — does
+//! hold, and [`block`] never reads one.
 
 pub mod block;
 pub mod state;
@@ -116,6 +115,23 @@ pub struct Options {
     pub super_sub_script: bool,
     pub gitlab_compatibility: bool,
     pub front_matter: bool,
+
+    /// muya #1265: strip leading and trailing blank lines from a code block's
+    /// text.
+    ///
+    /// **`false` in both option sets the differential harness drives**, so no
+    /// fixture in §4 C1's 1344 can reach it and `cargo xtask blocks` cannot
+    /// say whether it works. It is implemented rather than skipped at S2, and
+    /// `block::tests::trim_unnecessary_code_block_empty_lines_is_off_in_both_option_sets_and_works`
+    /// carries values measured from the running engine with the flag flipped —
+    /// because "the gate cannot see it" is a reason to write the test, not a
+    /// reason to leave the rule out.
+    ///
+    /// One detail that is not the obvious reading: the guard is
+    /// `endsWith('\n') || startsWith('\n')` and the body strips **both** ends,
+    /// so a block with a leading blank line and no trailing one loses nothing
+    /// at the end and everything at the start, and a block with neither is
+    /// untouched.
     pub trim_unnecessary_code_block_empty_lines: bool,
 
     /// How far a nested list is indented when [`serialize`] emits it.
