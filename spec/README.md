@@ -294,8 +294,9 @@ const examples = cms.tests;
 ```
 
 — so a verbatim copy of `spec/` yields a ratchet that checks GFM and not
-CommonMark, silently halving the gate including the 87.7 % floor the M2 exit
-criterion is stated in.
+CommonMark, silently halving the gate including the floor the M2 exit criterion
+is stated in (87.7 % when this was written; 71.0 % since the M2 S5
+re-baseline).
 
 `tools/vendor-commonmark-spec.mjs` extracts the same examples from
 `commonmark-spec@0.31.2` into `fixtures/commonmark-spec-0.31.json`, in the same
