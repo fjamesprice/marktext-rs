@@ -957,6 +957,111 @@ fn the_map_has_one_entry_per_node_including_the_empty_document_fallback() {
     assert!(map.get(doc.root()).is_none(), "the root has no block");
 }
 
+/// **`pulldown-cmark` 0.13.4 panics on `"> - [a]: /x\n\t"`**, and `mt_md::parse`
+/// inherits it.
+///
+/// Found by S6's generated edit sequences, minimised here to the four
+/// ingredients it needs: a block quote, a list item, a link reference
+/// definition, and a following line that is whitespace-only and ends in a tab.
+/// The panic is `Option::unwrap()` on `None` inside `OffsetIter::next`
+/// (`parse.rs:2199`), reached before any of this crate's code runs — the
+/// probe below drives the parser directly, so nothing about the mapping layer
+/// is in the frame.
+///
+/// **Recorded rather than worked around.** `parse`'s doc comment says it is
+/// total — *"every string is a document, exactly as `MarkdownToState.generate()`
+/// is total"* — and that is now false for one input class; `docs/upstream-issues.md`
+/// carries it and M2.md §10 owes the decision to whichever stage first has a
+/// user who can type it. 0.13.4 is the latest published version, so there is no
+/// upgrade to take, and catching the panic is not open either: the release
+/// profile is `panic = "abort"`.
+///
+/// `#[should_panic]` makes this a **ratchet in the useful direction**: the day
+/// the upstream fix lands, this test fails and says so.
+#[test]
+#[should_panic(expected = "called `Option::unwrap()` on a `None` value")]
+fn pulldown_cmark_panics_on_a_definition_in_a_quoted_list_item_before_a_tab_line() {
+    let count = pulldown_cmark::Parser::new_ext("> - [a]: /x\n\t", cmark_options())
+        .into_offset_iter()
+        .count();
+    unreachable!("pulldown-cmark 0.13.4 panics before it can return {count}");
+}
+
+/// The three neighbours that do **not** panic, so the reproducer above is a
+/// statement about four ingredients rather than about block quotes.
+#[test]
+fn the_neighbours_of_the_upstream_panic_parse_normally() {
+    for src in [
+        "> [a]: /x\n\t",
+        "- [a]: /x\n\t",
+        "> - x\n\t",
+        "> - [a]: /x\n\tb",
+    ] {
+        let count = pulldown_cmark::Parser::new_ext(src, cmark_options())
+            .into_offset_iter()
+            .count();
+        assert!(count > 0, "{src:?}");
+    }
+}
+
+/// **Three things S6's generated edits found about the ranges, none of which
+/// any fixture reaches.** Characterizations rather than fixes: each is recorded
+/// in M2.md §10 with the reason it is not repaired here.
+#[test]
+fn the_ranges_are_not_injective_and_do_not_always_nest() {
+    // 1 — under a `footnote`, every node carries the definition's own range,
+    // because the body `marked` lexes is a de-indented copy (S5, §10).
+    // `SourceMap::is_exact` is what makes that visible to a caller instead of
+    // a surprise; S6 added it because its leaf-text path re-derives text from a
+    // range and would otherwise have trusted this one.
+    let options = Options {
+        footnote: true,
+        ..MUYA
+    };
+    let (doc, map) = parse_blocks_with_ranges("[^a]: note\n", options);
+    let footnote = doc.children(doc.root())[0];
+    let paragraph = doc.children(footnote)[0];
+    assert_eq!(doc.block(footnote).map(Block::name), Some("footnote"));
+    assert_eq!(map.get(footnote), map.get(paragraph), "not injective");
+    assert!(map.is_exact(footnote));
+    assert!(!map.is_exact(paragraph), "the body is a copy, not a slice");
+
+    // 2 — the same, one mechanism later: the `state.top = false` re-lex maps
+    // its ranges out of a de-indented copy line by line, so they are true but
+    // not tight.
+    let (doc, map) = parse_blocks_with_ranges("3. foo\n   20. foo\n", SPEC);
+    let item = doc.children(doc.children(doc.root())[0])[0];
+    let nested = doc.children(item)[1];
+    assert_eq!(doc.block(nested).map(Block::name), Some("order-list"));
+    assert!(
+        map.is_exact(doc.children(item)[0]),
+        "the head paragraph is a slice"
+    );
+    assert!(!map.is_exact(nested), "the re-lexed tail is not");
+
+    // 3 — and a child's range can escape its parent's. A tab inside a list
+    // item's marker padding makes the stripper's per-line map inexact
+    // (`StrippedLine::exact`, the one case where a line's text is not a slice
+    // of the source), and the definition scanner's range is computed from the
+    // stripped line, so the paragraph lands one byte to the left of its item.
+    // `tests/source_ranges.rs` asserts nesting over the corpus, which contains
+    // no such document; this is the input that shows the invariant is about the
+    // corpus rather than about every string.
+    let src = "-\t- [a]: /x[xter\n";
+    let (doc, map) = parse_blocks_with_ranges(src, SPEC);
+    let outer_item = doc.children(doc.children(doc.root())[0])[0];
+    let inner_item = doc.children(doc.children(outer_item)[0])[0];
+    let paragraph = doc.children(inner_item)[0];
+    let (inner, leaf) = (
+        map.get(inner_item).expect("a range"),
+        map.get(paragraph).expect("a range"),
+    );
+    assert!(
+        leaf.start < inner.start,
+        "measured: the paragraph is at {leaf:?} inside an item at {inner:?}"
+    );
+}
+
 fn text_of(doc: &Document, id: NodeId) -> String {
     doc.block(id)
         .and_then(Block::text)

@@ -117,6 +117,31 @@
 //! [`sanitize::clean`] is the `sanitize: true` arm, and `mt-cli` gained
 //! `--to-html`.
 //!
+//! ## M2 S6 status — the reparse, and the map says which ranges may be sliced
+//!
+//! [`reparse::Incremental`] is §4.1 and §5 D7: a parse that survives edits.
+//! `edit` splices the source and brings the tree, the label map and the source
+//! ranges back into agreement with it — by re-deriving **one leaf** where the
+//! edit cannot have moved a block boundary, and by re-parsing the minimal
+//! enclosing region and diffing the result against the existing subtree where
+//! it can. [`reparse::Reparse::blocks_reparsed`] is the gate's counter and it is
+//! public rather than test-only.
+//!
+//! The diff matches on **full structural equality of a subtree**, so a node that
+//! keeps its [`mt_doc::NodeId`] is a node whose content is identical — which is
+//! what makes "`mt-layout` never gets a cached layout for a different block" a
+//! property of the algorithm rather than of the inputs. Every mutation goes
+//! through [`mt_doc::Document::apply`] (D9) and the inverse batch comes back
+//! with the report.
+//!
+//! Two things landed with it. `block::split_refused_list_starts` pays §10's
+//! "Owed by S4" — `marked` lexes a list item with `state.top = false` and the
+//! rule about which list starts may interrupt a paragraph lives in the
+//! top-level `paragraph` regex alone — which takes the transcribed spec suite's
+//! `PENDING` from 11 to **2**, and both survivors are M6's. And [`SourceMap`]
+//! gained [`SourceMap::is_exact`], because the map stopped being injective at S5
+//! and S6 is the first code that would have been wrong about it.
+//!
 //! The direction table above is M0's transcription of §4 and **§4 C2 corrects
 //! its first row**: leaf text is not "captured as raw source slices" — it is a
 //! per-kind reconstruction, and S2 is the stage that wrote the eight rules.
@@ -127,6 +152,7 @@ pub mod block;
 pub mod footnotes;
 pub mod html;
 pub mod labels;
+pub mod reparse;
 pub mod sanitize;
 pub mod serialize;
 pub mod state;
@@ -345,14 +371,38 @@ pub struct Parsed {
 /// stale; the fix is another parse (or, at S6, a region reparse that produces
 /// new ranges for the region), not a maintained side table.
 ///
+/// **S6 kept that commitment and it is worth being precise about what it
+/// means.** [`reparse::Incremental`] hands back a map whose region entries came
+/// from the parse that just ran, whose entries before the edit are untouched,
+/// and whose entries after it are shifted by the edit's delta — a shift being
+/// exact rather than a patch. `tests/reparse_properties.rs` checks the whole of
+/// it against a full parse's map, leaf by leaf, after every generated edit.
+///
 /// The half that is **not** free from this map is the per-kind half: an atx
 /// heading's text is rebuilt from scratch, a code block loses columns *after*
 /// stripping, a table cell is trimmed and unescaped. Each of those needs its
 /// own inverse and each inverse belongs beside its rule — there is no stage at
 /// which that half falls out of anything.
+/// # Not injective, and [`SourceMap::is_exact`] is how a caller sees it
+///
+/// Two mechanisms re-lex a **de-indented copy** of the source rather than a
+/// slice of it — muya's footnote extension (S5) and the `state.top = false`
+/// list-item re-lex (S6) — and an offset into a copy does not map back to a
+/// document offset by addition. §4 C2's fact, one level up. Every node those
+/// two produce therefore carries a range that is *true but not tight*: coarse
+/// enough to nest and to order correctly, not tight enough to slice with.
+///
+/// So two nodes can share a range, and `is_exact` is the difference between a
+/// range a caller may re-derive text from and one it may only locate a block
+/// with. S6's leaf-text fast path consults it before re-running the stripper,
+/// which is the check that stopped `20.` from being spliced as though it were
+/// a paragraph's own text.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SourceMap {
     ranges: BTreeMap<NodeId, Range<usize>>,
+    /// The nodes whose range is a coarse stand-in. Empty for most documents,
+    /// which is why it is a set of exceptions rather than a flag per entry.
+    coarse: std::collections::BTreeSet<NodeId>,
 }
 
 impl SourceMap {
@@ -361,6 +411,14 @@ impl SourceMap {
     #[must_use]
     pub fn get(&self, id: NodeId) -> Option<Range<usize>> {
         self.ranges.get(&id).cloned()
+    }
+
+    /// Whether `id`'s range is its own extent rather than a coarse stand-in —
+    /// see the type's docs. `true` for a node this map has never heard of,
+    /// because there is nothing coarse about it either.
+    #[must_use]
+    pub fn is_exact(&self, id: NodeId) -> bool {
+        !self.coarse.contains(&id)
     }
 
     /// How many nodes carry a range. Every live node except the root does.
@@ -381,7 +439,24 @@ impl SourceMap {
     }
 
     pub(crate) fn insert(&mut self, id: NodeId, range: Range<usize>) {
+        self.insert_with(id, range, true);
+    }
+
+    pub(crate) fn insert_with(&mut self, id: NodeId, range: Range<usize>, exact: bool) {
         self.ranges.insert(id, range);
+        if exact {
+            self.coarse.remove(&id);
+        } else {
+            self.coarse.insert(id);
+        }
+    }
+
+    /// Drop a node's range. S6's subtree diff detaches nodes that no longer
+    /// exist in the tree, and their entries go with them — the map's invariant
+    /// is one entry per **live** node.
+    pub(crate) fn remove(&mut self, id: NodeId) {
+        self.ranges.remove(&id);
+        self.coarse.remove(&id);
     }
 }
 

@@ -109,8 +109,10 @@
 //! **S4 delisted 79**, leaving 42. **S5 delisted 31, leaving 11**, and for the
 //! first time the arithmetic against this list and the arithmetic against §7's
 //! stage column agree in both directions — every file §7 marks S5 delisted at
-//! S5. What is left is nine of S6's and two of M6's, all enumerated in `KNOWN`
-//! below.
+//! S5. **S6 delisted the nine `listSerialization` names, leaving 2** — and both
+//! of those are M6's, so this list no longer holds a single case M2 owes. That
+//! is the state M1 §10 named as the dangerous one, which is why the two names
+//! carry their milestone in `KNOWN`'s comment below and not only in M2.md §10.
 //!
 //! **Caveat, inherited:** the ratchet uses `catch_unwind`, so
 //! `cargo test --release` aborts rather than catching (the release profile
@@ -640,27 +642,18 @@ const TRANSCRIBED: &[(&str, usize)] = &[
 /// `const` needs no parser, no dependency and no path resolution. Move it to
 /// `spec/` if `xtask` ever needs to report on it.
 const PENDING: &[&str] = &[
-    // list_serialization — 9 of 30, and they are S4's finding rather than S4's
-    // debt. Every one fails at a **reparse**: the serializer emits what muya
-    // emits, and the port then reads it back differently, because CommonMark
-    // will not let an empty bullet (`  * `) or an ordered marker that is not 1
-    // (`   20. `) interrupt a paragraph inside a list item and `marked` will.
-    // `marked` re-lexes an item's dedented content line by line with
-    // `state.top = false`, so the interruption rules never apply there at all.
-    // That is S1's layer and a wider mechanism than the one §10 owed S4 —
-    // M2.md §10's "Owed by S4" carries it with its reproducers, and
-    // `block::tests::the_three_shapes_the_task_marker_fix_does_not_reach` pins
-    // the neighbouring shapes. **Owed to S6**, which is the stage with the
-    // re-lex machinery.
-    "list_serialization::uses_an_alternate_nested_marker_instead_of_making_a_tight_list_loose",
-    "list_serialization::uses_the_same_safe_marker_under_ordered_and_task_list_parents",
-    "list_serialization::handles_a_first_empty_nested_item_followed_by_a_non_empty_item",
-    "list_serialization::indent_by_1_space_round_trips_the_marktext_fixture",
-    "list_serialization::indent_by_2_spaces_round_trips_the_marktext_fixture",
-    "list_serialization::indent_by_3_spaces_round_trips_the_marktext_fixture",
-    "list_serialization::indent_by_4_spaces_round_trips_the_marktext_fixture",
-    "list_serialization::indent_using_daring_fireball_round_trips_the_marktext_fixture",
-    "list_serialization::treats_the_unimplemented_tab_option_as_a_1_space_indent",
+    // list_serialization's nine came off at S6. They were S4's finding — every
+    // one failed at a **reparse**, because CommonMark will not let an empty
+    // bullet (`  * `) or an ordered marker that is not 1 (`   20. `) interrupt
+    // a paragraph inside a list item and `marked` will. §10 predicted the fix
+    // would be "a re-lex of every list item's content"; S6 measured that a
+    // plain re-lex is a **no-op** — the item's dedented content parsed as a
+    // whole document gives the port's answer *and muya's own* — and that what
+    // differs is the rule set, not the position. `state.top = false` removes
+    // the top-level `paragraph` rule, and the CommonMark restriction lives in
+    // that regex and nowhere else. `block::split_refused_list_starts` is the
+    // fix and carries the argument.
+    //
     // render_to_static_html — 2 of 20, and they are **not** S5's to fix.
     // `getHighlightHtml` builds its math extension with `useKatexRender: true`,
     // so both of these assert that KaTeX markup — `katex` or `<math` — is in
@@ -724,8 +717,8 @@ fn every_pending_entry_names_a_transcribed_case() {
     );
     assert_eq!(
         PENDING.len(),
-        11,
-        "187 transcribed; 3 passed at S0, then S3 delisted 63, S4 79 and S5 31"
+        2,
+        "187 transcribed; 3 passed at S0, then S3 delisted 63, S4 79, S5 31 and S6 9"
     );
 }
 
@@ -758,46 +751,34 @@ fn every_pending_entry_names_a_transcribed_case() {
 /// appearing means a stage introduced a disagreement, and a name that stops
 /// failing means one was fixed without this being updated.
 ///
-/// # It went from three to ten at S4, and that is two events rather than one
+/// # It went three → ten → eleven → **two**, and each move was two events
 ///
-/// **Two came off**: `- [ ] \ntext` folds into the task item now
-/// (`Builder::fold_empty_task_marker_continuations`), which is the fix §10
-/// owed S4.
+/// **S4**: two came off (`- [ ] \ntext` folds into the task item now,
+/// `Builder::fold_empty_task_marker_continuations`) and nine went on — the
+/// `listSerialization` round trips, invisible until `serialize` opened.
 ///
-/// **Nine went on**, and they were invisible until `serialize` opened: every
-/// one is a `listSerialization` round trip that reaches the *reparse* it could
-/// not reach before. They are one mechanism — `marked` re-lexes a list item's
-/// dedented content line by line, so a list start inside an item never has to
-/// interrupt a paragraph, and CommonMark's rules about which list starts may do
-/// so never apply. Nine cases, two shapes: an **empty** bullet (`  * `) and an
-/// ordered marker that is **not 1** (`   20. `).
+/// **S5**: one came off (the footnote block extension landed) and the two KaTeX
+/// cases went on.
 ///
-/// That is the shape §6 predicted would appear at every stage and the reason it
-/// asks for the arithmetic to be run rather than read: a file marked S4 whose
-/// cases need S1's layer.
+/// **S6**: the nine came off and nothing went on. Two shapes, one mechanism —
+/// an **empty** bullet (`  * `) and an ordered marker that is **not 1**
+/// (`   20. `), both of which start a list inside a list item because `marked`
+/// lexes an item with `state.top = false` and the CommonMark restriction lives
+/// in the top-level `paragraph` regex alone. `block::split_refused_list_starts`.
+///
+/// **So what is left is two cases and neither is M2's.** That is the state §6
+/// warns about — *a list that is empty of this milestone's own work is the
+/// state in which an owed check becomes a forgotten one* — and it is why the
+/// two names below carry their milestone in the comment rather than only in
+/// M2.md §10.
 #[test]
-fn the_only_listed_cases_that_fail_for_their_own_reason_are_the_eleven_m2_names() {
-    /// M2.md §10. Nine are "Owed by S4" — the port's parse of markdown its own
-    /// serializer produced, where `marked` starts a list inside a list item and
-    /// CommonMark keeps the paragraph open. Two are "Owed to M6" — the KaTeX
-    /// assertions, which need `mt-math`.
-    ///
-    /// It went from ten to eleven at S5, and that is two events rather than
-    /// one: §10's "Owed by S3" item 3 came off (the footnote block extension
-    /// landed) and the two math cases went on. The second pair is the shape
-    /// §6 warns about at every stage — *a case whose file is labelled S5 and
-    /// which is really another milestone's* — one milestone further out than
-    /// §6's S0 correction found it.
+fn the_only_listed_cases_that_fail_for_their_own_reason_are_the_two_m6_names() {
+    /// M2.md §10's "Owed to M6": the KaTeX assertions, which need `mt-math`.
+    /// `getHighlightHtml` builds its math extension with `useKatexRender: true`
+    /// and there is no TeX renderer in this workspace; the port emits muya's
+    /// *other* math renderer, `<pre class="multiple-math">`, which is a real
+    /// muya shape and not the one these two assert.
     const KNOWN: &[&str] = &[
-        "list_serialization::uses_an_alternate_nested_marker_instead_of_making_a_tight_list_loose",
-        "list_serialization::uses_the_same_safe_marker_under_ordered_and_task_list_parents",
-        "list_serialization::handles_a_first_empty_nested_item_followed_by_a_non_empty_item",
-        "list_serialization::indent_by_1_space_round_trips_the_marktext_fixture",
-        "list_serialization::indent_by_2_spaces_round_trips_the_marktext_fixture",
-        "list_serialization::indent_by_3_spaces_round_trips_the_marktext_fixture",
-        "list_serialization::indent_by_4_spaces_round_trips_the_marktext_fixture",
-        "list_serialization::indent_using_daring_fireball_round_trips_the_marktext_fixture",
-        "list_serialization::treats_the_unimplemented_tab_option_as_a_1_space_indent",
         "render_to_static_html::honours_gitlab_compatibility_for_math_fences",
         "render_to_static_html::honours_the_math_option",
     ];

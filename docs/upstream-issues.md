@@ -129,3 +129,75 @@ Someone deciding the courtesy is worth paying. The bodies are reconstructible
 from the register entries plus the table above in about an hour, and the
 evidence will still be true — `MARKTEXT_REF` is pinned at `e52106fd` (D10) and
 bumping it is a deliberate commit that re-runs the whole sweep.
+
+---
+
+# A second upstream, and this one is a dependency — `pulldown-cmark`, M2 S6
+
+**Status: not filed, and unlike the three above this one has a cost.**
+
+Everything above is about `marktext/marktext`, which is a *reference* rather
+than a dependency. `pulldown-cmark` is a dependency, it is in the shipped
+binary, and M2 S6's generated edit sequences found that it **panics**.
+
+## The reproducer
+
+```rust
+pulldown_cmark::Parser::new_ext("> - [a]: /x\n\t", options)
+    .into_offset_iter()
+    .count();
+// panicked at pulldown-cmark-0.13.4/src/parse.rs:2199:
+// called `Option::unwrap()` on a `None` value
+```
+
+`options` is `ENABLE_TABLES | ENABLE_STRIKETHROUGH | ENABLE_TASKLISTS`
+(`mt_md::block::cmark_options`). Four ingredients, and all four are needed:
+
+| Input | Result |
+|---|---|
+| `"> - [a]: /x\n\t"` | **panic** |
+| `"> - [a]: /x\n \t"` | **panic** — the whitespace-only line may be indented |
+| `"> [a]: /x\n\t"` | ok — no list item |
+| `"- [a]: /x\n\t"` | ok — no block quote |
+| `"> - x\n\t"` | ok — no reference definition |
+| `"> - [a]: /x\n\tb"` | ok — the last line has content |
+
+So: a block quote, containing a list item, containing a link reference
+definition, followed by a line that is whitespace-only and ends in a tab.
+
+`crates/mt-md/src/block/tests.rs` carries both tables as tests. The reproducing
+one is `#[should_panic]`, which makes it a ratchet in the useful direction: the
+day the upstream fix lands, `cargo test` fails and points here.
+
+## Why it matters more than the three above
+
+**`mt_md::parse`'s doc comment says it is total** — *"every string is a
+document, exactly as `MarkdownToState.generate()` is total"* — and for this one
+input class it is not. muya parses the same string without complaint, so this is
+not a divergence to register (nothing disagrees; one side aborts).
+
+It is not reachable from anything the harnesses drive: not from
+`cargo xtask blocks`' 1344, not from `cargo xtask diff`'s 22, not from the 1,324
+spec fixtures. Five stages did not see it. What found it is
+`crates/mt-md/tests/reparse_properties.rs` — generated **edit sequences** over
+fixed documents, which is a different denominator from any of those, and the
+first thing in this milestone able to construct a string nobody wrote.
+
+## What is owed, and to whom
+
+The **decision**, to M4 — the first milestone with a user who can type it.
+Three options, none of them S6's to take:
+
+1. **File it upstream.** Unlike the marktext three, there is a live dependency
+   relationship and a maintained project on the other end; the reproducer above
+   is a complete bug report.
+2. **Pin a patched fork**, if the fix is small and upstream is slow.
+3. **Pre-scan for the shape** in `mt_md::block` and route around it. The
+   cheapest and the ugliest, and the one that has to be measured against the
+   1344 before it is taken.
+
+**Catching the panic is not one of the options**: §12's release profile is
+`panic = "abort"`, so `catch_unwind` is not available where it would matter.
+
+0.13.4 is the latest published version as of M2 S6, so there is no upgrade to
+take today. `docs/M2.md` §10's "Owed by S6" carries the same item.

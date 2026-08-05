@@ -124,12 +124,24 @@ pub fn parse_blocks_with_ranges(markdown: &str, options: Options) -> (Document, 
 /// only once the node is in a [`Document`] — so the mapping pass builds this
 /// and [`to_document`] turns it into nodes.
 #[derive(Debug, Clone, PartialEq)]
-struct Built {
-    block: Block,
-    children: Vec<Built>,
+pub(crate) struct Built {
+    pub(crate) block: Block,
+    pub(crate) children: Vec<Built>,
     /// The source range this block came from — what S2 reconstructs leaf text
     /// from, and what M2.md §10's owed reverse map would be built out of.
-    range: Range<usize>,
+    pub(crate) range: Range<usize>,
+    /// Whether [`Built::range`] is this block's own extent in the source, or a
+    /// **coarse stand-in** for it.
+    ///
+    /// Two things in this file produce a stand-in, and both re-lex a
+    /// de-indented *copy* of the source rather than a slice of it: the footnote
+    /// extension ([`retarget`]) and the `state.top = false` list-item re-lex
+    /// ([`retarget_through`]). An offset into a copy does not map back by
+    /// addition (§4 C2, one level up), so those nodes carry a range that is
+    /// true but not tight — which is what makes [`crate::SourceMap`]
+    /// non-injective, and what S6's leaf-text fast path has to be able to see
+    /// before it re-derives a block's text from its range.
+    pub(crate) exact: bool,
 }
 
 impl Built {
@@ -138,6 +150,7 @@ impl Built {
             block,
             children: Vec::new(),
             range,
+            exact: true,
         }
     }
 }
@@ -202,7 +215,7 @@ fn insert(doc: &mut Document, ranges: &mut SourceMap, parent: NodeId, index: usi
         [Edit::RemoveNode { node }] => *node,
         other => unreachable!("InsertNode's inverse is RemoveNode; got {other:?}"),
     };
-    ranges.insert(id, built.range);
+    ranges.insert_with(id, built.range, built.exact);
     for (child_index, child) in built.children.into_iter().enumerate() {
         insert(doc, ranges, id, child_index, child);
     }
@@ -490,11 +503,13 @@ fn footnote_block(identifier: String, body: &str, range: Range<usize>, options: 
         },
         children,
         range,
+        exact: true,
     }
 }
 
 fn retarget(built: &mut Built, range: &Range<usize>) {
     built.range = range.clone();
+    built.exact = false;
     for child in &mut built.children {
         retarget(child, range);
     }
@@ -550,8 +565,16 @@ fn front_matter(src: &str) -> Option<(Range<usize>, FrontmatterLang, Frontmatter
             continue;
         }
         // `[\s\S]+?` — at least one character, then the earliest close.
+        //
+        // **One *character*, not one byte** — fixed at S6, where the reparse's
+        // generated edits produced `---\n日` and the byte step landed inside the
+        // code point. `[\s\S]` is a JavaScript character class over UTF-16 code
+        // units and `.chars()` is the closest thing here; the previous spelling
+        // panicked on any document whose front-matter delimiter is followed by a
+        // multi-byte character, which no fixture in the 1344 or the 22 contains.
+        let step = |from: usize| src[from..].chars().next().map_or(1, char::len_utf8);
         let body_start = open.len();
-        let mut at = body_start + 1;
+        let mut at = body_start + step(body_start);
         while at <= src.len() {
             let Some(found) = src[at..].find(close).map(|i| at + i) else {
                 break;
@@ -562,7 +585,7 @@ fn front_matter(src: &str) -> Option<(Range<usize>, FrontmatterLang, Frontmatter
             }
             // The regex would backtrack `[\s\S]+?` one character and look
             // again, which is the same as looking for the next `close`.
-            at = found + 1;
+            at = found + step(found);
         }
     }
     None
@@ -659,33 +682,67 @@ struct Builder<'a> {
 
 /// Markdown → the top-level built blocks.
 fn build(markdown: &str, options: Options) -> Vec<Built> {
+    // `marked`'s `this.tokens.links` is one map for the whole lex, including
+    // the nested `blockTokens` call a list item's content gets — so it is
+    // threaded across every region rather than reset per region.
+    let mut seen_labels = HashSet::new();
+    build_span(markdown, options, 0..markdown.len(), &mut seen_labels)
+}
+
+/// [`build`] over a **span** of the document rather than all of it — the entry
+/// point M2.md §5 D7 said `mt_md` would expose, written at S6 and used by
+/// [`crate::reparse`].
+///
+/// It is [`build`] with three preconditions the caller owns, because none of
+/// them is decidable from a span alone and all three are cheap to guarantee
+/// from the tree:
+///
+/// 1. **`span.start` is `0` or the start of a top-level block**, and no block
+///    of a full parse crosses it. [`crate::reparse::region_for`] picks it from
+///    the previous sibling's end.
+/// 2. **`span.end` is `src.len()` or the start of a top-level block**, the same
+///    way — and if front matter is enabled and `span.start == 0`, `span.end` is
+///    past the front matter's own end, because [`front_matter`] is asked about
+///    the whole `src` rather than about the span. Asking it about a truncated
+///    string would let the truncation *create* front matter, since its trailing
+///    rule is `\n{2,}` **or** one-or-two newlines at end of input.
+/// 3. **`options.footnote` implies `span == 0..src.len()`.**
+///    [`footnote_segments`] is a scan of the whole document whose definition
+///    extents run forward through blank lines, so "minimal enclosing region"
+///    and "footnote segment boundary" can disagree — the brief's warning, and
+///    the reason S6's region choice falls back to the whole document when
+///    footnotes are on rather than guessing where a segment ends.
+pub(crate) fn build_span(
+    src: &str,
+    options: Options,
+    span: Range<usize>,
+    seen_labels: &mut HashSet<String>,
+) -> Vec<Built> {
     let mut top = Vec::new();
-    let mut body_at = 0;
+    let mut body_at = span.start;
 
     if options.front_matter
-        && let Some((text_range, lang, style, rest_at)) = front_matter(markdown)
+        && span.start == 0
+        && let Some((text_range, lang, style, rest_at)) = front_matter(src)
     {
+        debug_assert!(rest_at <= span.end, "precondition 2");
         top.push(Built::leaf(
             Block::Frontmatter {
                 lang,
                 style,
-                text: Text::from(front_matter_text(&markdown[text_range.clone()])),
+                text: Text::from(front_matter_text(&src[text_range.clone()])),
             },
             text_range,
         ));
         body_at = rest_at;
     }
 
-    // `marked`'s `this.tokens.links` is one map for the whole lex, including
-    // the nested `blockTokens` call a list item's content gets — so it is
-    // threaded across every region rather than reset per region.
-    let mut seen_labels = HashSet::new();
-
     if options.footnote {
-        for segment in footnote_segments(markdown, body_at) {
+        debug_assert!(span == (0..src.len()), "precondition 3");
+        for segment in footnote_segments(src, body_at) {
             match segment {
                 Segment::Body(region) => {
-                    top.extend(build_region(markdown, options, region, &mut seen_labels));
+                    top.extend(build_region(src, options, region, seen_labels));
                 }
                 Segment::Footnote {
                     identifier,
@@ -695,14 +752,21 @@ fn build(markdown: &str, options: Options) -> Vec<Built> {
             }
         }
     } else {
-        top.extend(build_region(
-            markdown,
-            options,
-            body_at..markdown.len(),
-            &mut seen_labels,
-        ));
+        top.extend(build_region(src, options, body_at..span.end, seen_labels));
     }
     top
+}
+
+/// Where the front matter a full parse would find ends, or `0`.
+///
+/// [`crate::reparse`] needs it to satisfy `build_span`'s precondition 2 without
+/// re-implementing the regex.
+pub(crate) fn front_matter_end(src: &str, options: Options) -> usize {
+    if options.front_matter {
+        front_matter(src).map_or(0, |(_, _, _, rest_at)| rest_at)
+    } else {
+        0
+    }
 }
 
 /// One region of the document, walked by `pulldown-cmark` as if it were the
@@ -880,48 +944,7 @@ impl<'a> Builder<'a> {
     /// spaces, which would be an indented code block — as one column of marker
     /// padding and four of content.
     fn item_prefix(&self, range: &Range<usize>) -> Prefix {
-        let first_line = line_start_of(self.src, range.start);
-        let end = line_end_of(self.src, first_line);
-        let mut text = self.src[first_line..end].to_string();
-        let (mut source_start, mut exact) = (first_line, true);
-        for prefix in &self.prefixes {
-            let next = apply_prefix(*prefix, first_line, None, text, source_start, exact);
-            text = next.0;
-            source_start = next.1;
-            exact = next.2;
-        }
-
-        // `cap[1]` — ` {0,3}` then the bullet or `\d{1,9}[.)]`.
-        let leading = text.bytes().take_while(|b| *b == b' ').count().min(3);
-        let marker_len = match text[leading..].chars().next() {
-            Some('*' | '+' | '-') => leading + 1,
-            Some(c) if c.is_ascii_digit() => {
-                let digits = text[leading..]
-                    .chars()
-                    .take(9)
-                    .take_while(char::is_ascii_digit)
-                    .count();
-                leading + digits + 1
-            }
-            // No marker on the item's first line. `pulldown-cmark` does not
-            // produce one, so this is unreachable rather than tolerated — but
-            // a zero-width prefix is the answer that changes nothing.
-            _ => 0,
-        };
-
-        let rest = text.get(marker_len..).unwrap_or("");
-        let expanded = expand_tabs(rest, marker_len);
-        let indent = if expanded.trim().is_empty() {
-            marker_len + 1
-        } else {
-            let found = expanded.find(|c| c != ' ').unwrap_or(0);
-            marker_len + if found > 4 { 1 } else { found }
-        };
-        Prefix::Item {
-            indent,
-            marker_len,
-            first_line,
-        }
+        item_prefix_at(self.src, &self.prefixes, range)
     }
 
     /// `align[i] || 'none'` — the alignment of the cell about to open, by its
@@ -1002,6 +1025,7 @@ impl<'a> Builder<'a> {
                         children: Vec::new(),
                     },
                     range: frame.range,
+                    exact: true,
                 }
             }
 
@@ -1013,6 +1037,18 @@ impl<'a> Builder<'a> {
                 let blanks = self.item_blank_lines(&frame);
                 self.record_item_looseness(real_paragraph, blanks);
                 self.fold_empty_task_marker_continuations(&mut frame.children);
+                // Mechanism 9, added at S6: `state.top = false`. Runs while the
+                // item's own prefix is still on the stack, because the split is
+                // measured in the item's **de-indented** lines.
+                let content_end = frame.range.end;
+                split_refused_list_starts(
+                    self.src,
+                    self.options,
+                    &self.prefixes,
+                    &mut self.seen_labels,
+                    &mut frame.children,
+                    content_end,
+                );
                 self.prefixes.pop();
                 let block = match task {
                     Some(checked) => Block::TaskListItem {
@@ -1027,6 +1063,7 @@ impl<'a> Builder<'a> {
                     block,
                     children: empty_container_filler(frame.children, &frame.range),
                     range: frame.range,
+                    exact: true,
                 }
             }
 
@@ -1049,6 +1086,7 @@ impl<'a> Builder<'a> {
                 },
                 children: frame.children,
                 range: frame.range,
+                exact: true,
             },
 
             FrameKind::TableRow => Built {
@@ -1057,6 +1095,7 @@ impl<'a> Builder<'a> {
                 },
                 children: frame.children,
                 range: frame.range,
+                exact: true,
             },
 
             FrameKind::TableCell { align } => {
@@ -1612,6 +1651,219 @@ fn empty_container_filler(children: Vec<Built>, range: &Range<usize>) -> Vec<Bui
 }
 
 // ---------------------------------------------------------------------------
+// Mechanism 9 — `state.top = false` inside a list item
+// ---------------------------------------------------------------------------
+
+/// **`marked` lexes a list item's content with `state.top = false`, and the rule
+/// about which list starts may interrupt a paragraph lives in the top-level
+/// `paragraph` regex and nowhere else.** M2.md §10's "Owed by S4", paid here.
+///
+/// # The mechanism, from `marked`'s own source
+///
+/// `Tokenizer.list` sets `this.lexer.state.top = false` and calls
+/// `blockTokens(item.text, [])`. `Lexer.blockTokens` guards exactly one branch
+/// on that flag — `if (this.state.top && (token = this.tokenizer.paragraph(…)))`
+/// — so inside an item the `text` rule takes over, and `text` matches **one
+/// line**. Every line is therefore a fresh scan position at which `list` is
+/// tried, and `list` is
+///
+/// ```text
+/// /^( {0,3}(?:[*+-]|\d{1,9}[.)]))([ \t][^\n]*?)?(?:\n|$)/
+/// ```
+///
+/// The CommonMark restriction is *only* in `rules.ts`'s `paragraph`, as its own
+/// comment says:
+///
+/// ```text
+/// .replace('list', ' {0,3}(?:[*+-]|1[.)])[ \t]+[^ \t\n]')  // only non-empty
+///                                     // lists starting from 1 can interrupt
+/// ```
+///
+/// So inside an item an ordered marker that is not `1`, and a marker with no
+/// content after it, both start a list where CommonMark keeps the paragraph
+/// open. Those are the only two ways the two regexes differ, which is why this
+/// fix is bounded rather than a second block lexer.
+///
+/// # Why it is *not* "a re-lex of every list item's content"
+///
+/// §10 predicted the fix would be a re-lex, and S6 measured that a plain re-lex
+/// is a **no-op** — asked of both engines:
+///
+/// ```text
+/// "3. foo\n   20. foo\n       141. foo\n"  muya: order-list › item › order-list(20) › …
+/// "foo\n20. foo\n141. foo\n"               muya: paragraph "foo\n20. foo\n141. foo"
+///                                          the port: the same paragraph
+/// ```
+///
+/// The item's dedented content parsed as a whole document gives the port's
+/// current answer *and muya's own*. Nothing about **where** the content is
+/// lexed is in dispute; what differs is which rule set applies. So the fix is
+/// to split the paragraph at the refused line and re-lex from there, where a
+/// list start is a list start in both engines — which is `footnote_block`'s
+/// shape (a de-indented copy, [`build_region`], then a range retarget) applied
+/// one level down.
+///
+/// # The safety valve
+///
+/// The split only happens when re-lexing the tail actually produces a
+/// non-paragraph first block. A line this predicate matches but
+/// `pulldown-cmark` does not open a list on would otherwise turn one paragraph
+/// into two, which is a regression rather than a fix.
+fn split_refused_list_starts(
+    src: &str,
+    options: Options,
+    prefixes: &[Prefix],
+    seen_labels: &mut HashSet<String>,
+    children: &mut Vec<Built>,
+    content_end: usize,
+) {
+    for index in 0..children.len() {
+        if !matches!(children[index].block, Block::Paragraph { .. }) {
+            continue;
+        }
+        let range = children[index].range.clone();
+        let head_lines = strip_lines(src, &range, prefixes);
+        // From line 1: a refused start on line 0 is impossible, because a list
+        // at a block's own first line is a list to `pulldown-cmark` too.
+        let Some(at) = (1..head_lines.len()).find(|i| marked_list_line(&head_lines[*i].text))
+        else {
+            continue;
+        };
+
+        // **Everything from the refused line to the end of the container**, not
+        // just the rest of this paragraph. `marked`'s loop does not stop at the
+        // list it opens — `- a\n  * \n  * b` is one list of two items to it, and
+        // `pulldown-cmark` has already made the second item a *sibling* list
+        // because `* b` is allowed to interrupt where `* ` is not. Re-lexing
+        // only the paragraph's own tail would leave the two unmerged.
+        let tail_start = head_lines[at].source_start;
+        let tail_lines = strip_lines(src, &(tail_start..content_end), prefixes);
+        let tail: String = tail_lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+
+        let mut built = build_region(&tail, options, 0..tail.len(), seen_labels);
+        if built
+            .first()
+            .is_none_or(|first| matches!(first.block, Block::Paragraph { .. }))
+        {
+            continue;
+        }
+        // The tail is lexed with `top = false` too — `marked` does not restore
+        // the flag until the whole item is done — so the same split applies to
+        // any paragraph the tail's own parse leaves behind.
+        split_refused_list_starts(&tail, options, &[], seen_labels, &mut built, tail.len());
+
+        // `(logical offset in `tail`, source offset)`, one entry per line: the
+        // same shape [`LogicalText`] keeps, built here because the tail is a
+        // copy rather than a slice.
+        let mut map: Vec<(usize, usize)> = Vec::with_capacity(tail_lines.len());
+        let mut logical = 0;
+        for line in &tail_lines {
+            map.push((logical, line.source_start));
+            logical += line.text.len() + 1;
+        }
+        let bounds = tail_start..content_end;
+        for block in &mut built {
+            retarget_through(src, block, &map, tail.len(), &bounds);
+        }
+
+        let head_end = line_end_of(src, head_lines[at - 1].source_start).min(range.end);
+        let mut replacement = Vec::with_capacity(built.len() + 1);
+        replacement.push(Built::leaf(
+            Block::Paragraph {
+                text: Text::from(joined_text(&head_lines[..at])),
+            },
+            range.start..head_end,
+        ));
+        replacement.append(&mut built);
+        children.splice(index.., replacement);
+        return;
+    }
+}
+
+/// `marked`'s `list` rule head, which is `bullet` plus what must follow it.
+///
+/// ```text
+/// bullet  = / {0,3}(?:[*+-]|\d{1,9}[.)])/
+/// list    = /^(bull)([ \t][^\n]*?)?(?:\n|$)/
+/// ```
+///
+/// The optional second group is what makes `-foo` and `20.foo` **not** lists,
+/// and its being optional is what makes a bare `-` and a bare `20.` lists whose
+/// single item is empty.
+fn marked_list_line(line: &str) -> bool {
+    let indent = line.bytes().take(4).take_while(|b| *b == b' ').count();
+    if indent > 3 {
+        return false;
+    }
+    let rest = &line[indent..];
+    let after = match rest.as_bytes().first() {
+        Some(b'*' | b'+' | b'-') => &rest[1..],
+        Some(b) if b.is_ascii_digit() => {
+            // `\d{1,9}` — ten digits and the tenth cannot be the delimiter, so
+            // no amount of backtracking makes `1234567890.` a list.
+            let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+            if digits > 9 {
+                return false;
+            }
+            match rest.as_bytes().get(digits) {
+                Some(b'.' | b')') => &rest[digits + 1..],
+                _ => return false,
+            }
+        }
+        _ => return false,
+    };
+    after.is_empty() || after.starts_with([' ', '\t'])
+}
+
+/// Map a block tree's ranges out of a de-indented copy and back into the source.
+///
+/// The line table is monotone, so nesting and sibling order survive; it is
+/// exact except on a line where a tab inside a list item was expanded to
+/// spaces, which is the one place [`StrippedLine::source_start`] is not — and
+/// where a logical offset can therefore land **inside** a character. Every
+/// answer is snapped back onto a boundary, because a `SourceMap` range that
+/// splits a code point is one that panics the first time anything slices with
+/// it.
+fn retarget_through(
+    src: &str,
+    built: &mut Built,
+    map: &[(usize, usize)],
+    tail_len: usize,
+    bounds: &Range<usize>,
+) {
+    let to_source = |logical: usize, up: bool| -> usize {
+        let mut answer = map.first().map_or(bounds.start, |(_, s)| *s);
+        for (index, (logical_start, source_start)) in map.iter().enumerate() {
+            if *logical_start > logical {
+                break;
+            }
+            let next = map.get(index + 1).map_or(tail_len, |(l, _)| *l);
+            answer = source_start + (logical.min(next.saturating_sub(1)) - logical_start);
+        }
+        let mut answer = answer.clamp(bounds.start, bounds.end);
+        while answer > bounds.start && answer < bounds.end && !src.is_char_boundary(answer) {
+            if up {
+                answer += 1;
+            } else {
+                answer -= 1;
+            }
+        }
+        answer
+    };
+    let start = to_source(built.range.start, false);
+    built.range = start..to_source(built.range.end, true).max(start);
+    built.exact = false;
+    for child in &mut built.children {
+        retarget_through(src, child, map, tail_len, bounds);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Mechanism 3 — compatibleTaskList
 // ---------------------------------------------------------------------------
 
@@ -1658,6 +1910,7 @@ fn split_list(
                 },
                 children: Vec::new(),
                 range: range.clone(),
+                exact: true,
             }],
             None => Vec::new(),
         };
@@ -1685,6 +1938,7 @@ fn split_list(
             // `list-item`, and GFM does report the marker.
             children: items.into_iter().map(demote_task_item).collect(),
             range: range.clone(),
+            exact: true,
         }];
     }
 
@@ -1975,6 +2229,7 @@ fn bullet_or_task_list(src: &str, task: bool, loose: bool, items: Vec<Built>) ->
         block,
         children: items,
         range,
+        exact: true,
     }
 }
 
@@ -2800,7 +3055,7 @@ fn block_math(text: &str) -> Option<BlockMath> {
 /// the variants: `expandTabs` inside a list item rewrites content, and it is
 /// the only thing that sets [`StrippedLine::exact`] to `false`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Prefix {
+pub(crate) enum Prefix {
     /// A block quote. `marked`'s `blockquoteSetextReplace2`,
     /// `/^ {0,3}>[ \t]?/gm`, applied once per nesting level — a line that does
     /// not match is a lazy continuation and keeps every byte.
@@ -2820,6 +3075,105 @@ enum Prefix {
         /// `marked`'s asymmetry and not this port's.
         first_line: usize,
     },
+}
+
+/// [`Builder::item_prefix`] as a free function, so that S6's reparse can
+/// rebuild the chain from `(src, tree, ranges)` — which is the half of §10's
+/// owed reverse map that S2 argued was already discharged and S3 pinned with
+/// `tests::the_stripper_is_re_runnable_from_src_tree_and_ranges`. S6 is its
+/// first caller outside a test, which is what turns the argument into a use.
+fn item_prefix_at(src: &str, outer: &[Prefix], range: &Range<usize>) -> Prefix {
+    let first_line = line_start_of(src, range.start);
+    let end = line_end_of(src, first_line);
+    let mut text = src[first_line..end].to_string();
+    let (mut source_start, mut exact) = (first_line, true);
+    for prefix in outer {
+        let next = apply_prefix(*prefix, first_line, None, text, source_start, exact);
+        text = next.0;
+        source_start = next.1;
+        exact = next.2;
+    }
+
+    // `cap[1]` — ` {0,3}` then the bullet or `\d{1,9}[.)]`.
+    let leading = text.bytes().take_while(|b| *b == b' ').count().min(3);
+    let marker_len = match text[leading..].chars().next() {
+        Some('*' | '+' | '-') => leading + 1,
+        Some(c) if c.is_ascii_digit() => {
+            let digits = text[leading..]
+                .chars()
+                .take(9)
+                .take_while(char::is_ascii_digit)
+                .count();
+            leading + digits + 1
+        }
+        // No marker on the item's first line. `pulldown-cmark` does not
+        // produce one, so this is unreachable rather than tolerated — but
+        // a zero-width prefix is the answer that changes nothing.
+        _ => 0,
+    };
+
+    let rest = text.get(marker_len..).unwrap_or("");
+    let expanded = expand_tabs(rest, marker_len);
+    let indent = if expanded.trim().is_empty() {
+        marker_len + 1
+    } else {
+        let found = expanded.find(|c| c != ' ').unwrap_or(0);
+        marker_len + if found > 4 { 1 } else { found }
+    };
+    Prefix::Item {
+        indent,
+        marker_len,
+        first_line,
+    }
+}
+
+/// The container-prefix chain for a node, from its ancestors' blocks and
+/// ranges, outermost first.
+///
+/// The composition is the one [`Builder::push_frame`] performs as it walks:
+/// only a block quote and a list item add a prefix, and an item's is computed
+/// from its own first line **with the outer prefixes already applied**, which is
+/// why this has to be built outermost-first rather than looked up per level.
+pub(crate) fn prefix_chain(src: &str, ancestors: &[(&Block, Range<usize>)]) -> Vec<Prefix> {
+    let mut chain = Vec::new();
+    for (block, range) in ancestors {
+        match block {
+            Block::BlockQuote { .. } => chain.push(Prefix::Quote {
+                first_line: line_start_of(src, range.start),
+            }),
+            Block::ListItem { .. } | Block::TaskListItem { .. } => {
+                let prefix = item_prefix_at(src, &chain, range);
+                chain.push(prefix);
+            }
+            _ => {}
+        }
+    }
+    chain
+}
+
+/// A leaf's source range with the container prefixes removed, as
+/// `(line text, source offset of that text)`.
+pub(crate) fn stripped_lines(
+    src: &str,
+    range: &Range<usize>,
+    prefixes: &[Prefix],
+) -> Vec<(String, usize)> {
+    strip_lines(src, range, prefixes)
+        .into_iter()
+        .map(|line| (line.text, line.source_start))
+        .collect()
+}
+
+/// [`Builder::paragraph`]'s text, re-derived from `(src, range, prefixes)`.
+///
+/// **A paragraph is the one leaf kind for which this is the whole rule.** Every
+/// other kind rewrites its text on top of the stripper — an atx heading is
+/// rebuilt from scratch, a code block loses columns after stripping, a table
+/// cell is trimmed and unescaped — which is the per-kind half M2.md §10 has
+/// owed M4 since S2. S6's fast path is deliberately restricted to the kind that
+/// needs none of it; see [`crate::reparse`].
+pub(crate) fn paragraph_text(src: &str, range: &Range<usize>, prefixes: &[Prefix]) -> String {
+    joined_text(&strip_lines(src, range, prefixes))
 }
 
 /// One line of a leaf's text, and where it came from.
@@ -2859,12 +3213,45 @@ fn expand_tabs(s: &str, mut col: usize) -> String {
     out
 }
 
-fn line_start_of(src: &str, at: usize) -> usize {
+/// The start of the line `at` is on.
+///
+/// **Tolerant of an `at` inside a character, and that is a fix rather than
+/// defensiveness** — S6's generated edits reached
+/// `absorb_trailing_blank_quote_line`'s `last.saturating_sub(1)`, which steps
+/// back one *byte* to find the previous line and lands inside a multi-byte
+/// character on any block quote whose last content byte is one. A newline is a
+/// single byte and cannot be inside a code point, so snapping down names the
+/// same line; the alternative is the same `while` loop at every caller.
+pub(crate) fn line_start_of(src: &str, at: usize) -> usize {
+    let mut at = at.min(src.len());
+    while at > 0 && !src.is_char_boundary(at) {
+        at -= 1;
+    }
     src[..at].rfind('\n').map_or(0, |i| i + 1)
 }
 
 fn line_end_of(src: &str, at: usize) -> usize {
+    let mut at = at.min(src.len());
+    while at > 0 && !src.is_char_boundary(at) {
+        at -= 1;
+    }
     src[at..].find('\n').map_or(src.len(), |i| at + i)
+}
+
+/// Whether the line `at` sits on is preceded by a blank one.
+///
+/// S6 asks this of a block's **start** where it asks [`has_blank_line`] of a
+/// gap, and the two are not interchangeable: `pulldown-cmark`'s ranges are not
+/// consistent about whether the newline that ends a block is inside it (S4's
+/// "the trap nobody named"), so a gap measured from a block's *end* can read one
+/// newline short. Measured from the following block's start it cannot.
+pub(crate) fn preceded_by_blank_line(src: &str, at: usize) -> bool {
+    let start = line_start_of(src, at);
+    if start == 0 {
+        return true;
+    }
+    let previous = line_start_of(src, start - 1);
+    src[previous..start - 1].trim().is_empty()
 }
 
 /// Apply one container's prefix to one whole source line.
@@ -3038,6 +3425,12 @@ fn apply_prefix(
 /// already past the marker.
 fn strip_lines(src: &str, range: &Range<usize>, prefixes: &[Prefix]) -> Vec<StrippedLine> {
     let mut out = Vec::new();
+    // Clamped rather than trusted: a range here is a `Built::range`, and S6's
+    // generated edits found one that ran past the end of the string it came
+    // from (see [`LogicalText::end`]). Clamping cannot change an in-bounds
+    // range and turns an out-of-bounds one into a short read rather than a
+    // panic.
+    let range = &(range.start.min(src.len())..range.end.min(src.len()));
     if range.is_empty() {
         return out;
     }
@@ -3157,10 +3550,21 @@ struct LogicalText {
     text: String,
     /// `(logical offset, source offset)` at the start of each line.
     lines: Vec<(usize, usize)>,
+    /// The end of the source range this was built from.
+    ///
+    /// **A logical offset can map past it**, because a line whose tab was
+    /// expanded to spaces is *longer* than its source — S6's generated edits
+    /// reached `- [a]: /\t`, where `scan_definitions` mapped a logical offset
+    /// to a source offset past the end of the whole string and `strip_lines`
+    /// then panicked on the range it produced. Clamping is the fix and it is
+    /// the right one: an offset inside a range cannot mean a position outside
+    /// it.
+    end: usize,
 }
 
 impl LogicalText {
     fn of(src: &str, range: Range<usize>, prefixes: &[Prefix]) -> Self {
+        let end = range.end.min(src.len());
         let mut text = String::new();
         let mut lines = Vec::new();
         for line in strip_lines(src, &range, prefixes) {
@@ -3168,7 +3572,7 @@ impl LogicalText {
             text.push_str(&line.text);
             text.push('\n');
         }
-        LogicalText { text, lines }
+        LogicalText { text, lines, end }
     }
 
     /// The source offset a logical offset corresponds to.
@@ -3191,13 +3595,17 @@ impl LogicalText {
             // the offset inside this line's source.
             answer = source_start + (logical.min(next_logical.saturating_sub(1)) - logical_start);
         }
-        answer
+        answer.min(self.end)
     }
 }
 
 /// `/\n.*\n/` — `marked`'s `anyLine`, which is how it decides a `space` token
 /// means the list is loose.
-fn has_blank_line(gap: &str) -> bool {
+///
+/// S6 asks it a second question, of the gap between two **top-level** blocks:
+/// a blank line there is what stops a full parse from letting the first absorb
+/// the second, and therefore what makes a region boundary a boundary.
+pub(crate) fn has_blank_line(gap: &str) -> bool {
     let mut seen_newline = false;
     let mut blank_since = true;
     for c in gap.chars() {

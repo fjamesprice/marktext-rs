@@ -1,0 +1,31 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc cb810767094eff4dcbefa6af4c5ac2b5d56924cc185ae7f7e96884f896fda5fa # shrinks to shape = "---\ntitle: x\n---\n\nbody\n\nmore\n", edits = [Edit { at: 917, remove: 1, insert: "- " }, Edit { at: 3588, remove: 0, insert: "# " }]
+cc 391bc041fc21d4e1eebc871377892963e1b51e1c812caea9c77e3e9282ac5bc3 # shrinks to shape = "para\nwith\nlines\n\n- list\n- items\n", edits = [Edit { at: 2971, remove: 6, insert: "#" }, Edit { at: 722, remove: 4, insert: "x" }, Edit { at: 1443, remove: 0, insert: " " }]
+cc ad5db1714cf07fc8f7506f6b9fd77ef913b602e4d79952ebc1012095d8269d7d # shrinks to shape = "1. a\n2. b\n   1. c\n", edits = [Edit { at: 560, remove: 0, insert: " " }]
+cc 4a8fbf706d84cbf23a7a981db41058d6253471abc09d077978e45b22c9e0cd08 # shrinks to shape = "> quoted\n> lines\n\nafter\n", edits = [Edit { at: 189, remove: 3, insert: "xy" }, Edit { at: 3778, remove: 0, insert: "#" }]
+cc b758447c6d21eeb24bb9fc77820a3705b9705e7bcc590d8cef1f07ddfee0cfb4 # shrinks to shape = "> - a\n> - b\n\nafter\n", edits = [Edit { at: 638, remove: 0, insert: "é" }, Edit { at: 2445, remove: 9, insert: "#" }]
+cc 3e1f3ad3feeb5bbb73968b19febef9bc4b62e8b3ba2f8cd9b0194653041e3b6b # shrinks to shape = "text\n---\nmore\n", edits = [Edit { at: 99, remove: 5, insert: ">" }, Edit { at: 1022, remove: 0, insert: "é" }]
+cc 70cf6ef493c90cf3e982441664ea8ef3be975cd32c7cfc8c60554c433d86577d # shrinks to shape = "a\n\n    code\n\nb\n\n    code\n", edits = [Edit { at: 3532, remove: 3, insert: "" }, Edit { at: 246, remove: 0, insert: "\t" }]
+cc b633fb1d7cd0fda527ef2266e1b00257d32604c54966cdbf198006a3e6d8d3a1 # shrinks to shape = "- [ ] todo\n- [x] done\n\nafter\n", edits = [Edit { at: 1232, remove: 11, insert: "20. " }, Edit { at: 3627, remove: 0, insert: "  " }]
+cc 66fc4b4688e7cf9c8f10510df93cc4755992264f667f97cd108c703aae19d7f2 # shrinks to which = 61, edits = [Edit { at: 226, remove: 0, insert: "  " }]
+cc af5e43cfec3f40d36fd577c5d59cbd1e9f49e655b2517075a61301b03a0bb3d8 # shrinks to shape = "- a\n\n- b\n\n- c\n", edits = [Edit { at: 2180, remove: 5, insert: "|" }, Edit { at: 1106, remove: 4, insert: "</div>" }, Edit { at: 44, remove: 2, insert: "" }, Edit { at: 2139, remove: 0, insert: "\n" }]
+cc cd7e179509e63e402a48f1a6f467d7c61be7e3a8645d2261f5db4f4c27275136 # shrinks to shape = "3. foo\n   20. foo\n       141. foo\n", edits = [Edit { at: 50, remove: 6, insert: "\t" }, Edit { at: 2172, remove: 0, insert: "x" }]
+cc 9a65046f0a5f7730162d24cd52e33493e2a31c10b186cade6694963b4c2a4295 # shrinks to shape = "3. foo\n   20. foo\n       141. foo\n", edits = [Edit { at: 2080, remove: 3, insert: "x" }, Edit { at: 2635, remove: 4, insert: "\t" }, Edit { at: 3042, remove: 0, insert: "" }]
+cc 74b61529328bf32afd9f83f703c5692f27b32af9a219183a051a9944d4751a2a # shrinks to shape = "- [ ] todo\n- [x] done\n\nafter\n", edits = [Edit { at: 1514, remove: 11, insert: "x" }, Edit { at: 2701, remove: 10, insert: "\t" }, Edit { at: 1159, remove: 0, insert: "[a]: /x" }]
+cc 12b17bf5a4a6592b52ab9f2697e71fe155387018e3e2e35b5eb56a252c5c4431 # shrinks to shape = "---\ntitle: x\n---\n\nbody\n\nmore\n", edits = [Edit { at: 1684, remove: 0, insert: "]" }, Edit { at: 1803, remove: 6, insert: "x" }, Edit { at: 2423, remove: 6, insert: "|" }, Edit { at: 1909, remove: 0, insert: "---" }]
+cc 31f07f2ba849b686f2d13fe4dcdbb5fb713626f593e902164f254ebd63f7f0bb # shrinks to shape = "1. a\n2. b\n   1. c\n", edits = [Edit { at: 510, remove: 1, insert: "[a]: /x" }, Edit { at: 720, remove: 0, insert: "\t" }]
+cc 873167aae550a095671768a8372be10f5775291ffb22b0ee276ecf0f32ac0b96 # shrinks to shape = "---\ntitle: x\n---\n\nbody\n\nmore\n", edits = [Edit { at: 78, remove: 0, insert: "x" }, Edit { at: 2808, remove: 2, insert: "<div>" }, Edit { at: 3547, remove: 1, insert: "\n\n" }, Edit { at: 299, remove: 1, insert: "" }]
+cc 1ec14c49f535523f6f5ed4ad1fc2a590882b2e9048f4c0c45ceadb8457dacd64 # shrinks to shape = "3. foo\n   20. foo\n       141. foo\n", edits = [Edit { at: 3299, remove: 3, insert: " " }, Edit { at: 1463, remove: 2, insert: "\t" }, Edit { at: 1016, remove: 7, insert: "## " }, Edit { at: 960, remove: 0, insert: "#" }]
+cc 2b47bee26873e2c78541d147afb3ae3d98a5080c505f9ef14b06b15524c2b56d # shrinks to shape = "- a\n\n- b\n\n- c\n", edits = [Edit { at: 3292, remove: 7, insert: "[a]: /x" }, Edit { at: 2083, remove: 0, insert: "\t" }]
+cc 481a2ede24751ef1e3260787cabcb6781986c65f43f7c3dbc984a4ce8705f380 # shrinks to shape = "- a\n- b\n- c\n", edits = [Edit { at: 28, remove: 6, insert: "[a]: /x" }, Edit { at: 1772, remove: 5, insert: "\t" }]
+cc 8fdcb8085e765776624e30ae0aa6d56890aedf4d48eb8a2536dd3ede7a88ca02 # shrinks to shape = "---\ntitle: x\n---\n\nbody\n\nmore\n", edits = [Edit { at: 1920, remove: 2, insert: "|" }, Edit { at: 232, remove: 7, insert: "\n\n" }, Edit { at: 425, remove: 4, insert: "\t" }, Edit { at: 459, remove: 1, insert: " " }]
+cc 6f4896c2e805af6c5286e474983045eb14a778b3b79f08d3f114976bfa08f7cb # shrinks to shape = "> - a\n> - b\n\nafter\n", edits = [Edit { at: 1273, remove: 6, insert: "\t" }, Edit { at: 940, remove: 2, insert: "[a]: /x" }]
+cc 78d5cb1f50b412b497ee829bfa6f5f65bc86531f8eaa180457a23fe700a1398e # shrinks to shape = "***\n\ntext\n\n___\n", edits = [Edit { at: 1588, remove: 2, insert: "[a]: /x" }, Edit { at: 3716, remove: 0, insert: "[a]: /x" }, Edit { at: 2829, remove: 3, insert: "#" }]
+cc 1503ded336c4b2e031c43a1b03705422d7f80d3c81a9113789e813342c9a1fe0 # shrinks to shape = "> quoted\n> lines\n\nafter\n", edits = [Edit { at: 316, remove: 6, insert: "[a]: /x" }, Edit { at: 547, remove: 4, insert: "[" }, Edit { at: 308, remove: 5, insert: "#" }]
+cc 563105a858eef1450ed52bd0178600b64dbb3f98b156f6c38b8c6d2c2dffed8f # shrinks to shape = "- a\n  * \n  * \n\nafter\n", edits = [Edit { at: 3808, remove: 8, insert: "```" }, Edit { at: 1965, remove: 0, insert: "\n" }]
+cc 00932f907cc40953b530b73b66055e96270e9414c39fca39945c4fb05c3cf053 # shrinks to shape = "| a | b |\n| - | - |\n| 1 | 2 |\n\nafter\n", edits = [Edit { at: 3914, remove: 5, insert: "]" }, Edit { at: 3065, remove: 0, insert: "#" }]

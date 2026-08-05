@@ -398,6 +398,7 @@ dependencies = [
  "fancy-regex",
  "mt-doc",
  "mt-inline",
+ "proptest",
  "pulldown-cmark",
  "serde_json",
 ]

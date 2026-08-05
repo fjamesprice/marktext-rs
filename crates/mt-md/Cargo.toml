@@ -69,3 +69,15 @@ serde_json.workspace = true
 # and `strongCjkFlanking` modules drive the tokenizer as well as the parser.
 # S3 promoted it to a real dependency — see the note above — so the dev entry is
 # gone rather than duplicated.
+
+# M2 S6. §6's S6 row asks for the region reparse to equal a full reparse "over
+# generated edit sequences", and S4 recorded that "the generators are S7's and
+# the property over fixed corpora is S4's". The two sentences only look like a
+# conflict: S4's is about generating **markdown**, which is what the round-trip
+# property would need, and this generates **edits** over a fixed corpus — which
+# is the same shape `mt-doc`'s S0 gate already uses proptest for
+# (`tests/edit_inverse.rs`, "a generated batch's inverse, over ≥ 10⁴ batches").
+# So the dependency is the one already in the workspace graph and in the
+# lockfile, on the crate next door, added for the sibling of this property.
+# `tests/reparse_properties.rs`.
+proptest.workspace = true
