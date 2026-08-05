@@ -94,9 +94,28 @@
 //! readable as facts about the *reference* serializer rather than as this
 //! crate's losses.
 //!
-//! **[`render_to_static_html`] still returns [`Unimplemented`],
-//! deliberately** — docs/M2.md §5 D6 stages the three ratchets by entry point
-//! so that one harness at a time starts complaining, and that one is S5's.
+//! ## M2 S5 status — the last entry point, and the one-way door
+//!
+//! [`render_to_static_html`] answers, so **all three of §5 D6's ratchets are
+//! awake** and `cargo xtask conformance` enforces where it used to skip 1,324
+//! examples. §4 C3 decides this renders through [`Document`]; [`html`]'s
+//! module docs carry the half of that decision S5 had to take, which is that
+//! the leaves' inline layer is rendered from [`mt_inline::tokenizer`]'s tokens
+//! rather than from a second inline engine — *the exporter must agree with the
+//! editor*, which is C3's own argument one layer down.
+//!
+//! **What that costs is a number and it is frozen: 71.0 % CommonMark and
+//! 70.8 % GFM, against muya's 87.7 % and 86.3 %.** The two measure different
+//! engines; `spec/conformance.md` says which, and docs/M2.md §6 argues all 231
+//! entries the ratchet's list gained. The block half is 83.7 % and the inline
+//! half is 60.3 %, so `spec/expected-failures.json` is now a to-do list for
+//! `mt-inline` — which is the most useful thing a ratchet can be.
+//!
+//! Three more things landed with it: [`Options::footnote`] finally gates
+//! something ([`block`]'s port of muya's `marked` footnote extension, with
+//! [`footnotes::transform_footnotes`] for the GFM/pandoc shape),
+//! [`sanitize::clean`] is the `sanitize: true` arm, and `mt-cli` gained
+//! `--to-html`.
 //!
 //! The direction table above is M0's transcription of §4 and **§4 C2 corrects
 //! its first row**: leaf text is not "captured as raw source slices" — it is a
@@ -105,7 +124,10 @@
 //! hold, and [`block`] never reads one.
 
 pub mod block;
+pub mod footnotes;
+pub mod html;
 pub mod labels;
+pub mod sanitize;
 pub mod serialize;
 pub mod state;
 pub mod string_width;
@@ -441,15 +463,49 @@ pub fn serialize(doc: &Document, options: Options) -> String {
 /// This is what the conformance ratchet (§11.1) calls. The spec runners in
 /// muya call it with `sanitize: false` deliberately — they measure the
 /// *parser's* compliance, not the sanitiser, and CommonMark §6.9 "Raw HTML"
-/// explicitly tests that unknown tags like `<bab>` survive. Keep that
-/// distinction when this is implemented: sanitization is an export-time and
-/// paste-time concern, not a parse-time one.
+/// explicitly tests that unknown tags like `<bab>` survive. **That distinction
+/// survives here**: sanitization is an export-time and paste-time concern, not
+/// a parse-time one, and it is [`sanitize::clean`] rather than anything the
+/// renderer does.
+///
+/// # The four steps, in muya's order
+///
+/// 1. Empty input fast-paths to an empty string, so callers do not special-case
+///    it — muya's `if (!markdown) return ''`.
+/// 2. [`parse`], then [`html::to_html`]. §4 C3 decides this goes through
+///    [`Document`]; `html`'s module docs carry the half of that decision S5 had
+///    to take, which is what renders the inline layer.
+/// 3. [`footnotes::transform_footnotes`], **before** sanitization, because the
+///    `data-identifier` marker it reads is a `data-*` attribute and the export
+///    sanitizer config drops those.
+/// 4. [`sanitize::clean`], unless the caller asked for the raw output.
+///
+/// **Infallible from M2 S5** in everything but its signature, which keeps
+/// [`Unimplemented`] because `mt-cli`'s exit 3 is a contract with
+/// `cargo xtask diff` and `--to-html` is the command that inherits it. The
+/// three entry points that opened before this one each dropped the `Result` in
+/// the stage that opened them; this one is the last and it does not, because
+/// M6's `mt-export` will wrap it and a `Result` is the shape an export path
+/// wants. Recorded rather than assumed — see the crate docs on
+/// [`Unimplemented`].
 pub fn render_to_static_html(
-    _markdown: &str,
-    _options: Options,
-    _sanitize: bool,
+    markdown: &str,
+    options: Options,
+    sanitize: bool,
 ) -> Result<String, Unimplemented> {
-    Err(Unimplemented)
+    if markdown.is_empty() {
+        return Ok(String::new());
+    }
+    let parsed = parse(markdown, options);
+    let mut rendered = html::to_html(&parsed.document, &parsed.labels, options);
+    if options.footnote {
+        rendered = footnotes::transform_footnotes(&rendered);
+    }
+    Ok(if sanitize {
+        sanitize::clean(&rendered)
+    } else {
+        rendered
+    })
 }
 
 /// Markdown → muya-compatible state JSON.
@@ -475,22 +531,14 @@ pub fn dump_state(markdown: &str, options: Options) -> String {
 mod tests {
     use super::*;
 
-    /// The M0 contract, minus the half S3 discharged: an entry point this
-    /// milestone has not reached reports "unimplemented" rather than panicking,
-    /// so the harnesses can distinguish *not built yet* from *broken*.
-    ///
-    /// **The `dump_state` assertion was deleted at S3** and **`serialize`'s at
-    /// S4**, each in the commit where the entry point first returned an answer.
-    /// D6's order is `parse`+`dump_state`, then `serialize`, then
-    /// `render_to_static_html`; this test shrinks by one clause per stage and
-    /// disappears at S5, which is the only stage left in it.
-    #[test]
-    fn entry_points_report_unimplemented_at_m0() {
-        assert_eq!(
-            render_to_static_html("x", Options::SPEC, false),
-            Err(Unimplemented)
-        );
-    }
+    // `entry_points_report_unimplemented_at_m0` lived here from M0 until S5.
+    // It shrank by one clause per stage by design — `dump_state`'s went at S3,
+    // `serialize`'s at S4 — and its own doc comment named this stage as the one
+    // it would disappear in, because `render_to_static_html` was the last
+    // clause and D6 stages it last. It is gone rather than inverted: the claim
+    // "the door is open" is what `render_to_static_html_answers_from_s5_on`
+    // below makes, and `spec/README.md`'s ratchet is what makes it mean
+    // something.
 
     /// D6's ratchets, at their narrowest: the entry points S3 and S4 opened
     /// return an answer at all.
@@ -509,6 +557,41 @@ mod tests {
 
         let json = dump_state("# hi\n", Options::MUYA_DEFAULT);
         assert!(json.contains("\"atx-heading\""), "{json}");
+    }
+
+    /// D6's third and last ratchet. The two clauses that cannot be seen from
+    /// `cargo xtask conformance`, which drives this function with
+    /// `sanitize: false` only: that the sanitize arm runs at all, and that the
+    /// empty-input fast path returns `Ok("")` rather than `<p></p>`.
+    #[test]
+    fn render_to_static_html_answers_from_s5_on() {
+        let raw = render_to_static_html(
+            "# hi
+
+<script>x</script>",
+            Options::SPEC,
+            false,
+        )
+        .expect("S5 opened this door");
+        assert!(raw.contains("<h1>hi</h1>"), "{raw}");
+        assert!(raw.contains("<script>"), "sanitize: false is raw: {raw}");
+
+        let clean = render_to_static_html(
+            "# hi
+
+<script>x</script>",
+            Options::SPEC,
+            true,
+        )
+        .expect("S5 opened this door");
+        assert!(clean.contains("<h1>hi</h1>"), "{clean}");
+        assert!(!clean.contains("<script"), "{clean}");
+
+        assert_eq!(
+            render_to_static_html("", Options::SPEC, true),
+            Ok(String::new()),
+            "muya's `if (!markdown) return ''`"
+        );
     }
 
     /// D6's second ratchet, the same way.

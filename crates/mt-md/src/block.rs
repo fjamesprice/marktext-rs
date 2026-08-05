@@ -231,10 +231,273 @@ fn insert(doc: &mut Document, ranges: &mut SourceMap, parent: NodeId, index: usi
 /// - `ENABLE_SMART_PUNCTUATION`, `ENABLE_HEADING_ATTRIBUTES` and the rest —
 ///   they rewrite content, and this port never lets the block parser touch
 ///   inline text.
-fn cmark_options() -> CmarkOptions {
+pub(crate) fn cmark_options() -> CmarkOptions {
     CmarkOptions::ENABLE_TABLES
         | CmarkOptions::ENABLE_STRIKETHROUGH
         | CmarkOptions::ENABLE_TASKLISTS
+}
+
+// ---------------------------------------------------------------------------
+// The footnote block extension — `utils/marked/extensions/footnote.ts`
+// ---------------------------------------------------------------------------
+
+/// What one pass over the source hands the builder when footnotes are on.
+#[derive(Debug, PartialEq, Eq)]
+enum Segment {
+    /// Ordinary markdown, walked by `pulldown-cmark`.
+    Body(Range<usize>),
+    /// `[^id]: …`, consumed by the extension and re-lexed from a de-indented
+    /// copy of its own body.
+    Footnote {
+        identifier: String,
+        /// The **cleaned** body: not a slice of the source. See
+        /// [`footnote_block`] for what that costs the range map.
+        body: String,
+        /// The definition's extent in the source, `raw` in `marked`'s terms.
+        range: Range<usize>,
+    },
+}
+
+/// muya's own `marked` block extension, transcribed —
+/// `utils/marked/extensions/footnote.ts`, 114 lines.
+///
+/// # Why this is a source scan and not a `pulldown-cmark` feature
+///
+/// `ENABLE_FOOTNOTES` is **GFM's** footnote syntax and this is not it. muya's
+/// rule is
+///
+/// ```text
+/// /^\[\^([^^[\]\s]+)(?<!\\)\]:([\s\S]*?)(?=\n *\n {0,3}[^ ]|$)/
+/// ```
+///
+/// with a `start()` hook that returns the index of a `\n[^id]:` so that a
+/// paragraph *terminates* there — which is why a definition may interrupt a
+/// paragraph, and why the body runs on through blank lines for as long as the
+/// line after each one is indented four spaces or more. Neither behaviour is
+/// `pulldown-cmark`'s, and `pulldown-cmark` has no extension point, so the
+/// split happens before it sees the text. M2.md §10's "Owed by S1" item 1
+/// predicted exactly this and left the flag off for exactly this reason.
+///
+/// # The one place this is narrower than `marked`, named rather than hidden
+///
+/// `marked` runs its extensions inside the nested `blockTokens` call a list
+/// item's dedented content gets, so `- [^a]: x` holds a footnote in muya and a
+/// paragraph here. This scanner works on the document's own lines, so a
+/// definition is only recognised at column 0. **Not registered** — rule 3
+/// makes an entry with no failing differential case stale, and both option
+/// sets every harness drives have `footnote: false`, so no input in the 1344
+/// or the 22 reaches it at all. M2.md §10 carries it.
+fn footnote_segments(src: &str, body_at: usize) -> Vec<Segment> {
+    let mut segments = Vec::new();
+    let mut at = body_at;
+    let mut body_start = body_at;
+    let mut fence: Option<(char, usize)> = None;
+
+    while at < src.len() {
+        let line_end = line_end_at(src, at);
+        let line = &src[at..line_end];
+
+        // A fence's inside is not a token boundary, so the extension never
+        // runs there. Tracked with a line scan because that is all it takes;
+        // an indented code block cannot contain a column-0 line at all.
+        match fence {
+            Some((marker, len)) => {
+                let closing = line.trim_start_matches(' ');
+                if closing.starts_with(marker)
+                    && closing.chars().take_while(|c| *c == marker).count() >= len
+                    && closing.trim_start_matches(marker).trim().is_empty()
+                {
+                    fence = None;
+                }
+                at = line_end + 1;
+                continue;
+            }
+            None => {
+                if let Some((marker, len)) = opening_fence(line) {
+                    fence = Some((marker, len));
+                    at = line_end + 1;
+                    continue;
+                }
+            }
+        }
+
+        let Some((identifier, after_colon)) = footnote_head(src, at) else {
+            at = line_end + 1;
+            continue;
+        };
+
+        if at > body_start {
+            segments.push(Segment::Body(body_start..at));
+        }
+        let end = footnote_extent(src, after_colon);
+        segments.push(Segment::Footnote {
+            identifier,
+            body: clean_footnote_body(&src[after_colon..end]),
+            range: at..end,
+        });
+        at = end;
+        // The `\n *\n` in the lookahead is not consumed, so the next region
+        // starts at the newline the definition stopped before.
+        body_start = end;
+    }
+
+    if body_start < src.len() {
+        segments.push(Segment::Body(body_start..src.len()));
+    }
+    if segments.is_empty() {
+        segments.push(Segment::Body(body_at..src.len()));
+    }
+    segments
+}
+
+/// ```` ``` ```` or `~~~` at up to three spaces of indent — the marker and the
+/// run length, which a closing fence must match or exceed.
+fn opening_fence(line: &str) -> Option<(char, usize)> {
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    if indent > 3 {
+        return None;
+    }
+    let rest = &line[indent..];
+    for marker in ['`', '~'] {
+        let run = rest.chars().take_while(|c| *c == marker).count();
+        if run >= 3 {
+            return Some((marker, run));
+        }
+    }
+    None
+}
+
+/// `^\[\^([^^[\]\s]+)(?<!\\)\]:` at `at` — the identifier and the offset just
+/// past the colon.
+///
+/// The lookbehind is what lets `[^foo\]: bar` stay a paragraph, and the
+/// character class excludes `^` itself, so `[^^x]` is not a definition.
+fn footnote_head(src: &str, at: usize) -> Option<(String, usize)> {
+    let rest = src.get(at..)?;
+    let body = rest.strip_prefix("[^")?;
+    let mut end = 0;
+    for (index, ch) in body.char_indices() {
+        if ch == ']' {
+            end = index;
+            break;
+        }
+        if ch == '^' || ch == '[' || ch.is_whitespace() {
+            return None;
+        }
+        end = index + ch.len_utf8();
+    }
+    let identifier = body.get(..end)?;
+    if identifier.is_empty() || identifier.ends_with('\\') || !body[end..].starts_with("]:") {
+        return None;
+    }
+    Some((identifier.to_string(), at + 2 + end + 2))
+}
+
+/// `([\s\S]*?)(?=\n *\n {0,3}[^ ]|$)` — everything up to the first blank line
+/// that is followed by a line indented three spaces or fewer.
+fn footnote_extent(src: &str, from: usize) -> usize {
+    let mut at = from;
+    while at < src.len() {
+        let Some(newline) = src[at..].find('\n').map(|i| at + i) else {
+            return src.len();
+        };
+        // `\n *\n`
+        let mut probe = newline + 1;
+        probe += src[probe..].bytes().take_while(|b| *b == b' ').count();
+        if !src[probe..].starts_with('\n') {
+            at = newline + 1;
+            continue;
+        }
+        // ` {0,3}[^ ]`
+        let after = probe + 1;
+        let indent = src[after..].bytes().take_while(|b| *b == b' ').count();
+        if indent <= 3
+            && src[after + indent..]
+                .bytes()
+                .next()
+                .is_some_and(|b| b != b' ')
+        {
+            return newline;
+        }
+        at = newline + 1;
+    }
+    src.len()
+}
+
+/// The extension's five chained `replace`s, in its order.
+///
+/// The first-line `^ {4}` strip is the one that is not obvious and the
+/// extension's own comment says why: the per-line rule is anchored to a
+/// preceding `\n`, so without it `[^id]:\n    text` would lex as an indented
+/// code block rather than a paragraph.
+fn clean_footnote_body(rest: &str) -> String {
+    let cleaned = rest.trim_start_matches([' ', '\t']);
+    let cleaned = cleaned.trim_start_matches('\n');
+    let cleaned = cleaned.strip_prefix("    ").unwrap_or(cleaned);
+    let mut out = String::with_capacity(cleaned.len());
+    let mut at = 0;
+    while let Some(newline) = cleaned[at..].find('\n').map(|i| at + i) {
+        out.push_str(&cleaned[at..=newline]);
+        let after = newline + 1;
+        // `\n {4}(?=\S)` — four spaces, and only when real content follows.
+        if cleaned[after..].starts_with("    ")
+            && cleaned[after + 4..]
+                .chars()
+                .next()
+                .is_some_and(|c| !c.is_whitespace())
+        {
+            at = after + 4;
+        } else {
+            at = after;
+        }
+    }
+    out.push_str(&cleaned[at..]);
+    while out.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
+/// A `footnote` container whose children are the de-indented body, re-lexed.
+///
+/// # Every node under a footnote carries the footnote's own range
+///
+/// The body `marked` lexes is a **de-indented copy** of the source, not a
+/// slice of it, so an offset into that copy does not map to a document offset
+/// by addition — the same fact §4 C2 records about leaf text, one level up.
+/// Rather than record a range into a string the document does not contain,
+/// every node here carries the definition's own extent: coarse, and true.
+/// M2.md §10 owes the finer map to whichever stage first needs a caret inside
+/// a footnote.
+fn footnote_block(identifier: String, body: &str, range: Range<usize>, options: Options) -> Built {
+    // `lexer.blockTokens(cleaned, [])` — the nested lex has the same
+    // extensions and no front matter, because front matter is split off the
+    // document before the lexer runs at all.
+    let mut children = build(
+        body,
+        Options {
+            front_matter: false,
+            ..options
+        },
+    );
+    for child in &mut children {
+        retarget(child, &range);
+    }
+    Built {
+        block: Block::Footnote {
+            identifier,
+            children: Vec::new(),
+        },
+        children,
+        range,
+    }
+}
+
+fn retarget(built: &mut Built, range: &Range<usize>) {
+    built.range = range.clone();
+    for child in &mut built.children {
+        retarget(child, range);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -413,19 +676,61 @@ fn build(markdown: &str, options: Options) -> Vec<Built> {
         body_at = rest_at;
     }
 
+    // `marked`'s `this.tokens.links` is one map for the whole lex, including
+    // the nested `blockTokens` call a list item's content gets — so it is
+    // threaded across every region rather than reset per region.
+    let mut seen_labels = HashSet::new();
+
+    if options.footnote {
+        for segment in footnote_segments(markdown, body_at) {
+            match segment {
+                Segment::Body(region) => {
+                    top.extend(build_region(markdown, options, region, &mut seen_labels));
+                }
+                Segment::Footnote {
+                    identifier,
+                    body,
+                    range,
+                } => top.push(footnote_block(identifier, &body, range, options)),
+            }
+        }
+    } else {
+        top.extend(build_region(
+            markdown,
+            options,
+            body_at..markdown.len(),
+            &mut seen_labels,
+        ));
+    }
+    top
+}
+
+/// One region of the document, walked by `pulldown-cmark` as if it were the
+/// whole of it.
+///
+/// That is `marked`'s own model rather than a simplification of it: its block
+/// lexer is a position loop with no cross-block state except `tokens.links`,
+/// so a block extension that consumes a span and hands the loop back its tail
+/// is exactly a split into regions.
+fn build_region(
+    src: &str,
+    options: Options,
+    region: Range<usize>,
+    seen_labels: &mut HashSet<String>,
+) -> Vec<Built> {
     let mut builder = Builder {
-        src: markdown,
+        src,
         options,
         stack: vec![Frame {
             kind: FrameKind::Root,
-            range: body_at..markdown.len(),
+            range: region.clone(),
             children: Vec::new(),
-            scanned_to: body_at,
+            scanned_to: region.start,
         }],
-        seen_labels: HashSet::new(),
+        seen_labels: std::mem::take(seen_labels),
         prefixes: Vec::new(),
     };
-    builder.walk(body_at);
+    builder.walk(region);
 
     // The root's own trailing gap. Every other container's is scanned when its
     // `End` arrives; the root has no `End`, and `[foo]\n\n[foo]: /bar` — a
@@ -439,17 +744,19 @@ fn build(markdown: &str, options: Options) -> Vec<Built> {
     builder.scan_gap(&mut root, end);
     debug_assert!(builder.stack.is_empty(), "unbalanced frames");
     builder.fold_empty_task_marker_continuations(&mut root.children);
-    top.extend(root.children);
-    top
+    *seen_labels = std::mem::take(&mut builder.seen_labels);
+    root.children
 }
 
 impl<'a> Builder<'a> {
-    /// Walk `pulldown-cmark`'s events over `src[body_at..]`.
+    /// Walk `pulldown-cmark`'s events over `src[region]`.
     ///
-    /// Offsets are shifted back to whole-document offsets by `body_at`, which
-    /// is non-zero only when front matter was split off.
-    fn walk(&mut self, body_at: usize) {
-        let body = &self.src[body_at..];
+    /// Offsets are shifted back to whole-document offsets by the region's
+    /// start, which is non-zero when front matter was split off (S1) or when a
+    /// footnote definition split the document into regions (S5).
+    fn walk(&mut self, region: Range<usize>) {
+        let body_at = region.start;
+        let body = &self.src[region];
         let shift = |r: Range<usize>| (r.start + body_at)..(r.end + body_at);
 
         for (event, range) in Parser::new_ext(body, cmark_options())

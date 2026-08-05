@@ -10,6 +10,18 @@ repository.workspace = true
 [dependencies]
 mt-doc.workspace = true
 
+# M2 S5, per §4's table and M2.md §6's S5 row. `render_to_static_html`'s third
+# parameter is `sanitize`, muya's default for it is `true`, and seventeen of
+# `renderToStaticHTML.spec.ts`'s twenty transcribed cases exercise that arm —
+# so the alternative to taking the dependency here is a parameter that lies.
+# `src/sanitize.rs` carries the mapping from `EXPORT_DOMPURIFY_CONFIG` and the
+# four places the two sanitizers cannot be made identical.
+#
+# It is the workspace's largest dependency tree by a wide margin; the
+# arithmetic and what it costs §12.2's budget are in the root manifest beside
+# the version. Pure — no I/O, no windowing, no GPU.
+ammonia.workspace = true
+
 # M2 S4, for one pattern: `/\p{Mn}|\p{Me}/u` in `src/string_width.rs`.
 #
 # muya's `utils/stringWidth.ts` inlines its East-Asian ranges by hand and uses a

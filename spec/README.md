@@ -30,23 +30,35 @@ The third row is the one people find surprising and it is the important one:
 rather than accumulating stale entries that would later let compliance quietly
 fall.
 
-**Compliance can only go up.** The floor is muya's current 87.7 % CommonMark
-0.31 and 86.3 % GFM 0.29 (`conformance.md`), which is also the M2 exit gate
-(§9). Because `pulldown-cmark` handles blocks at >99 %, the realistic target is
-meaningfully higher and most residual failures should be in block-tree mapping
-rather than in parsing.
+**Compliance can only go up.** ~~The floor is muya's current 87.7 % CommonMark
+0.31 and 86.3 % GFM 0.29~~ — **re-baselined at M2 S5 to 71.0 % and 70.8 %,
+which are this engine's own measured rates.** See "How it was flipped on at M2"
+below for what changed, and `conformance.md` for why the two numbers are not
+comparable.
+
+The second half of that paragraph turned out to be right about where the
+residue *is not* and wrong about where it is. `pulldown-cmark` does handle
+blocks at >99 %, and the port's block sections score 83.7 %; the residue is in
+**inlines**, at 60.3 %, for the reason docs/M2.md §4 C3 named before any of it
+was written.
 
 The runner lives in `xtask/src/conformance.rs`; the HTML normaliser it compares
 through is a port of `runner.ts`'s `normalizeHtml`, in `xtask/src/html.rs`.
 
 ---
 
-## Current status: skipped-but-present
+## Current status: **enforcing**, as of M2 S5
 
-`mt_md::render_to_static_html` returns `Unimplemented`, so every one of the
-1,324 examples reports `Skipped` and the runner exits 0 with a loud summary.
+`mt_md::render_to_static_html` answers, so all 1,324 examples run and the
+ratchet decides every one of them: **463 / 652 CommonMark and 476 / 672 GFM**,
+against floors of 71.0 % and 70.8 %.
 
-That is not the same as "not wired up". Running today already checks:
+### What it was, from M0 to M2 S4
+
+`mt_md::render_to_static_html` returned `Unimplemented`, so every one of the
+1,324 examples reported `Skipped` and the runner exited 0 with a loud summary.
+
+That was not the same as "not wired up". Running then already checked:
 
 - both fixture files parse, at the sizes `conformance.md` states (652 + 672);
 - `expected-failures.json` parses and every listed number names a real example
@@ -54,30 +66,50 @@ That is not the same as "not wired up". Running today already checks:
 - the listed failures leave enough room to clear the stated floor;
 - the ratchet's own decision table, unit-tested against synthetic inputs;
 - the HTML normaliser, unit-tested against every behaviour `runner.ts`
-  documents.
+  documents — and, **from M2 S5, checked against `runner.ts` itself**:
+  `cargo xtask normalize` feeds all 1,324 rendered fixtures and all 1,324
+  expected fixtures through both implementations and requires agreement. That
+  is M0 decision 12 and M1 §10's owed item, discharged. docs/M2.md §10 is
+  explicit that the gate is *agreement*, so the two limitations
+  `xtask/src/html.rs` reproduces on purpose must not be "fixed".
 
-## How to flip it on at M2
+## How it was flipped on at M2
 
 **There is nothing to flip.** The runner calls `mt_md::render_to_static_html`
 and treats `Err(Unimplemented)` as a skip. The first run where that function
 returns `Ok` is the first run where the ratchet enforces — no flag, no code
 change, no chance of forgetting.
 
-What *does* need doing, once, on that first run:
+What needed doing, once, on that first run — **all four done at M2 S5, in one
+commit**:
 
 1. **Re-baseline.** The inherited `expected-failures.json` is muya's failure
-   list, and the Rust engine will fail a different set. Regenerate it from
-   actual results, and read the diff carefully — you are choosing the floor,
-   and the floor can never be raised again.
+   list, and the Rust engine fails a different set. Regenerate it from actual
+   results, and read the diff carefully — you are choosing the floor, and the
+   floor can never be raised again. `cargo xtask conformance --update` writes
+   it; **78 to 189 and 90 to 196**, with seven removals in each suite that a
+   length cannot show. `conformance.md` has the diff in both directions.
 2. **Do not let the list grow past the gate.** Regenerating is not a licence
    to list everything that fails. `cargo xtask conformance` fails if the list
    is large enough to cap the pass rate below the floor, but that is a
-   backstop, not a review.
+   backstop, not a review. docs/M2.md §5 D5 is the review: the list may not
+   grow past the inherited length unless **every** additional entry is argued
+   individually in the same commit, and §6's mechanism table is that argument.
 3. **Update `conformance.md`** in the same commit, with per-section pass rates,
-   so the numbers in the repo describe the Rust engine rather than muya.
-4. **Delete `conformance::tests::every_suite_is_skipped_at_m0`.** It exists to
-   make the transition deliberate: it fails the moment the engine starts
-   rendering, and its message points here.
+   so the numbers in the repo describe the Rust engine rather than muya. Done,
+   and its inherited prose-versus-JSON inconsistency is fixed rather than
+   copied forward.
+4. **Delete `conformance::tests::every_suite_is_skipped_at_m0`.** It existed to
+   make the transition deliberate: it failed the moment the engine started
+   rendering, and its message pointed here. Deleted, and replaced by
+   `neither_suite_is_skipped_from_s5_on`, which guards the state it left
+   behind — a suite that goes back to skipping wholesale exits 0 with every
+   verdict green, and nothing else in the ratchet would notice.
+
+**And `floor_percent()` moves in the same commit** (D5's third point). Leave
+the constant alone and the list and the floor drift apart, so that a later
+regression can eat the whole margin between the measured rate and the
+inherited floor without the backstop ever firing.
 
 ---
 
@@ -239,9 +271,9 @@ Without a marktext clone the runner still reports `Skipped` and exits 0.
 
 | File | Origin |
 |---|---|
-| `expected-failures.json` | Copied verbatim from muya. The ratchet's floor. |
+| `expected-failures.json` | ~~Copied verbatim from muya.~~ **Regenerated at M2 S5** from this engine's own results (`--update`). The ratchet's floor. |
 | `divergences.json` | **Written here**, not inherited. The register of intentional differences from muya — see above. |
-| `conformance.md` | Copied verbatim. muya's baseline, captured at PR-6a (2026-05-20). |
+| `conformance.md` | ~~Copied verbatim. muya's baseline, captured at PR-6a (2026-05-20).~~ **Rewritten at M2 S5** — it describes this engine now. |
 | `fixtures/gfm-spec-0.29-gfm.json` | Copied verbatim. 672 examples. |
 | `fixtures/marktext-round-trip/` | Copied verbatim. 11 fixtures backported from marktext's `markdown-basic` tests; also used by the differential harness. |
 | `runner.ts`, `*.spec.ts` | Copied verbatim. Not executed here — they are the TypeScript runner, kept as the reference the Rust port is checked against. |
@@ -280,24 +312,34 @@ Re-vendoring changes what the ratchet measures, so moving to a newer CommonMark
 spec means re-baselining `expected-failures.json` and `conformance.md` in the
 same commit.
 
-### How much headroom the inherited list leaves
+### How much headroom the list leaves
 
-Almost none, which is the point.
+Almost none, which is the point — before **and** after the re-baseline.
 
 | Suite | Listed failures | Best achievable | Floor | Slack |
 |---|---:|---:|---:|---:|
-| CommonMark 0.31 | 78 / 652 | 88.0 % | 87.7 % | 2 examples |
-| GFM 0.29-gfm | 90 / 672 | 86.6 % | 86.3 % | 2 examples |
+| CommonMark 0.31, inherited | 78 / 652 | 88.0 % | 87.7 % | 2 examples |
+| GFM 0.29-gfm, inherited | 90 / 672 | 86.6 % | 86.3 % | 2 examples |
+| **CommonMark 0.31, M2 S5** | **189 / 652** | **71.0 %** | **71.0 %** | **0 examples** |
+| **GFM 0.29-gfm, M2 S5** | **196 / 672** | **70.8 %** | **70.8 %** | **0 examples** |
 
-So the inherited list *is* the floor, near enough. When re-baselining at M2,
-a list two entries longer than this one already fails the gate.
+The slack is now zero by construction: the list *is* today's failures and the
+floor is today's rate truncated to a tenth, so the backstop sits directly under
+the measurement. That is what D5's third point buys — the two cannot drift.
 
-### A known inconsistency, inherited
+It also makes explicit what was always true: **the backstop is not what holds
+the line, the ratchet is.** An unlisted example that starts failing is an
+`UnexpectedFailure` on the commit that breaks it, which is one example rather
+than a fraction of a percent.
 
-`conformance.md`'s prose says 80 CommonMark and 92 GFM examples fail;
-`expected-failures.json` lists 78 and 90. The prose additionally names
-CommonMark **84** and **89**, and GFM **54** and **59**.
+### ~~A known inconsistency, inherited~~ — fixed at M2 S5
 
-The JSON is what both runners read, so the prose is stale by four entries.
-Copied as-is rather than corrected, because §11.1 says *unchanged* — worth
-fixing when `conformance.md` is rewritten at M2.
+`conformance.md`'s prose said 80 CommonMark and 92 GFM examples failed while
+`expected-failures.json` listed 78 and 90, and it named CommonMark **84** and
+**89** and GFM **54** and **59** where the JSON did not. It was copied as-is
+rather than corrected, because §11.1 says *unchanged*, and this section said it
+was worth fixing when `conformance.md` was rewritten at M2.
+
+Fixed there, along with everything else in that file: every number in it is now
+printed by `cargo xtask conformance --sections`, and the two totals are the
+JSON's own lengths.

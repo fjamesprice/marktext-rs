@@ -29,13 +29,23 @@
 //! CI runner with no display, and if the CLI ever needs a window the harness
 //! stops working on exactly the platforms it is most needed on.
 //!
-//! ## M0 status
+//! ## `--to-html`, added at M2 S5
 //!
-//! `--dump-state` parses arguments, reads the file, and reports
-//! [`ExitCode::UNIMPLEMENTED`] because `mt_md::dump_state` is a stub. The
-//! comparison runner reports that as *skipped*, not *failed*. When `mt-md`
-//! lands in M1/M2 the exit code becomes 0 and the harness starts enforcing
-//! with no change to the harness itself.
+//! The command line onto `mt_md::render_to_static_html`, which is also what
+//! §11.1's conformance ratchet calls. It is the second user of
+//! [`ExitCode::UNIMPLEMENTED`] that S3's comment predicted — and the
+//! prediction was half right, because S5 opened that entry point too, so the
+//! code is inherited as a *contract* rather than as a behaviour. See
+//! [`Command::ToHtml`].
+//!
+//! ## M0 status, and what became of it
+//!
+//! `--dump-state` parsed arguments, read the file, and reported
+//! [`ExitCode::UNIMPLEMENTED`] because `mt_md::dump_state` was a stub; the
+//! comparison runner reported that as *skipped*, not *failed*. **M2 S3 turned
+//! that into exit 0** and `cargo xtask diff` started enforcing with no change
+//! to the harness — which is the M0 design working as intended, and is why the
+//! exit code is still defined here rather than deleted with its last user.
 
 use std::path::PathBuf;
 
@@ -65,6 +75,33 @@ pub enum Command {
         /// [`mt_md::Options::MUYA_DEFAULT`].
         spec_options: bool,
     },
+    /// Render a markdown file to static HTML — `mt_md::render_to_static_html`.
+    ///
+    /// **Added at M2 S5**, and it is the second user of
+    /// [`ExitCode::UNIMPLEMENTED`] the code comment above predicted. The
+    /// prediction was half right: the exit code is still defined, still
+    /// documented and still handled by `cargo xtask diff`, and `--to-html`
+    /// does **not** produce it either, because S5 opened the last of D6's
+    /// three entry points. What it inherits instead is the *contract* — the
+    /// signature `mt_md::render_to_static_html` keeps its `Result` for is
+    /// exactly this caller, and a milestone that reopens it (a renderer that
+    /// declines a document `mt-export` hands it) has an exit code to say so
+    /// with rather than one to invent.
+    ToHtml {
+        path: PathBuf,
+        /// Use [`mt_md::Options::SPEC`] instead of
+        /// [`mt_md::Options::MUYA_DEFAULT`].
+        spec_options: bool,
+        /// Run the output through `ammonia`. **Off by default**, matching the
+        /// spec runners rather than matching muya: `renderToStaticHTML`'s own
+        /// default is to sanitize, and the inversion here is deliberate
+        /// because a *command line* rendering a file the user owns is the
+        /// conformance-runner case rather than the untrusted-paste case, and
+        /// because a flag that is on by default cannot be discovered from
+        /// `--help` by someone comparing output. `mt_md`'s own default is
+        /// unchanged, which is where the safety argument belongs.
+        sanitize: bool,
+    },
     Help,
     Version,
 }
@@ -86,6 +123,7 @@ mt-cli — MarkText (Rust) command line
 
 USAGE:
     mt-cli --dump-state <FILE> [--spec-options]
+    mt-cli --to-html <FILE> [--spec-options] [--sanitize]
     mt-cli --help
     mt-cli --version
 
@@ -93,6 +131,12 @@ OPTIONS:
     --dump-state <FILE>   Print muya-compatible state JSON for FILE to stdout.
                           The Rust half of the differential-test harness
                           (RUST-REWRITE-PLAN.md §11.2).
+    --to-html <FILE>      Print static HTML for FILE to stdout. The command
+                          line onto mt_md::render_to_static_html (§11.1's
+                          conformance ratchet calls the same function).
+    --sanitize            Run --to-html's output through ammonia. Off by
+                          default, matching the spec runners; mt_md's own
+                          default is the other way round.
     --spec-options        Parse with every muya extension disabled, matching
                           the CommonMark/GFM spec runners. Default is muya's
                           own defaults (math and front matter on).
@@ -124,7 +168,8 @@ where
 
     let mut path: Option<PathBuf> = None;
     let mut spec_options = false;
-    let mut dump_state = false;
+    let mut sanitize = false;
+    let mut verb: Option<&'static str> = None;
     let mut i = 0;
 
     while i < args.len() {
@@ -132,11 +177,25 @@ where
             "--help" | "-h" => return Ok(Command::Help),
             "--version" | "-V" => return Ok(Command::Version),
             "--spec-options" => spec_options = true,
-            "--dump-state" => {
-                dump_state = true;
+            "--sanitize" => sanitize = true,
+            verb_arg @ ("--dump-state" | "--to-html") => {
+                // Two verbs rather than one, from S5. They are mutually
+                // exclusive because the alternative is deciding which wins,
+                // and a command line whose behaviour depends on flag order is
+                // one the differential harness could drive wrongly in silence.
+                if let Some(first) = verb {
+                    return Err(ArgError(format!(
+                        "{first} and {verb_arg} are mutually exclusive"
+                    )));
+                }
+                verb = Some(if verb_arg == "--dump-state" {
+                    "--dump-state"
+                } else {
+                    "--to-html"
+                });
                 i += 1;
                 let Some(value) = args.get(i) else {
-                    return Err(ArgError("--dump-state requires a FILE argument".into()));
+                    return Err(ArgError(format!("{verb_arg} requires a FILE argument")));
                 };
                 path = Some(PathBuf::from(value));
             }
@@ -145,14 +204,17 @@ where
         i += 1;
     }
 
-    if !dump_state {
+    let (Some(verb), Some(path)) = (verb, path) else {
         return Err(ArgError("no command given; try --help".into()));
-    }
-
-    match path {
-        Some(path) => Ok(Command::DumpState { path, spec_options }),
-        None => Err(ArgError("--dump-state requires a FILE argument".into())),
-    }
+    };
+    Ok(match verb {
+        "--to-html" => Command::ToHtml {
+            path,
+            spec_options,
+            sanitize,
+        },
+        _ => Command::DumpState { path, spec_options },
+    })
 }
 
 /// A file's bytes as **muya's file layer** would hand them to the parser.
@@ -232,6 +294,40 @@ pub fn run(command: Command, out: &mut dyn std::io::Write) -> i32 {
             let _ = writeln!(out, "{}", mt_md::dump_state(&markdown, options));
             ExitCode::SUCCESS
         }
+        Command::ToHtml {
+            path,
+            spec_options,
+            sanitize,
+        } => {
+            let markdown = match std::fs::read_to_string(&path) {
+                Ok(s) => read_markdown(&s),
+                Err(e) => {
+                    eprintln!("mt-cli: cannot read {}: {e}", path.display());
+                    return ExitCode::ERROR;
+                }
+            };
+            let options = if spec_options {
+                mt_md::Options::SPEC
+            } else {
+                mt_md::Options::MUYA_DEFAULT
+            };
+            // The `Err` arm no input reaches at M2, handled rather than
+            // unwrapped: `mt_md::render_to_static_html` keeps its `Result` for
+            // this caller, and `ExitCode::UNIMPLEMENTED` is what the contract
+            // means on a process boundary. Unwrapping here would turn a future
+            // "this renderer declines" into a panic and delete the exit code's
+            // only user.
+            match mt_md::render_to_static_html(&markdown, options, sanitize) {
+                Ok(html) => {
+                    let _ = writeln!(out, "{html}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("mt-cli: {e}");
+                    ExitCode::UNIMPLEMENTED
+                }
+            }
+        }
     }
 }
 
@@ -300,7 +396,9 @@ mod tests {
     fn help_writes_usage_and_succeeds() {
         let mut out = Vec::new();
         assert_eq!(run(Command::Help, &mut out), ExitCode::SUCCESS);
-        assert!(String::from_utf8_lossy(&out).contains("--dump-state"));
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.contains("--dump-state"));
+        assert!(text.contains("--to-html"));
     }
 
     /// **Replaces `dump_state_exits_unimplemented_at_m0`, deleted at M2 S3.**
@@ -390,6 +488,98 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// `--to-html`'s argument surface, and the one rule it adds: the two verbs
+    /// are mutually exclusive, so a command line's behaviour never depends on
+    /// flag order.
+    #[test]
+    fn parses_to_html_and_refuses_two_verbs() {
+        assert_eq!(
+            parse_args(["--to-html", "a.md"]),
+            Ok(Command::ToHtml {
+                path: PathBuf::from("a.md"),
+                spec_options: false,
+                sanitize: false,
+            })
+        );
+        assert_eq!(
+            parse_args(["--to-html", "a.md", "--spec-options", "--sanitize"]),
+            Ok(Command::ToHtml {
+                path: PathBuf::from("a.md"),
+                spec_options: true,
+                sanitize: true,
+            })
+        );
+        assert!(parse_args(["--to-html"]).is_err());
+        assert!(parse_args(["--dump-state", "a.md", "--to-html", "b.md"]).is_err());
+        assert!(parse_args(["--to-html", "a.md", "--dump-state", "b.md"]).is_err());
+    }
+
+    /// D6's third ratchet at the process boundary: `--to-html` exits 0 and
+    /// prints HTML, where before S5 the same command did not exist and the
+    /// function behind it exited 3.
+    #[test]
+    fn to_html_prints_html_and_succeeds() {
+        let dir = std::env::temp_dir().join(format!("mt-cli-to-html-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("a.md");
+        std::fs::write(
+            &path,
+            "# hi
+
+<script>x</script>
+",
+        )
+        .expect("write");
+
+        let mut out = Vec::new();
+        let code = run(
+            Command::ToHtml {
+                path: path.clone(),
+                spec_options: true,
+                sanitize: false,
+            },
+            &mut out,
+        );
+        assert_eq!(code, ExitCode::SUCCESS);
+        let html = String::from_utf8_lossy(&out).into_owned();
+        assert!(html.contains("<h1>hi</h1>"), "{html}");
+        assert!(html.contains("<script>"), "unsanitized by default: {html}");
+
+        let mut out = Vec::new();
+        let code = run(
+            Command::ToHtml {
+                path,
+                spec_options: true,
+                sanitize: true,
+            },
+            &mut out,
+        );
+        assert_eq!(code, ExitCode::SUCCESS);
+        let html = String::from_utf8_lossy(&out).into_owned();
+        assert!(html.contains("<h1>hi</h1>"), "{html}");
+        assert!(!html.contains("<script"), "{html}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn to_html_on_a_missing_file_is_an_error_not_unimplemented() {
+        let mut out = Vec::new();
+        let code = run(
+            Command::ToHtml {
+                path: PathBuf::from("no/such/file.md"),
+                spec_options: false,
+                sanitize: false,
+            },
+            &mut out,
+        );
+        assert_eq!(
+            code,
+            ExitCode::ERROR,
+            "an unreadable file is not `not implemented`"
+        );
     }
 
     #[test]

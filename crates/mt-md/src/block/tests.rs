@@ -303,36 +303,75 @@ fn three_dollars_are_not_a_math_fence() {
 
 // --- what S1 does not do, recorded rather than left silent -------------------
 
-/// `Options::footnote` has no effect on the block pass, and this is where that
-/// is written down rather than discovered.
+/// `Options::footnote` gates muya's own `marked` block extension, and this is
+/// where that stopped being a gap.
 ///
-/// muya's footnotes are its own `marked` block extension — `[^id]:` with a
-/// 4-space de-indent and a recursive lex, `utils/marked/extensions/footnote.ts`
-/// — not GFM's, so `pulldown-cmark`'s `ENABLE_FOOTNOTES` is not a substitute
-/// and is deliberately off ([`cmark_options`]). Both option sets in S1's 1344
-/// inputs have `footnote: false`, so the gate says nothing about this either
-/// way.
+/// S1 wrote this test to record that the flag did **nothing** —
+/// `pulldown-cmark`'s `ENABLE_FOOTNOTES` is GFM's syntax and not muya's, so it
+/// is not a substitute and stays off ([`cmark_options`]). S3 answered the half
+/// that was about the label map (`[^a]: note` registers the label `^a` with
+/// footnotes *off*, in both engines). S5 landed the extension itself, so the
+/// test is flipped rather than deleted: the `false` arm still asserts exactly
+/// what S1 asserted, because both option sets the harnesses drive have
+/// `footnote: false` and that behaviour may not move.
 ///
-/// Under `footnote: false` — which is what both engines are actually driven
-/// with — muya emits a plain paragraph, and so does the port. **Owed to S3**,
-/// where the label-map pass lands; M2.md's owed list carries it.
+/// Every expected value below was measured from the running engine with
+/// `{ footnote: true }`, not derived from the regex.
 #[test]
-fn a_footnote_definition_is_a_paragraph_and_the_footnote_option_changes_nothing_yet() {
+fn the_footnote_option_gates_muyas_own_block_extension() {
+    let on = Options {
+        footnote: true,
+        ..MUYA
+    };
+
+    // Off — S1's assertions, unchanged. This is the arm the 1344 exercise.
     assert_eq!(names("[^a]: note\n", MUYA), ["paragraph"]);
     assert_eq!(
         names("text\n\n[^a]: note\n", MUYA),
         ["paragraph", "paragraph"]
     );
 
-    let with_footnotes = Options {
-        footnote: true,
-        ..MUYA
-    };
+    // On — a container, with the identifier in `meta` and the body re-lexed.
+    let s = state("text[^1]\n\n[^1]: definition\n", on);
+    assert_eq!(s[0]["name"], json!("paragraph"));
+    assert_eq!(s[1]["name"], json!("footnote"));
+    assert_eq!(s[1]["meta"], json!({ "identifier": "1" }));
+    assert_eq!(s[1]["children"][0]["text"], json!("definition"));
+
+    // The four-space de-indent, and the recursive lex it exists for: without
+    // it the body is an indented code block rather than a list.
+    let s = state("t[^n]\n\n[^n]: intro\n\n    - item a\n    - item b\n", on);
     assert_eq!(
-        names("[^a]: note\n", with_footnotes),
-        names("[^a]: note\n", MUYA),
-        "turning the option on changes nothing today — that is the gap, not a design"
+        names_of(&s[1]),
+        ["paragraph", "bullet-list"],
+        "measured from muya with footnote: true"
     );
+
+    // The identifier class excludes `^`, `[`, `]` and whitespace, and the
+    // lookbehind lets a backslash escape the closing bracket.
+    assert_eq!(names("[^a b]: note\n", on), ["paragraph"]);
+    assert_eq!(names("[^^a]: note\n", on), ["paragraph"]);
+    assert_eq!(names("[^a\\]: note\n", on), ["paragraph"]);
+
+    // A definition may interrupt a paragraph — that is what the extension's
+    // `start()` hook buys, and `pulldown-cmark` has no such rule.
+    assert_eq!(
+        names("Lorem\n[^1]: def\n", on),
+        ["paragraph", "footnote", "  paragraph"]
+    );
+
+    // …but not inside a fence, where the lexer never reaches a token boundary.
+    assert_eq!(names("```\n[^1]: def\n```\n", on), ["code-block"]);
+}
+
+/// The names of a state's children, for the nested assertions above.
+fn names_of(state: &serde_json::Value) -> Vec<String> {
+    state["children"]
+        .as_array()
+        .expect("a container")
+        .iter()
+        .map(|child| child["name"].as_str().expect("a name").to_string())
+        .collect()
 }
 
 // --- mechanism 6: front matter ----------------------------------------------

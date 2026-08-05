@@ -30,11 +30,16 @@
 //! - Tag names are not lower-cased by the attribute pass (only by the
 //!   void-tag pass, which rewrites the name from a fixed list).
 //!
-//! **Verification owed at M2.** Nothing here can be checked end-to-end until
-//! `mt_md::render_to_static_html` produces output. When it does, the cheapest
-//! high-confidence check is differential: feed the same HTML corpus through
-//! this function and through `normalizeHtml` in `spec/runner.ts` and assert
-//! they agree. That is a few lines on top of the harness in `diff.rs`.
+//! ~~**Verification owed at M2.**~~ — **paid at M2 S5.** Nothing here could be
+//! checked end-to-end until `mt_md::render_to_static_html` produced output;
+//! when it did, the cheapest high-confidence check was the differential this
+//! paragraph named. It is [`crate::normalize`]: the same HTML through this
+//! function and through `normalizeHtml` in `spec/runner.ts`, over all 1,324
+//! rendered fixtures **and** the 1,324 expected ones, because the conformance
+//! comparison normalises both sides. **2,648 of 2,648 agree.**
+//!
+//! Which makes the two limitations above a *checked* claim rather than a
+//! stated one — and makes "fixing" either of them a way to break the gate.
 
 /// Void elements whose self-closing form is normalised. Same list, same order
 /// as `voidTags` in `runner.ts`.

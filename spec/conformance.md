@@ -1,99 +1,172 @@
 # CommonMark / GFM spec conformance
 
-Baseline captured at PR-6a (2026-05-20).
+**Re-baselined at M2 S5 (2026-08-04).** Everything below describes the **Rust**
+engine. The file it replaces was copied verbatim from muya at PR-6a
+(2026-05-20) and described `getHighlightHtml` — `marked` plus Prism plus
+DOMPurify — which is a different pipeline, not an older version of this one.
 
-Re-run via: `pnpm --filter @muyajs/core test:spec`. The runner reads
-`expected-failures.json` to lock the baseline: any example currently
-listed that starts passing fails the suite (you must remove it), and any
-example NOT listed must continue to pass. Net result: compliance can only
-go up.
+Re-run via:
 
-Spec runners call `renderToStaticHTML(..., { sanitize: false })` — they
-measure the *parser*'s spec compliance, not the DOMPurify sanitiser
-(which is correctly aggressive and would strip raw-HTML allowance examples).
+```sh
+cargo xtask conformance            # the ratchet
+cargo xtask conformance --sections # the tables below
+```
+
+The runner reads `expected-failures.json` to lock the baseline: any listed
+example that starts passing fails the suite (you must delist it), and any
+unlisted example must continue to pass. Net result: **compliance can only go
+up.** `spec/README.md` has the full decision table.
+
+Both suites call `render_to_static_html(…, sanitize = false)` — they measure
+the *parser*, not the sanitiser, and CommonMark §6.9 explicitly tests that an
+unknown tag like `<bab>` survives.
 
 ## Headline
 
-| Suite | Passed | Total | Pass rate |
-|---|---|---|---|
-| CommonMark 0.31 | 572 | 652 | 87.7% |
-| GFM 0.29-gfm | 580 | 672 | 86.3% |
+| Suite | Passed | Total | Pass rate | Floor |
+|---|---:|---:|---:|---:|
+| CommonMark 0.31 | 463 | 652 | 71.0 % | 71.0 % |
+| GFM 0.29-gfm | 476 | 672 | 70.8 % | 70.8 % |
+
+muya scores 87.7 % and 86.3 % on the same fixtures. **The gap is one decision
+and it is written down**: docs/M2.md §4 C3 renders HTML through `Document`, and
+`crates/mt-md/src/html.rs` renders each leaf's inline layer with
+`mt_inline::tokenizer` — muya's own **WYSIWYG** tokenizer, which is what the
+editor uses and what M1 verified against the reference engine over 4,264
+inputs. `renderToStaticHTML` does not use it; it uses `marked`'s inline parser,
+which the editor never sees. So the two numbers measure different engines, and
+this one measures the engine the application ships.
+
+Read `expected-failures.json` as a **to-do list for `mt-inline`**, because that
+is what it now is: 62 % on CommonMark §6.2 *Emphasis and strong emphasis* is a
+statement about what the editor renders, not only about what the exporter
+exports.
+
+## Where the residue is
+
+Blocks are `pulldown-cmark` through the mapping layer and agree with
+`MarkdownToState` on all 1,344 of docs/M2.md §4 C1's inputs; inlines are the
+hand-written regex lexer. CommonMark, split at that seam:
+
+| Layer | Passed | Total | Rate |
+|---|---:|---:|---:|
+| Blocks — §1 Tabs, §4 leaf blocks, §5 container blocks | 247 | 295 | **83.7 %** |
+| Inlines — §2.4/§2.5 escapes and entities, §6 in full | 214 | 355 | **60.3 %** |
+| §3 Precedence and §6.0 Inlines | 2 | 2 | 100.0 % |
+
+`Tabs` is 1 / 11 in both suites and ten of those ten are a **fixture** defect
+shared with muya: the `commonmark-spec` npm package ships `→` (U+2192) where
+the spec means a tab, on *both* sides of the example, so example 1 asks for
+`<pre><code>` from a line that is a paragraph in any conforming engine. All ten
+were on muya's inherited list too.
 
 ## CommonMark 0.31 — pass rate by section
 
 | Section | Passed | Total | Pass rate |
-|---|---|---|---|
-| ATX headings | 17 | 18 | 94.4% |
-| Autolinks | 14 | 19 | 73.7% |
-| Backslash escapes | 12 | 13 | 92.3% |
-| Blank lines | 1 | 1 | 100.0% |
-| Block quotes | 23 | 25 | 92.0% |
-| Code spans | 22 | 22 | 100.0% |
-| Emphasis and strong emphasis | 132 | 132 | 100.0% |
-| Entity and numeric character references | 5 | 17 | 29.4% |
-| Fenced code blocks | 28 | 29 | 96.6% |
-| Hard line breaks | 14 | 15 | 93.3% |
-| HTML blocks | 41 | 44 | 93.2% |
-| Images | 21 | 22 | 95.5% |
-| Indented code blocks | 11 | 12 | 91.7% |
-| Inlines | 1 | 1 | 100.0% |
-| Link reference definitions | 26 | 27 | 96.3% |
-| Links | 75 | 90 | 83.3% |
-| List items | 42 | 48 | 87.5% |
-| Lists | 20 | 26 | 76.9% |
-| Paragraphs | 4 | 8 | 50.0% |
-| Precedence | 1 | 1 | 100.0% |
-| Raw HTML | 18 | 20 | 90.0% |
-| Setext headings | 22 | 27 | 81.5% |
-| Soft line breaks | 1 | 2 | 50.0% |
-| Tabs | 1 | 11 | 9.1% |
-| Textual content | 2 | 3 | 66.7% |
-| Thematic breaks | 18 | 19 | 94.7% |
+|---|---:|---:|---:|
+| Tabs | 1 | 11 | 9.1 % |
+| Backslash escapes | 8 | 13 | 61.5 % |
+| Entity and numeric character references | 4 | 17 | 23.5 % |
+| Precedence | 1 | 1 | 100.0 % |
+| Thematic breaks | 18 | 19 | 94.7 % |
+| ATX headings | 17 | 18 | 94.4 % |
+| Setext headings | 24 | 27 | 88.9 % |
+| Indented code blocks | 11 | 12 | 91.7 % |
+| Fenced code blocks | 28 | 29 | 96.6 % |
+| HTML blocks | 40 | 44 | 90.9 % |
+| Link reference definitions | 18 | 27 | 66.7 % |
+| Paragraphs | 4 | 8 | 50.0 % |
+| Blank lines | 1 | 1 | 100.0 % |
+| Block quotes | 23 | 25 | 92.0 % |
+| List items | 42 | 48 | 87.5 % |
+| Lists | 20 | 26 | 76.9 % |
+| Inlines | 1 | 1 | 100.0 % |
+| Code spans | 16 | 22 | 72.7 % |
+| Emphasis and strong emphasis | 82 | 132 | 62.1 % |
+| Links | 56 | 90 | 62.2 % |
+| Images | 17 | 22 | 77.3 % |
+| Autolinks | 11 | 19 | 57.9 % |
+| Raw HTML | 8 | 20 | 40.0 % |
+| Hard line breaks | 9 | 15 | 60.0 % |
+| Soft line breaks | 1 | 2 | 50.0 % |
+| Textual content | 2 | 3 | 66.7 % |
 
-### Failing examples (CommonMark 0.31)
-
-80 examples currently fail. Numbers are locked in `expected-failures.json`:
-
-> 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 25, 26, 27, 28, 30, 32, 33, 34, 37, 38, 39, 40, 49, 70, 82, 84, 87, 89, 93, 113, 133, 148, 155, 174, 197, 222, 223, 224, 226, 241, 252, 255, 275, 276, 280, 294, 296, 307, 318, 319, 320, 321, 323, 503, 512, 518, 519, 520, 524, 526, 528, 532, 533, 536, 538, 540, 552, 556, 587, 595, 602, 608, 611, 612, 620, 622, 645, 649, 650
+**189 examples fail**, listed in `expected-failures.json`.
 
 ## GFM 0.29-gfm — pass rate by section
 
 | Section | Passed | Total | Pass rate |
-|---|---|---|---|
-| ATX headings | 17 | 18 | 94.4% |
-| Autolinks | 14 | 19 | 73.7% |
-| Autolinks (extension) | 9 | 11 | 81.8% |
-| Backslash escapes | 12 | 13 | 92.3% |
-| Blank lines | 1 | 1 | 100.0% |
-| Block quotes | 23 | 25 | 92.0% |
-| Code spans | 22 | 22 | 100.0% |
-| Disallowed Raw HTML (extension) | 0 | 1 | 0.0% |
-| Emphasis and strong emphasis | 122 | 131 | 93.1% |
-| Entity and numeric character references | 5 | 17 | 29.4% |
-| Fenced code blocks | 28 | 29 | 96.6% |
-| Hard line breaks | 14 | 15 | 93.3% |
-| HTML blocks | 40 | 43 | 93.0% |
-| Images | 21 | 22 | 95.5% |
-| Indented code blocks | 11 | 12 | 91.7% |
-| Inlines | 1 | 1 | 100.0% |
-| Link reference definitions | 27 | 28 | 96.4% |
-| Links | 73 | 87 | 83.9% |
-| List items | 42 | 48 | 87.5% |
-| Lists | 20 | 26 | 76.9% |
-| Paragraphs | 4 | 8 | 50.0% |
-| Precedence | 1 | 1 | 100.0% |
-| Raw HTML | 18 | 20 | 90.0% |
-| Setext headings | 22 | 27 | 81.5% |
-| Soft line breaks | 1 | 2 | 50.0% |
-| Strikethrough (extension) | 2 | 2 | 100.0% |
-| Tables (extension) | 8 | 8 | 100.0% |
-| Tabs | 1 | 11 | 9.1% |
-| Task list items (extension) | 1 | 2 | 50.0% |
-| Textual content | 2 | 3 | 66.7% |
-| Thematic breaks | 18 | 19 | 94.7% |
+|---|---:|---:|---:|
+| Tabs | 1 | 11 | 9.1 % |
+| Precedence | 1 | 1 | 100.0 % |
+| Thematic breaks | 18 | 19 | 94.7 % |
+| ATX headings | 17 | 18 | 94.4 % |
+| Setext headings | 24 | 27 | 88.9 % |
+| Indented code blocks | 11 | 12 | 91.7 % |
+| Fenced code blocks | 28 | 29 | 96.6 % |
+| HTML blocks | 39 | 43 | 90.7 % |
+| Link reference definitions | 19 | 28 | 67.9 % |
+| Paragraphs | 4 | 8 | 50.0 % |
+| Blank lines | 1 | 1 | 100.0 % |
+| **Tables (extension)** | 8 | 8 | **100.0 %** |
+| Block quotes | 23 | 25 | 92.0 % |
+| List items | 42 | 48 | 87.5 % |
+| Task list items (extension) | 1 | 2 | 50.0 % |
+| Lists | 20 | 26 | 76.9 % |
+| Inlines | 1 | 1 | 100.0 % |
+| Backslash escapes | 8 | 13 | 61.5 % |
+| Entity and numeric character references | 4 | 17 | 23.5 % |
+| Code spans | 16 | 22 | 72.7 % |
+| Emphasis and strong emphasis | 79 | 131 | 60.3 % |
+| **Strikethrough (extension)** | 2 | 2 | **100.0 %** |
+| Links | 55 | 87 | 63.2 % |
+| Images | 17 | 22 | 77.3 % |
+| Autolinks | 11 | 19 | 57.9 % |
+| Autolinks (extension) | 6 | 11 | 54.5 % |
+| Raw HTML | 8 | 20 | 40.0 % |
+| Disallowed Raw HTML (extension) | 0 | 1 | 0.0 % |
+| Hard line breaks | 9 | 15 | 60.0 % |
+| Soft line breaks | 1 | 2 | 50.0 % |
+| Textual content | 2 | 3 | 66.7 % |
 
-### Failing examples (GFM 0.29-gfm)
+**196 examples fail**, listed in `expected-failures.json`.
 
-92 examples currently fail. Numbers are locked in `expected-failures.json`:
+The two GFM **block** extensions this milestone maps — tables and
+strikethrough — are at 100 %, which is the half of the number that comes from
+`pulldown-cmark` and the mapping layer rather than from the inline lexer.
 
-> 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 19, 40, 52, 54, 57, 59, 63, 83, 103, 118, 125, 143, 166, 192, 193, 194, 196, 219, 230, 233, 253, 254, 258, 272, 274, 280, 287, 298, 299, 300, 301, 303, 308, 321, 322, 323, 324, 326, 328, 329, 330, 333, 334, 335, 336, 398, 426, 434, 435, 436, 473, 474, 475, 477, 511, 520, 526, 527, 528, 532, 534, 536, 540, 541, 544, 546, 560, 564, 595, 603, 610, 616, 619, 620, 626, 630, 639, 641, 652, 665, 669, 670
+## The diff against the inherited list, in both directions
+
+docs/M2.md §5 D5 requires this to be read rather than accepted, and requires
+both directions rather than a length.
+
+| | CommonMark | GFM |
+|---|---:|---:|
+| Inherited (muya's) | 78 | 90 |
+| Regenerated | 189 | 196 |
+| Kept — both engines fail | 71 | 83 |
+| **Removed — muya fails, the port passes** | **7** | **7** |
+| Added — muya passes, the port fails | 118 | 113 |
+
+The seven removals are one class in each suite and they are the interesting
+direction, because a *length* cannot show them:
+
+| CommonMark | GFM | What |
+|---:|---:|---|
+| 155, 174 | 125, 143 | an HTML block ended by a blank line, inside and outside a block quote |
+| 512 | 520 | `[link [foo [bar]]](/uri)` — nested brackets in link text |
+| 524, 536 | 532, 544 | `[foo <bar attr="](baz)">` — a `]` inside a raw HTML attribute value |
+| 526, 538 | 534, 546 | an autolink whose URL contains `](` |
+
+docs/M2.md §6's "S5's re-baseline" carries the 231 additions with a named,
+measured mechanism for each — which is what D5 means by *argued individually*.
+
+## A known inconsistency, inherited — **fixed here**
+
+The file this replaces said in prose that 80 CommonMark and 92 GFM examples
+failed while `expected-failures.json` listed 78 and 90, and named CommonMark 84
+and 89 and GFM 54 and 59 as failing where the JSON did not. `spec/README.md`
+recorded the discrepancy and said it was worth fixing when this file was
+rewritten at M2. It is: every number above is printed by
+`cargo xtask conformance --sections`, and the two totals are
+`expected-failures.json`'s own lengths.

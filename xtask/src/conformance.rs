@@ -8,30 +8,32 @@
 //! - A **listed** example that starts **passing** fails CI. Delist it.
 //! - An **unlisted** example that starts **failing** fails CI. Fix it.
 //!
-//! Net effect: **compliance can only go up.** The floor is muya's current
-//! 87.7 % CommonMark 0.31 and 86.3 % GFM 0.29, which is also the M2 exit gate
-//! (§9). Because `pulldown-cmark` handles blocks at >99 %, the realistic
-//! target is meaningfully higher and most residual failures should be in
-//! block-tree mapping rather than in parsing.
+//! Net effect: **compliance can only go up.** ~~The floor is muya's current
+//! 87.7 % CommonMark 0.31 and 86.3 % GFM 0.29~~ — see [`Suite::floor_percent`],
+//! re-baselined at M2 S5. The rest of that sentence held up better than the
+//! numbers did: `pulldown-cmark` does handle blocks at >99 %, the port's block
+//! sections score 82.7 %, and the residue is in **inlines**.
 //!
-//! # M0 status: skipped-but-present
+//! # Status: enforcing, from M2 S5
 //!
-//! `mt_md::render_to_static_html` returns `Unimplemented`, so every example
-//! reports [`Verdict::Skipped`] and the runner exits 0 with a loud summary.
-//! Nothing is asserted yet — but the fixtures are loaded, parsed, and counted,
-//! and the ratchet bookkeeping itself is unit-tested below. That means the
-//! things that rot silently (a malformed fixture file, a stale
-//! expected-failures list, a broken JSON shape) are caught from day one.
+//! `mt_md::render_to_static_html` answers, so every example runs and every one
+//! gets a verdict: **463 / 652 CommonMark and 476 / 672 GFM**.
 //!
-//! ## Flipping it on at M2
+//! ## What it was, and how it flipped
 //!
-//! There is nothing to flip. When `render_to_static_html` starts returning
-//! `Ok`, [`Verdict::Skipped`] stops being produced and the ratchet begins
-//! enforcing on the very same run — see `spec/README.md`. The one thing to do
-//! at that point is re-baseline: run `cargo xtask conformance --update` to
-//! rewrite `expected-failures.json` from the actual results, review the diff
-//! **carefully** (it is the new floor and it can never be raised again), and
-//! commit it with an updated `spec/conformance.md`.
+//! From M0 to M2 S4 that function returned `Unimplemented`, so every example
+//! reported [`Verdict::Skipped`] and the runner exited 0 with a loud summary.
+//! Nothing was asserted — but the fixtures were loaded, parsed and counted, and
+//! the ratchet bookkeeping was unit-tested below, so the things that rot
+//! silently (a malformed fixture file, a stale expected-failures list, a
+//! broken JSON shape) were caught from day one.
+//!
+//! There was nothing to flip: the first `Ok` stopped producing
+//! [`Verdict::Skipped`] and the ratchet began enforcing on the very same run,
+//! which is M0 decision 7 working as designed. What S5 had to do once, in one
+//! commit, is `spec/README.md`'s four steps — regenerate with `--update`, read
+//! the diff in **both** directions, rewrite `spec/conformance.md`, and raise
+//! [`Suite::floor_percent`] to the measured rate.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -91,10 +93,33 @@ impl Suite {
 
     /// The pass-rate floor from `spec/conformance.md`. Compliance may not fall
     /// below this, ever.
+    ///
+    /// # Re-baselined at M2 S5, and this is the one-way door
+    ///
+    /// It was **87.7 / 86.3** from M0 until S5, and those were *muya's*
+    /// numbers: `getHighlightHtml`'s, which is `marked` plus Prism plus
+    /// DOMPurify. docs/M2.md §4 C3 decided `render_to_static_html` renders
+    /// through `Document` instead and said in as many words that this
+    /// **guarantees** the number differs; §5 D5 decided that the regenerated
+    /// list and this constant move in the same commit, so that a later
+    /// regression cannot eat the margin between them without the backstop
+    /// firing.
+    ///
+    /// **463 of 652 and 476 of 672** — 71.01 % and 70.83 %, truncated to a
+    /// tenth. Truncated rather than rounded, because a floor above the
+    /// measured rate is a gate no commit can pass; `spec/conformance.md`
+    /// carries the per-section breakdown and docs/M2.md §6 carries the
+    /// argument for every one of the 231 entries the list gained.
+    ///
+    /// This is a **backstop and not a review** (`spec/README.md` says so in
+    /// those words). The thing that actually holds the line is the ratchet:
+    /// with the list regenerated to exactly today's failures, an unlisted
+    /// example that starts failing is an `UnexpectedFailure` long before the
+    /// aggregate moves.
     pub fn floor_percent(self) -> f64 {
         match self {
-            Suite::CommonMark => 87.7,
-            Suite::Gfm => 86.3,
+            Suite::CommonMark => 71.0,
+            Suite::Gfm => 70.8,
         }
     }
 }
@@ -140,6 +165,24 @@ impl Verdict {
     }
 }
 
+/// One section's tally, for the per-section breakdown `spec/conformance.md`
+/// is written from.
+#[derive(Debug, Default, Clone)]
+pub struct SectionReport {
+    pub section: String,
+    pub total: usize,
+    pub passed: usize,
+}
+
+impl SectionReport {
+    pub fn pass_rate(&self) -> f64 {
+        if self.total == 0 {
+            return 0.0;
+        }
+        (self.passed as f64 / self.total as f64) * 100.0
+    }
+}
+
 /// The outcome of running one suite.
 #[derive(Debug, Default, Clone)]
 pub struct SuiteReport {
@@ -156,6 +199,12 @@ pub struct SuiteReport {
     pub stale_listings: Vec<u32>,
     /// How many examples produced a verdict that must fail the build.
     pub ci_failures: usize,
+    /// Every example that failed, listed or not, in document order. This is
+    /// what `--update` writes, and what M2.md §5 D5 requires be *read* rather
+    /// than accepted — the re-baseline is a one-way door.
+    pub failing: Vec<u32>,
+    /// Per-section tallies, in first-appearance order.
+    pub sections: Vec<SectionReport>,
 }
 
 impl SuiteReport {
@@ -258,7 +307,25 @@ pub fn run_suite(spec_dir: &Path, suite: Suite) -> Result<SuiteReport, String> {
     let mut seen: BTreeSet<u32> = BTreeSet::new();
     for example in &examples {
         seen.insert(example.number);
-        let verdict = Verdict::decide(listed.contains(&example.number), run_example(example));
+        let outcome = run_example(example);
+        if outcome == Some(false) {
+            report.failing.push(example.number);
+        }
+        if let Some(passed) = outcome {
+            let section = match report.sections.last_mut() {
+                Some(last) if last.section == example.section => last,
+                _ => {
+                    report.sections.push(SectionReport {
+                        section: example.section.clone(),
+                        ..Default::default()
+                    });
+                    report.sections.last_mut().expect("just pushed")
+                }
+            };
+            section.total += 1;
+            section.passed += usize::from(passed);
+        }
+        let verdict = Verdict::decide(listed.contains(&example.number), outcome);
         if verdict.is_ci_failure() {
             report.ci_failures += 1;
         }
@@ -279,18 +346,81 @@ pub fn run_suite(spec_dir: &Path, suite: Suite) -> Result<SuiteReport, String> {
 }
 
 /// `cargo xtask conformance`.
-pub fn main(repo_root: &Path) -> Result<i32, String> {
+pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
     let spec_dir: PathBuf = repo_root.join("spec");
     let mut failed = false;
     let mut all_skipped = true;
+    let mut only: Option<Suite> = None;
+    let mut sections = false;
+    let mut update = false;
+    let mut show: Vec<u32> = Vec::new();
+
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--suite" => {
+                let name = rest.next().ok_or("--suite requires commonmark|gfm")?;
+                only = Some(match name.as_str() {
+                    "commonmark" => Suite::CommonMark,
+                    "gfm" => Suite::Gfm,
+                    other => return Err(format!("unknown suite: {other}")),
+                });
+            }
+            "--sections" => sections = true,
+            "--show" => {
+                let numbers = rest
+                    .next()
+                    .ok_or("--show requires a comma-separated list")?;
+                show = numbers
+                    .split(',')
+                    .map(|n| n.trim().parse::<u32>().map_err(|e| format!("{n}: {e}")))
+                    .collect::<Result<Vec<u32>, String>>()?;
+            }
+            "--update" => update = true,
+            other => return Err(format!("unrecognised argument: {other}")),
+        }
+    }
 
     println!("conformance ratchet — RUST-REWRITE-PLAN.md §11.1");
     println!("spec dir: {}", spec_dir.display());
     println!();
 
+    if !show.is_empty() {
+        for suite in Suite::ALL {
+            if only.is_some_and(|wanted| wanted != suite) {
+                continue;
+            }
+            for example in load_examples(&spec_dir, suite)? {
+                if !show.contains(&example.number) {
+                    continue;
+                }
+                let actual =
+                    mt_md::render_to_static_html(&example.markdown, mt_md::Options::SPEC, false)
+                        .unwrap_or_else(|_| "<unimplemented>".to_string());
+                println!(
+                    "--- {} #{} ({})",
+                    suite.label(),
+                    example.number,
+                    example.section
+                );
+                println!("  markdown  {:?}", example.markdown);
+                println!("  expected  {:?}", normalize_html(&example.html));
+                println!("  actual    {:?}", normalize_html(&actual));
+                println!();
+            }
+        }
+        return Ok(0);
+    }
+
+    let mut regenerated: Vec<(Suite, Vec<u32>)> = Vec::new();
+
     for suite in Suite::ALL {
+        if only.is_some_and(|wanted| wanted != suite) {
+            continue;
+        }
         let report = run_suite(&spec_dir, suite)?;
         all_skipped &= report.everything_skipped();
+        regenerated.push((suite, report.failing.clone()));
 
         println!("{}", suite.label());
         println!("  examples          {}", report.total);
@@ -345,7 +475,30 @@ pub fn main(repo_root: &Path) -> Result<i32, String> {
                 report.stale_listings
             );
         }
+        if sections && !report.everything_skipped() {
+            println!();
+            for section in &report.sections {
+                println!(
+                    "    {:>4} / {:>4}  {:>5.1} %  {}",
+                    section.passed,
+                    section.total,
+                    section.pass_rate(),
+                    section.section
+                );
+            }
+        }
         println!();
+    }
+
+    if update {
+        write_expected_failures(&spec_dir, &regenerated, only.is_none())?;
+        println!(
+            "expected-failures.json rewritten from the measured results.\n\
+             M2.md §5 D5: read the diff in BOTH directions, argue every addition\n\
+             individually in the same commit, and raise floor_percent() to the\n\
+             measured rate in that same commit."
+        );
+        return Ok(0);
     }
 
     if all_skipped {
@@ -357,6 +510,44 @@ pub fn main(repo_root: &Path) -> Result<i32, String> {
     }
 
     Ok(if failed { 1 } else { 0 })
+}
+
+/// Rewrite `spec/expected-failures.json` from the measured results.
+///
+/// `spec/README.md` step 1, and M2.md §5 D5's one-way door. Deliberately
+/// refuses to run for a single suite: rewriting one key from a run that
+/// measured only one suite would leave the other key describing a different
+/// commit, and the file has no way to say so.
+fn write_expected_failures(
+    spec_dir: &Path,
+    measured: &[(Suite, Vec<u32>)],
+    both_suites: bool,
+) -> Result<(), String> {
+    if !both_suites {
+        return Err("--update rewrites both keys of expected-failures.json, \
+                    so it cannot be combined with --suite"
+            .to_string());
+    }
+    let mut out = String::from("{\n");
+    for (index, (suite, failing)) in measured.iter().enumerate() {
+        out.push_str(&format!("  \"{}\": [\n", suite.key()));
+        let numbers: Vec<String> = failing.iter().map(u32::to_string).collect();
+        for (row, chunk) in numbers.chunks(10).enumerate() {
+            let last = (row + 1) * 10 >= numbers.len();
+            out.push_str("    ");
+            out.push_str(&chunk.join(", "));
+            out.push_str(if last { "\n" } else { ",\n" });
+        }
+        out.push_str("  ]");
+        out.push_str(if index + 1 == measured.len() {
+            "\n"
+        } else {
+            ",\n"
+        });
+    }
+    out.push_str("}\n");
+    let path = spec_dir.join("expected-failures.json");
+    std::fs::write(&path, out).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
 #[cfg(test)]
@@ -474,18 +665,31 @@ mod tests {
         }
     }
 
-    /// M0 state, asserted so that the day it changes is the day someone reads
-    /// spec/README.md and re-baselines deliberately.
+    // `every_suite_is_skipped_at_m0` lived here from M0 until M2 S5. It made
+    // the transition deliberate — it failed the moment
+    // `mt_md::render_to_static_html` first returned `Ok`, and its message
+    // pointed at spec/README.md, whose step 4 names deleting it as part of the
+    // re-baseline. It is gone rather than inverted, because the state it
+    // asserted cannot come back: the door only opens once.
+
+    /// The other half of that door, and the reason the deleted test above is
+    /// not simply missing.
+    ///
+    /// A suite that goes back to reporting `Skipped` **wholesale** has stopped
+    /// measuring anything, and the ratchet's own four rows cannot see that:
+    /// every verdict would be `Skipped`, none of them a CI failure, and the
+    /// run would exit 0 with a loud summary saying so — which is exactly what
+    /// M0 through S4 did on purpose. From S5 that summary would be a lie.
     #[test]
-    fn every_suite_is_skipped_at_m0() {
+    fn neither_suite_is_skipped_from_s5_on() {
         for suite in Suite::ALL {
             let report = run_suite(&spec_dir(), suite).expect("run");
-            assert!(
-                report.everything_skipped(),
-                "{suite} is no longer fully skipped — mt_md now renders. \
-                 Re-baseline per spec/README.md and delete this test."
+            assert_eq!(
+                report.skipped, 0,
+                "{suite}: the renderer answered for every example at S5, so a \
+                 skip here means an entry point closed again"
             );
-            assert!(!report.is_ci_failure());
+            assert!(report.passed > 0);
         }
     }
 }

@@ -12,6 +12,7 @@
 //! | `blocks` | Block-tree differential over 1344 inputs | M2 §6 S1 |
 //! | `diff` | Differential test against the TypeScript engine | §11.2 |
 //! | `divergences` | The register of intentional differences from muya | M1 §5 D3 |
+//! | `normalize` | `normalizeHtml` vs `spec/runner.ts`'s | M2 §10, owed since M0 |
 //! | `corpus` | Generate `bench/corpus/` | §14 step 4 |
 //! | `fuzz-seed` | Write `fuzz/corpus/` from the sweep's inputs | M1 §5 D6 |
 //! | `deps` | Enforce the dependency-direction constraints | §1 |
@@ -25,6 +26,7 @@ mod diff;
 mod divergences;
 mod fuzz;
 mod html;
+mod normalize;
 mod tokens;
 
 use std::path::{Path, PathBuf};
@@ -45,7 +47,14 @@ const USAGE: &str = "\
 cargo xtask <COMMAND> [ARGS...]
 
 COMMANDS:
-    conformance          Run the CommonMark + GFM conformance ratchet (§11.1).
+    conformance [OPTIONS]
+                         Run the CommonMark + GFM conformance ratchet (§11.1).
+        --suite <NAME>     commonmark | gfm. Default: both.
+        --sections         Print the per-section pass rates that
+                           spec/conformance.md is written from.
+        --update           Rewrite spec/expected-failures.json from the
+                           measured results. ONE-WAY DOOR: see
+                           spec/README.md step 1 and docs/M2.md §5 D5.
     blocks [OPTIONS]     Compare the full TState tree — names, meta and leaf
                          text — against MarkdownToState over §4 C1's 1344
                          inputs (docs/M2.md §6 S1 and S2).
@@ -72,13 +81,18 @@ COMMANDS:
                            rule 1's sweep. For a fast local loop; CI runs both.
         --full-sweep       Add 1mb.md's and 5mb.md's lines to the sweep:
                            ~40k inputs instead of ~5.6k. The nightly soak.
+    normalize [OPTIONS]  Compare xtask/src/html.rs's normalize_html against
+                         spec/runner.ts's over every rendered fixture
+                         (docs/M2.md §10, owed since M0 decision 12).
+        --require-ts       Fail instead of skipping when Node or tsx is
+                           unavailable.
     corpus [--check]     Generate bench/corpus/ (§14 step 4); --check verifies
                          the committed files match the generator.
     fuzz-seed [--check]  Write fuzz/corpus/<target>/ from the differential
                          sweep's inputs (M1 §5 D6). Not part of `ci`.
     deps                 Enforce the §1 dependency-direction constraints.
     ci                   deps, corpus --check, divergences, conformance, blocks,
-                         diff — in order.
+                         normalize, diff — in order.
 ";
 
 fn main() {
@@ -92,10 +106,11 @@ fn main() {
     let rest = &args[1..];
 
     let result = match command {
-        "conformance" => conformance::main(&root),
+        "conformance" => conformance::main(&root, rest),
         "blocks" => blocks::main(&root, rest),
         "diff" => diff::main(&root, rest),
         "divergences" => divergences::main(&root, rest),
+        "normalize" => normalize::main(&root, rest),
         "corpus" => corpus::main(&root, rest),
         "fuzz-seed" => fuzz::main(&root, rest),
         "deps" => deps::main(&root),
@@ -152,13 +167,20 @@ fn ci(root: &Path, rest: &[String]) -> Result<i32, String> {
             "divergences",
             Box::new(|| divergences::main(root, &engine_flags)),
         ),
-        ("conformance", Box::new(|| conformance::main(root))),
+        ("conformance", Box::new(|| conformance::main(root, &[]))),
         // Before `diff`, and for the reason D6 gives: this one compares the
         // block tree over 1344 inputs and `diff` compares 22 whole documents
         // through an entry point that is still `Err(Unimplemented)`. Until S3
         // wakes `parse`, `blocks` is the only step here that measures the
         // parser at all, so it should report before the step that skips.
         ("blocks", Box::new(|| blocks::main(root, &engine_flags))),
+        // After `conformance`, because it renders the same 1,324 examples and
+        // a renderer that is broken should be reported by the ratchet rather
+        // than by the normaliser it feeds.
+        (
+            "normalize",
+            Box::new(|| normalize::main(root, &engine_flags)),
+        ),
         ("diff", Box::new(|| diff::main(root, rest))),
     ];
 

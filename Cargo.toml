@@ -92,7 +92,32 @@ opt-level = "s"
 # not `xtask`'s; S1 needs the serializer early because `cargo xtask blocks`
 # compares against exactly the tree `dump_state` will emit at S3. Pure, and
 # already in the lockfile.
+#
+# `ammonia` is the sixth third-party crate and the fifth scheduled one. §4's
+# table names it — "`Document` → HTML: port `renderToStaticHTML.ts`, sanitize
+# with `ammonia`" — and M2.md §6's S5 row names it again. M2 S5 is the
+# milestone that needs it, because `renderToStaticHTML`'s third parameter
+# defaults to **sanitizing** in muya and seventeen of the twenty transcribed
+# `renderToStaticHTML.spec.ts` cases pass `true`. A `sanitize` parameter that
+# quietly does nothing is worse than an unimplemented one, so this is not a
+# dependency the milestone could defer to M5's paste path.
+#
+# **It is the largest tree in the workspace and that is recorded rather than
+# discovered later**: `ammonia → url → idna → icu_normalizer / icu_properties`
+# brings the ICU4X data crates with it, and `html5ever → markup5ever →
+# web_atoms` brings `phf` and `string_cache`. Roughly fifty crates, against the
+# fourteen the graph held before. §12.2 budgets "pulldown-cmark, serde, notify,
+# pdf-writer, spellbook, misc" at ~1.5 MB and that line now understates the
+# total; M2.md §6 says so beside the measurement rather than leaving §12.2 to
+# be believed. Two of those subtrees are already scheduled anyway — §4's
+# fourth row puts `html5ever` on M5's paste path, and §12.2 budgets ICU
+# segmentation with `parley` at M3 — so the marginal cost at v1 is smaller
+# than the marginal cost today.
+#
+# It satisfies §1's purity constraint for `mt-md`: no windowing, no GPU, no
+# I/O. `cargo xtask deps` still reports 14 workspace crates.
 [workspace.dependencies]
+ammonia = "4"
 fancy-regex = "0.19"
 proptest = "1"
 pulldown-cmark = { version = "0.13", default-features = false }

@@ -74,7 +74,7 @@
 //! same guard is here from the start rather than added at the end: see
 //! [`the_ratchet_fails_a_listed_case_that_starts_passing`].
 //!
-//! # What a green run claims, and how that changed at S3
+//! # What a green run claims, and how that changed at S3 and again at S5
 //!
 //! **At S0** every entry point returned `Err(Unimplemented)`, so all 184 listed
 //! cases failed and were meant to. A green run claimed two things: the cases
@@ -87,7 +87,14 @@
 //! reasons: the entry point it needs is still closed (`render_to_static_html`
 //! at S5) or the port does not agree with muya yet. The second kind is the
 //! interesting one and it is enumerated rather than left in the pile — see
-//! [`the_only_listed_cases_that_fail_for_their_own_reason_are_the_ten_m2_names`].
+//! [`the_only_listed_cases_that_fail_for_their_own_reason_are_the_eleven_m2_names`].
+//!
+//! **From S5 the first kind is gone**: every entry point answers, so *every*
+//! listed case fails for a reason of its own and that test now covers the
+//! whole list rather than a subset of it. A green run from here claims
+//! something much stronger than it did — that the eleven remaining failures
+//! are exactly the eleven this milestone has written down and owes to a named
+//! later stage.
 //!
 //! Three of the 187 were **not** listed at S0, because they passed then: the
 //! `strongCjkFlanking` cases that go through the inline tokenizer rather than
@@ -99,9 +106,11 @@
 //!
 //! **S3 delisted 63**, leaving 121 — the arithmetic and the three corrections
 //! it forced on M2.md's §6 and §7 are in that document's "S3's verification".
-//! **S4 delisted 79**, leaving 42: thirty-two of them are S5's
-//! `render_to_static_html`, one is S5's footnote block extension, and the other
-//! nine are the finding S4 turned up, enumerated in `KNOWN` below.
+//! **S4 delisted 79**, leaving 42. **S5 delisted 31, leaving 11**, and for the
+//! first time the arithmetic against this list and the arithmetic against §7's
+//! stage column agree in both directions — every file §7 marks S5 delisted at
+//! S5. What is left is nine of S6's and two of M6's, all enumerated in `KNOWN`
+//! below.
 //!
 //! **Caveat, inherited:** the ratchet uses `catch_unwind`, so
 //! `cargo test --release` aborts rather than catching (the release profile
@@ -641,7 +650,8 @@ const PENDING: &[&str] = &[
     // That is S1's layer and a wider mechanism than the one §10 owed S4 —
     // M2.md §10's "Owed by S4" carries it with its reproducers, and
     // `block::tests::the_three_shapes_the_task_marker_fix_does_not_reach` pins
-    // the neighbouring shapes.
+    // the neighbouring shapes. **Owed to S6**, which is the stage with the
+    // re-lex machinery.
     "list_serialization::uses_an_alternate_nested_marker_instead_of_making_a_tight_list_loose",
     "list_serialization::uses_the_same_safe_marker_under_ordered_and_task_list_parents",
     "list_serialization::handles_a_first_empty_nested_item_followed_by_a_non_empty_item",
@@ -651,47 +661,17 @@ const PENDING: &[&str] = &[
     "list_serialization::indent_by_4_spaces_round_trips_the_marktext_fixture",
     "list_serialization::indent_using_daring_fireball_round_trips_the_marktext_fixture",
     "list_serialization::treats_the_unimplemented_tab_option_as_a_1_space_indent",
-    // markdown_to_state — 1 of 32. `Options::footnote` has no block extension;
-    // §10's "Owed by S3" item 3 puts it at S5, with `footnoteHtml`'s six.
-    "markdown_to_state::converts_block_level_footnote_tokens_into_footnote_states",
-    // render_to_static_html — 20. S5's, and the largest single block of what is
-    // left.
-    "render_to_static_html::renders_a_simple_paragraph",
-    "render_to_static_html::renders_headings_with_id_less_h_tags",
-    "render_to_static_html::renders_bullet_and_ordered_lists",
-    "render_to_static_html::renders_fenced_code_blocks_with_a_language_class",
-    "render_to_static_html::renders_mermaid_code_blocks_as_inert_placeholders",
-    "render_to_static_html::renders_vega_lite_and_plantuml_code_blocks_as_inert_placeholders",
-    "render_to_static_html::strips_inline_event_handler_attributes",
-    "render_to_static_html::strips_script_tags",
-    "render_to_static_html::returns_the_bare_body_html_with_no_article_wrapper",
-    "render_to_static_html::honours_super_sub_script",
-    "render_to_static_html::emits_sup_and_sub_wrappers_mixed_with_surrounding_text",
-    "render_to_static_html::emits_sup_and_sub_wrappers_inside_list_items_and_headings",
+    // render_to_static_html — 2 of 20, and they are **not** S5's to fix.
+    // `getHighlightHtml` builds its math extension with `useKatexRender: true`,
+    // so both of these assert that KaTeX markup — `katex` or `<math` — is in
+    // the output. There is no TeX renderer in this workspace: `mt-math` is
+    // §9's M6 and its crate doc says so. The port emits muya's *other* math
+    // renderer, the one `lexBlock` uses (`<pre class="multiple-math">`), which
+    // is a real muya shape and not this one. **Owed to M6 with `mt-math`**;
+    // M2.md §10 carries both. `Options::SPEC` has `math: false`, so neither
+    // costs the conformance number anything.
     "render_to_static_html::honours_gitlab_compatibility_for_math_fences",
-    "render_to_static_html::honours_the_front_matter_option",
-    "render_to_static_html::honours_the_footnote_option",
     "render_to_static_html::honours_the_math_option",
-    "render_to_static_html::returns_a_string_for_empty_input",
-    "render_to_static_html::preserves_arbitrary_raw_html_tags_when_sanitize_is_false",
-    "render_to_static_html::does_not_strip_script_when_sanitize_is_false",
-    "render_to_static_html::still_strips_script_when_sanitize_is_true",
-    // footnote_html — 6. S5's, and the stage that lands the footnote extension.
-    "footnote_html::emits_a_footnotes_section_with_an_li_for_a_single_ref_and_def_pair",
-    "footnote_html::numbers_inline_references_in_source_order",
-    "footnote_html::leaves_an_orphan_inline_reference_as_plain_text",
-    "footnote_html::points_every_repeated_inline_reference_to_the_same_target",
-    "footnote_html::preserves_a_footnote_definition_containing_a_nested_bullet_list",
-    "footnote_html::does_not_transform_a_literal_reference_inside_a_fenced_code_block",
-    // soft_break_export_html — 3. S5's.
-    "soft_break_export_html::keeps_a_paragraph_soft_break_as_a_newline_never_a_br",
-    "soft_break_export_html::keeps_a_soft_break_inside_a_tight_list_item_never_a_br",
-    "soft_break_export_html::leaves_a_real_hard_break_as_a_br",
-    // strong_cjk_flanking — 3 of 6, the static/export half. The other three go
-    // through the inline tokenizer and passed at S0.
-    "strong_cjk_flanking::static_path_recognises_strong_in_the_sanity_cases",
-    "strong_cjk_flanking::static_path_recognises_strong_in_cjk_context",
-    "strong_cjk_flanking::static_path_does_not_bold_or_italicise_the_negative_cases",
 ];
 
 // ---------------------------------------------------------------------------
@@ -744,8 +724,8 @@ fn every_pending_entry_names_a_transcribed_case() {
     );
     assert_eq!(
         PENDING.len(),
-        42,
-        "187 transcribed; 3 passed at S0, S3 delisted 63 and S4 delisted 79"
+        11,
+        "187 transcribed; 3 passed at S0, then S3 delisted 63, S4 79 and S5 31"
     );
 }
 
@@ -796,11 +776,18 @@ fn every_pending_entry_names_a_transcribed_case() {
 /// asks for the arithmetic to be run rather than read: a file marked S4 whose
 /// cases need S1's layer.
 #[test]
-fn the_only_listed_cases_that_fail_for_their_own_reason_are_the_ten_m2_names() {
+fn the_only_listed_cases_that_fail_for_their_own_reason_are_the_eleven_m2_names() {
     /// M2.md §10. Nine are "Owed by S4" — the port's parse of markdown its own
     /// serializer produced, where `marked` starts a list inside a list item and
-    /// CommonMark keeps the paragraph open. One is "Owed by S3" item 3,
-    /// `Options::footnote`'s missing block extension, which is S5's.
+    /// CommonMark keeps the paragraph open. Two are "Owed to M6" — the KaTeX
+    /// assertions, which need `mt-math`.
+    ///
+    /// It went from ten to eleven at S5, and that is two events rather than
+    /// one: §10's "Owed by S3" item 3 came off (the footnote block extension
+    /// landed) and the two math cases went on. The second pair is the shape
+    /// §6 warns about at every stage — *a case whose file is labelled S5 and
+    /// which is really another milestone's* — one milestone further out than
+    /// §6's S0 correction found it.
     const KNOWN: &[&str] = &[
         "list_serialization::uses_an_alternate_nested_marker_instead_of_making_a_tight_list_loose",
         "list_serialization::uses_the_same_safe_marker_under_ordered_and_task_list_parents",
@@ -811,7 +798,8 @@ fn the_only_listed_cases_that_fail_for_their_own_reason_are_the_ten_m2_names() {
         "list_serialization::indent_by_4_spaces_round_trips_the_marktext_fixture",
         "list_serialization::indent_using_daring_fireball_round_trips_the_marktext_fixture",
         "list_serialization::treats_the_unimplemented_tab_option_as_a_1_space_indent",
-        "markdown_to_state::converts_block_level_footnote_tokens_into_footnote_states",
+        "render_to_static_html::honours_gitlab_compatibility_for_math_fences",
+        "render_to_static_html::honours_the_math_option",
     ];
 
     let mut found = Vec::new();
@@ -828,11 +816,11 @@ fn the_only_listed_cases_that_fail_for_their_own_reason_are_the_ten_m2_names() {
             .cloned()
             .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
             .unwrap_or_else(|| "<non-string panic payload>".to_string());
-        // The one helper that still panics names itself in the panic.
-        // `serialize`'s clause came out at S4, when it stopped being able to.
-        if !message.contains("mt_md::render_to_static_html") {
-            found.push((name, message.lines().next().unwrap_or("").to_string()));
-        }
+        // **Every** listed case now fails for a reason of its own. S5 opened
+        // the last entry point, so the "still closed" filter this loop carried
+        // from S3 has nothing left to exclude — which is why the assertion
+        // below is now over the whole list rather than over a subset of it.
+        found.push((name, message.lines().next().unwrap_or("").to_string()));
     }
 
     let names: Vec<&str> = found.iter().map(|(n, _)| *n).collect();
