@@ -126,6 +126,7 @@ pub fn to_html(doc: &Document, labels: &Labels, options: Options) -> String {
             },
         },
         out: String::new(),
+        depth: 0,
     };
     renderer.blocks(doc.children(doc.root()), Looseness::Block);
     renderer.out
@@ -151,13 +152,39 @@ struct Renderer<'a> {
     /// the one field that varies per call and it is set at the call site.
     inline: TokenizerOptions,
     out: String,
+    /// How many [`Renderer::blocks`] frames are open — the depth of the blocks
+    /// the innermost one is rendering, in [`crate::MAX_NESTING_DEPTH`]'s unit.
+    ///
+    /// This is the **deepest-framed** of the crate's three walks: S7 measured
+    /// 995 levels on a 1 MiB thread in release and 369 in `dev`, against
+    /// `parse`'s 1,229, so it is the walk that fixes the limit.
+    depth: usize,
 }
 
 impl Renderer<'_> {
+    /// The depth clamp lives here rather than in [`Renderer::block`] because
+    /// this is the single funnel every container's children pass through —
+    /// `blockquote`, `list_item`, `table` and `to_html` itself. Beyond
+    /// [`crate::MAX_NESTING_DEPTH`] a container renders its own tags and no
+    /// children, which is what [`crate::serialize`] and [`crate::state`] do
+    /// with the same document; [`crate::parse`] cannot build one that deep, so
+    /// this is reachable only through a hand-built [`Document`].
     fn blocks(&mut self, ids: &[NodeId], looseness: Looseness) {
+        // The blocks about to be rendered sit at `self.depth + 1`; see the
+        // same arithmetic in `serialize::ExportMarkdown::convert`.
+        if self.depth + 1 >= crate::MAX_NESTING_DEPTH {
+            // The leaves, at this level — `crate::leaves_below`'s docs carry
+            // the argument, and a leaf cannot recurse back into here.
+            for id in crate::leaves_below(self.doc, ids) {
+                self.block(id, looseness);
+            }
+            return;
+        }
+        self.depth += 1;
         for id in ids {
             self.block(*id, looseness);
         }
+        self.depth -= 1;
     }
 
     fn block(&mut self, id: NodeId, looseness: Looseness) {

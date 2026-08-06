@@ -85,7 +85,7 @@ use pulldown_cmark::{
     Alignment, CodeBlockKind, Event, HeadingLevel, Options as CmarkOptions, Parser, Tag, TagEnd,
 };
 
-use crate::{Options, SourceMap};
+use crate::{MAX_NESTING_DEPTH, Options, SourceMap};
 
 /// Markdown → [`Document`]: block structure, `meta` and leaf text.
 ///
@@ -219,6 +219,158 @@ fn insert(doc: &mut Document, ranges: &mut SourceMap, parent: NodeId, index: usi
     for (child_index, child) in built.children.into_iter().enumerate() {
         insert(doc, ranges, id, child_index, child);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The nesting limit — §11.3, "malformed input must never panic"
+// ---------------------------------------------------------------------------
+
+/// Cut every subtree that would put a node deeper than
+/// [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH).
+///
+/// # It is the second half of the limit, not the first
+///
+/// [`Builder::would_exceed_depth`] is the half that fires on *input* and the
+/// half that matters for §12's budgets. This one exists because a **document**
+/// is not one region: [`footnote_block`] wraps a region's tree in a `footnote`
+/// block and mechanism 9 grafts one into a list item, so two trees that each
+/// obey the limit can compose to one that does not. It is what makes
+/// [`crate::MAX_NESTING_DEPTH`] a property of every [`Document`] this crate
+/// hands out rather than of one call to [`build_region`], and it is what the
+/// recursive readers of the finished tree — [`insert`], [`crate::labels`]'s
+/// visitor, [`crate::state`], [`crate::serialize`], [`crate::html`] and
+/// `Built`'s own derived `Drop` — are bounded by.
+///
+/// # At the limit
+///
+/// The subtree's **leaves survive, in document order, reparented onto the
+/// deepest container that can legally hold them**, rather than being dropped.
+/// The composition this catches is at most a level or two over, so what it
+/// reparents is a leaf that was already at the bottom; keeping it is free and
+/// losing content is not something a repair to a crash should also do.
+///
+/// # Where the cut goes
+///
+/// It is made at a container that accepts **arbitrary blocks** —
+/// `block-quote`, `list-item`, `task-list-item`, `footnote` — because those are
+/// the only kinds whose children may be leaves. A `bullet-list` holds items and
+/// a `table` holds rows, so cutting at one of those would build a state muya's
+/// own serializer has only a `debug.warn` for. Nothing else ever needs one:
+/// a `list` that is itself legal ([`deepest_legal_depth`]) has room for its
+/// items by construction, and so does a `table` for its rows and a row for its
+/// cells, so the first illegal node on any path is always a child of a
+/// block-accepting one.
+/// [`tests::no_input_of_any_shape_or_size_builds_a_tree_past_the_limit`] is
+/// that induction checked against six nesting shapes rather than argued.
+///
+/// One shape is degraded rather than clamped and it is named rather than
+/// hidden: a `table` nested past the limit contributes its `table.cell`s as
+/// bare leaves of a block quote, because a cell *is* a leaf. That is the same
+/// hand-built shape `serialize::serialize_simple_block`'s `default:` arm
+/// already documents, and it needs a table 126 containers deep to reach.
+fn clamp_depth(top: &mut [Built]) {
+    // Iterative, and it has to be: the tree handed to it is by definition the
+    // one that is too deep to recurse over. The stack owns `&mut` borrows
+    // rather than indices because a `Built` child is reached only through its
+    // parent's `Vec`.
+    let mut stack: Vec<(&mut Built, usize)> = top.iter_mut().map(|node| (node, 1)).collect();
+    while let Some((node, depth)) = stack.pop() {
+        if node.children.is_empty() {
+            continue;
+        }
+        let cut = accepts_any_block(&node.block)
+            && node
+                .children
+                .iter()
+                .any(|child| depth + 1 > deepest_legal_depth(&child.block));
+        if cut {
+            let deep = std::mem::take(&mut node.children);
+            let range = node.range.clone();
+            // `empty_container_filler` for the same reason mechanism 2 uses it:
+            // a container with no children is not a shape `MarkdownToState`
+            // produces. Unreachable in practice — every container bottoms out
+            // in a leaf — and cheap enough to keep the invariant total.
+            node.children = empty_container_filler(flatten_leaves(deep), &range);
+            continue;
+        }
+        for child in &mut node.children {
+            stack.push((child, depth + 1));
+        }
+    }
+}
+
+/// The deepest a block of this kind may sit — the same per-kind reservation
+/// [`Builder::would_exceed_depth`] applies, read off the finished node instead
+/// of off the `pulldown-cmark` tag.
+///
+/// The two must agree exactly or [`clamp_depth`] re-cuts a tree the walk
+/// already clamped, which costs a level and breaks
+/// `serialize(parse(s)) == s` on the reproducer.
+/// [`tests::the_two_halves_of_the_limit_allow_the_same_depths`] pins the
+/// agreement.
+fn deepest_legal_depth(block: &Block) -> usize {
+    match block {
+        // Needs one level below it for its own content.
+        Block::BlockQuote { .. }
+        | Block::ListItem { .. }
+        | Block::TaskListItem { .. }
+        | Block::Footnote { .. }
+        | Block::TableRow { .. } => MAX_NESTING_DEPTH - 1,
+        // Needs two: `list › list-item › content`, `table › table.row › cell`.
+        Block::BulletList { .. }
+        | Block::OrderList { .. }
+        | Block::TaskList { .. }
+        | Block::Table { .. } => MAX_NESTING_DEPTH - 2,
+        // A leaf, `table.cell` included — it holds text, not blocks.
+        _ => MAX_NESTING_DEPTH,
+    }
+}
+
+/// The kinds whose children may be any block, which is where a cut is legal.
+///
+/// `bullet-list`/`order-list`/`task-list` hold items, `table` holds rows and
+/// `table.row` holds cells — see [`clamp_depth`]'s "the `+ 2`".
+fn accepts_any_block(block: &Block) -> bool {
+    matches!(
+        block,
+        Block::BlockQuote { .. }
+            | Block::ListItem { .. }
+            | Block::TaskListItem { .. }
+            | Block::Footnote { .. }
+    )
+}
+
+/// Every leaf in `nodes`, in document order, with the containers between them
+/// dismantled.
+///
+/// Dismantling rather than dropping is the point: `Built`'s derived `Drop`
+/// recurses over `children`, so releasing a 2,000-deep subtree the obvious way
+/// would overflow the stack inside the very function written to stop that. Each
+/// container here is emptied with `mem::take` **before** it is dropped, so no
+/// drop glue ever descends more than one level.
+fn flatten_leaves(nodes: Vec<Built>) -> Vec<Built> {
+    let mut leaves = Vec::new();
+    let mut work: Vec<Built> = nodes;
+    work.reverse();
+    while let Some(mut node) = work.pop() {
+        if node.children.is_empty() {
+            leaves.push(node);
+            continue;
+        }
+        let children = std::mem::take(&mut node.children);
+        drop(node);
+        work.extend(children.into_iter().rev());
+    }
+    leaves
+}
+
+/// Release a subtree without letting `Built`'s derived `Drop` recurse over it.
+///
+/// The one caller is [`split_refused_list_starts`]' `splice`, whose removed
+/// range is dropped by the returned iterator and can be arbitrarily deep — that
+/// pass runs during the walk, before [`clamp_depth`] has seen anything.
+fn dismantle(nodes: Vec<Built>) {
+    drop(flatten_leaves(nodes));
 }
 
 // ---------------------------------------------------------------------------
@@ -678,6 +830,9 @@ struct Builder<'a> {
     /// a [`Prefix::Item`] is computed once from the item's first line and
     /// re-deriving it per leaf would be the same scan run once per block.
     prefixes: Vec<Prefix>,
+    /// How many block tags deep the walk is *inside* a container it refused to
+    /// open — `0` when it is not. See [`Builder::would_exceed_depth`].
+    overflow: usize,
 }
 
 /// Markdown → the top-level built blocks.
@@ -754,6 +909,14 @@ pub(crate) fn build_span(
     } else {
         top.extend(build_region(src, options, body_at..span.end, seen_labels));
     }
+    // `Builder::would_exceed_depth` bounds one region's tree; this bounds the
+    // **document's**, which is not the same claim. A footnote wraps a region's
+    // tree in a `footnote` block and mechanism 9 grafts a second region's tree
+    // into a list item, so two trees that are each inside the limit compose to
+    // one that is not. Over a tree that is already inside it — every document
+    // in this repository, whose deepest is 11 — this is one linear walk that
+    // changes nothing.
+    clamp_depth(&mut top);
     top
 }
 
@@ -793,6 +956,7 @@ fn build_region(
         }],
         seen_labels: std::mem::take(seen_labels),
         prefixes: Vec::new(),
+        overflow: 0,
     };
     builder.walk(region);
 
@@ -808,6 +972,7 @@ fn build_region(
     builder.scan_gap(&mut root, end);
     debug_assert!(builder.stack.is_empty(), "unbalanced frames");
     builder.fold_empty_task_marker_continuations(&mut root.children);
+    debug_assert!(builder.overflow == 0, "unbalanced overflow");
     *seen_labels = std::mem::take(&mut builder.seen_labels);
     root.children
 }
@@ -827,10 +992,32 @@ impl<'a> Builder<'a> {
             .into_offset_iter()
             .map(|(e, r)| (e, shift(r)))
         {
+            // Inside a container this walk refused to open: count the block
+            // tags so the matching `End` can be recognised, and read nothing
+            // else. The whole span has already become one paragraph's text.
+            if self.overflow > 0 {
+                match &event {
+                    Event::Start(tag) if is_block_tag(tag) => self.overflow += 1,
+                    Event::End(end) if is_block_tag_end(end) => self.overflow -= 1,
+                    _ => {}
+                }
+                continue;
+            }
+
             match event {
                 Event::Start(tag) => {
                     if is_block_tag(&tag) {
                         self.close_synthetic();
+                        if self.would_exceed_depth(&tag) {
+                            // §11.3's limit. The refused container's whole
+                            // source span becomes the text of one paragraph in
+                            // the deepest container that was opened — see
+                            // `would_exceed_depth`.
+                            self.overflow = 1;
+                            let built = self.paragraph(range);
+                            self.emit(built);
+                            continue;
+                        }
                         self.push_frame(&tag, range);
                     } else {
                         // Mechanism 5's second half: an inline `Start` must
@@ -874,6 +1061,61 @@ impl<'a> Builder<'a> {
         self.stack
             .last_mut()
             .expect("the root frame is always there")
+    }
+
+    /// Whether opening `tag` here would put a node past
+    /// [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH) — §11.3's limit, decided
+    /// **before** the frame is pushed.
+    ///
+    /// # Why the limit is here and not only on the finished tree
+    ///
+    /// S7 first wrote it as a pass over the built tree, which stops the abort
+    /// and leaves a worse bug: [`strip_lines`] clones the line once per
+    /// enclosing prefix, so a document that is *n* containers deep costs
+    /// O(n³) and `"> "` × 8000 took **35.5 s** instead of crashing. §12's
+    /// budgets have no row for that, and a crash traded for a hang is not a
+    /// repair. Refusing the frame keeps the prefix chain and the frame stack
+    /// bounded, so the whole path is linear again: the same input is **11 ms**.
+    ///
+    /// # What the caller does with a `true`
+    ///
+    /// It emits `range` as a **paragraph** — the refused container's entire
+    /// source span, with the enclosing prefixes stripped, as one leaf's text —
+    /// and swallows every event up to the matching `End`. That is the first of
+    /// the three candidates S7 weighed, and it is the one that keeps
+    /// `serialize(parse(s)) == s` on the reproducer rather than merely the
+    /// fixed point: the kept containers re-emit exactly the prefixes that were
+    /// stripped, and the text carries the rest verbatim. Truncating loses the
+    /// content; reparenting the deep leaves loses the markers between them, so
+    /// the second parse would differ from the first.
+    ///
+    /// # The reservation, and why `Item` never asks
+    ///
+    /// The answer is about the deepest node the tag *implies*, not about the
+    /// tag: a `list` needs a `list-item` under it and a `table` needs a row and
+    /// a cell before either can hold anything. Reserving those levels here is
+    /// what guarantees the paragraph the caller emits lands in a container that
+    /// accepts blocks — `block-quote`, `list-item` or the root — because a
+    /// `list`'s only children are items and a `table`'s only children are rows,
+    /// and neither can be the innermost open frame when a `Start` for one of
+    /// the three reserving tags arrives. `Item`, `TableRow` and `TableCell`
+    /// therefore never overflow: their parent already paid for them.
+    fn would_exceed_depth(&self, tag: &Tag<'_>) -> bool {
+        // The depth this frame would take, counting a top-level block as 1.
+        let depth = self.stack.len();
+        let deepest = depth
+            + match tag {
+                // A quote's content is one level below it.
+                Tag::BlockQuote(_) => 1,
+                // `list › list-item › content` and
+                // `table › table.row › table.cell`; the cell is itself the leaf.
+                Tag::List(_) | Tag::Table(_) => 2,
+                // Items and rows are one level above their own content, and
+                // leaf tags are the content.
+                Tag::Item | Tag::TableHead | Tag::TableRow => 1,
+                _ => 0,
+            };
+        deepest > MAX_NESTING_DEPTH
     }
 
     fn push_frame(&mut self, tag: &Tag<'_>, range: Range<usize>) {
@@ -1780,7 +2022,11 @@ fn split_refused_list_starts(
             range.start..head_end,
         ));
         replacement.append(&mut built);
-        children.splice(index.., replacement);
+        // `splice`'s returned iterator drops the range it removed, and those
+        // blocks can be arbitrarily deep — this pass runs inside the walk,
+        // before `clamp_depth` has seen anything. `Built`'s derived `Drop`
+        // recurses, so the removal is dismantled rather than dropped.
+        dismantle(children.splice(index.., replacement).collect());
         return;
     }
 }
@@ -3398,7 +3644,31 @@ fn apply_prefix(
                 let first_non_space = text.find(|c| c != ' ');
                 let dedent = first_non_space.is_some_and(|i| i >= indent) || text.trim().is_empty();
                 if dedent {
-                    let cut = indent.min(text.len());
+                    // Boundary-safe and not merely bounds-safe, which is the
+                    // answer the three arms above already took with `str::get`.
+                    // `indent` is a **column**: it is a byte boundary when the
+                    // first disjunct sent us here, because that one counted
+                    // leading spaces, and it need not be when the second did —
+                    // `str::trim` calls U+2028 whitespace, so `- a\n\u{2028}`
+                    // dedents with the cut inside the character. Indexing there
+                    // is a crash, §11.3: *"malformed input must never panic"*.
+                    //
+                    // Falling back to the line's end — an empty slice — is
+                    // `nextLine.slice(indent)`'s own answer rather than a
+                    // retreat. JavaScript slices in **UTF-16 code units**, a
+                    // line of wide spaces is shorter than `indent` in those, and
+                    // `String.prototype.slice` past the end is `''`. See
+                    // `tests::a_wide_whitespace_continuation_line_dedents_to_nothing`
+                    // for the measurement that chose it over the alternatives.
+                    //
+                    // One `cut` rather than two, because it is used as a slice
+                    // *and* as a source offset and the two must agree;
+                    // `text.len()` is the line's end and is always a boundary.
+                    let cut = if text.is_char_boundary(indent) {
+                        indent
+                    } else {
+                        text.len()
+                    };
                     (
                         text[cut..].to_string(),
                         if exact {

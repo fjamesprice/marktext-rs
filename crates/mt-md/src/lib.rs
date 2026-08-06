@@ -164,6 +164,90 @@ use std::ops::Range;
 use mt_doc::{Document, NodeId};
 use mt_inline::Labels;
 
+/// The deepest a node may sit in a [`Document`] this crate produces, and the
+/// deepest any walk in this crate descends.
+///
+/// # Why there is a limit at all (§11.3)
+///
+/// *"Malformed input must never panic — `panic = "abort"` makes a panic a
+/// crash."* A **stack overflow is not a panic**: it is an abort with no
+/// `catch_unwind`, no `Result` and no recovery, so the only way to honour that
+/// clause is to make the deep walk impossible rather than to catch it. S7's
+/// property tests and fuzz targets found that `"> "` repeated 2,000 times —
+/// **4,001 bytes** — aborted `mt-cli --dump-state` on a plain release build.
+///
+/// The recursion is **this crate's**, not `pulldown-cmark`'s: its
+/// `OffsetIter` is a position loop, and `Parser::new_ext(&"> ".repeat(200_000),
+/// …).into_offset_iter().collect()` completes on a 1 MiB stack — 200,000 levels,
+/// 156× the depth at which this crate's own walks die there.
+/// [`block::tests::pulldown_cmark_is_iterative_over_container_depth`] is that
+/// measurement as a test, so a future upstream rewrite that made it recursive
+/// would say so here rather than in a crash report.
+///
+/// # Why 128, measured three ways
+///
+/// 1. **The deepest input this repository owns is 11.** Over all 1,347 —
+///    `cargo xtask blocks`' 1,324 spec examples, the 11 round-trip fixtures and
+///    the 12 corpus documents — the depth histogram is
+///    `{1: 1102, 2: 60, 3: 130, 4: 23, 5: 25, 7: 4, 9: 2, 11: 1}`, and the 11
+///    is `spec/fixtures/marktext-round-trip/common/Lists.md`. So 128 is 11.6×
+///    the deepest markdown anyone in this project has written, and **no
+///    existing test can reach the limit** — which is what makes this change
+///    provably behaviour-preserving over the whole measured corpus.
+///    `round_trip_properties::the_deepest_input_this_repository_owns_is_an_order_of_magnitude_below_the_limit`
+///    re-measures it rather than trusting this paragraph.
+/// 2. **The reference engine has no limit to copy.** muya dies too — see the
+///    at-the-limit note on [`parse`] — so the number is this port's own choice
+///    and the third measurement is what fixes it.
+/// 3. **The stack it has to fit in.** `mt-cli`'s main thread on Windows is the
+///    PE default of 1 MiB, and the cost per nesting level, measured by binary
+///    search on a thread of exactly 1 MiB, is worst for
+///    [`render_to_static_html`]: **≈ 1.0 KiB/level in release and ≈ 2.8 KiB/level
+///    in `dev`** (995 and 369 levels respectively before the abort). 128 levels
+///    is therefore ≈ 131 KiB release and ≈ 355 KiB debug — **a 2.9× margin in
+///    the worst configuration**, which is the one a `cargo test` run uses. 256
+///    would leave 1.4×, which is not a margin.
+///
+/// # What is *not* claimed
+///
+/// This bounds recursion over **container nesting**, which is the axis a
+/// document's shape controls. It is not a bound on `mt_inline`'s tokenizer
+/// (measured non-recursive over nesting to depth 1,000 at S7 and unchanged
+/// here), nor on the one input class where `pulldown-cmark` aborts before this
+/// crate runs at all (`docs/upstream-issues.md`, and [`parse`]'s docs).
+pub const MAX_NESTING_DEPTH: usize = 128;
+
+/// Every leaf at or below `ids`, in document order — what the three walks that
+/// take a [`Document`] emit when they reach [`MAX_NESTING_DEPTH`].
+///
+/// # Why they emit anything at all
+///
+/// [`parse`] cannot build a document this deep, so the only way to reach the
+/// limit here is to hand one of them a tree built with `mt_doc::Edit::InsertNode`
+/// — and the reference engine's answer to that is a `RangeError`, which is no
+/// answer. Returning the leaves keeps the content; returning nothing would make
+/// `serialize` silently empty a document, because muya's block-quote serializer
+/// carries the `>` markers in the *indent* it passes down and realises them only
+/// at a leaf, so a clamp that stopped descending would drop the markers too.
+/// `block::clamp_depth` reparents leaves for the same reason and this is the
+/// same rule one layer up.
+///
+/// Iterative, like everything else on this path: the tree it is asked about is
+/// by definition the one that is too deep to recurse over.
+pub(crate) fn leaves_below(doc: &Document, ids: &[NodeId]) -> Vec<NodeId> {
+    let mut leaves = Vec::new();
+    let mut work: Vec<NodeId> = ids.iter().rev().copied().collect();
+    while let Some(id) = work.pop() {
+        let children = doc.children(id);
+        if children.is_empty() {
+            leaves.push(id);
+        } else {
+            work.extend(children.iter().rev().copied());
+        }
+    }
+    leaves
+}
+
 /// Returned by the entry points this milestone has not reached yet.
 ///
 /// Callers in the test harnesses treat this as "skip", not "fail", so the
@@ -502,7 +586,61 @@ pub fn normalize_source(text: &str) -> String {
 ///
 /// [`block::parse_blocks`] plus [`labels::collect`], which is what S1 recorded
 /// this function would be. **Infallible:** every string is a document, exactly
-/// as `MarkdownToState.generate()` is total.
+/// as `MarkdownToState.generate()` is total — with the one exception below,
+/// which is `pulldown-cmark`'s and not this crate's.
+///
+/// # The one exception, and it is not this crate's
+///
+/// `docs/M2.md` §10, *"Owed by S6"*, item 1: **`pulldown-cmark` 0.13.4 panics**
+/// on a document holding a list item, a link reference definition inside it,
+/// and a following line that is whitespace-only and not all spaces —
+/// `"> - [a]: /x\n\t"` is the minimal one. `Option::unwrap()` on `None` inside
+/// `OffsetIter::next` (`parse.rs:2199`), reached before any of this crate's
+/// code runs, so the totality above is false for that class alone. There is no
+/// published version to upgrade to and the release profile is `panic = "abort"`
+/// (§12), so catching it is not open either; §10 owes the decision to M4.
+/// `docs/upstream-issues.md` records it and
+/// [`block::tests::pulldown_cmark_panics_on_a_definition_in_a_quoted_list_item_before_a_tab_line`]
+/// is `#[should_panic]`, so the day upstream fixes it the test says so.
+///
+/// **This crate's own violation of §11.3's *"malformed input must never
+/// panic"* was repaired at S7** and is not a second exception: the dedent in
+/// [`block`]'s container-prefix stripper cut a whitespace-only continuation
+/// line at a byte that need not be a `char` boundary. See
+/// [`block::tests::a_wide_whitespace_continuation_line_dedents_to_nothing`].
+///
+/// # Nesting is clamped, and the reference engine is not where the number came
+/// from
+///
+/// No tree this returns is deeper than [`MAX_NESTING_DEPTH`]. At the limit the
+/// parse **stops opening containers and the rest of that container's source
+/// becomes one paragraph's text** — so `"> "` × 2000 is 127 block quotes whose
+/// paragraph reads `"> " × 1873 + "x"`, and serializing it reproduces the input
+/// byte for byte. [`block::Builder::would_exceed_depth`] argues that choice
+/// against the two alternatives.
+///
+/// **muya has no limit to copy: it dies too, and where it dies is an artifact.**
+/// Measured against `@muyajs/core` at `MARKTEXT_REF` on Node 24.14, one process
+/// per depth, by binary search on `"> " × n + "x"`:
+///
+/// | muya entry point | deepest `n` that returns | first `n` that throws |
+/// |---|---:|---:|
+/// | `MarkdownToState.generate` | 1953 | 1992 |
+/// | `+ ExportMarkdown.generate` | 1757 | 1796 |
+/// | `+ JSON.stringify` | 1953 | 1992 |
+/// | `renderToStaticHTML({sanitize: false})` | 1953 | 1992 |
+/// | `renderToStaticHTML({sanitize: true})` | 1875 | 1914 |
+///
+/// Every one of those is `RangeError: Maximum call stack size exceeded`, and
+/// the number is V8's stack rather than a decision: the same measurement at
+/// `--stack-size=500` gives 938 and at `--stack-size=4000` gives 9550, a
+/// straight line through the interpreter's stack size. There is no muya
+/// behaviour to reproduce here, so the limit is **this port's stated choice**,
+/// argued on [`MAX_NESTING_DEPTH`] from the three things that *are* measurable.
+/// What the port keeps is the one thing the reference engine's answer implies:
+/// a `RangeError` returns nothing at all, so any output is closer to muya's
+/// intent than a crash, and content that survives the clamp is a bonus rather
+/// than a divergence.
 ///
 /// Callers that want only the tree write `parse(md, options).document`.
 #[must_use]
@@ -696,6 +834,88 @@ mod tests {
             .and_then(mt_doc::Block::text)
             .expect("a paragraph");
         assert_eq!(text.to_str(), "a\r\nb\r", "measured from muya, not chosen");
+    }
+
+    /// **The three entry points that take a [`Document`] must be safe on one
+    /// this crate did not build**, which a limit in [`parse`] cannot give them:
+    /// `mt_doc::Edit::InsertNode` reaches any depth without going near
+    /// `mt-md`, and `crates/mt-doc/tests/edit_inverse.rs` generates trees that
+    /// way already.
+    ///
+    /// 5,000 levels is ≈ 14 MB of frames at the `dev` build's measured cost
+    /// (see [`MAX_NESTING_DEPTH`]), so every one of these aborted before S7 —
+    /// on a 1 MiB main thread and on a `cargo test` thread alike.
+    ///
+    /// [`render_to_static_html`] is deliberately absent: it takes `&str` and
+    /// parses, so there is no way to hand it a foreign document and
+    /// [`block::parse_blocks`]'s limit is the whole of its answer.
+    /// [`html::to_html`] is the part of it that does take one, and it is here.
+    #[test]
+    fn every_entry_point_survives_a_document_no_parse_could_have_built() {
+        use mt_doc::{Block, Edit};
+
+        const DEPTH: usize = 5_000;
+        let mut doc = Document::new();
+        let mut parent = doc.root();
+        for _ in 0..DEPTH {
+            // `InsertNode`'s inverse is `RemoveNode` carrying the minted id —
+            // the same way `block::insert` reads one, and the reason M2.md §5
+            // D9's "no edit path may bypass `Document::apply`" costs nothing.
+            let inverse = doc.apply(&[Edit::InsertNode {
+                parent,
+                index: doc.children(parent).len(),
+                block: Block::BlockQuote {
+                    children: Vec::new(),
+                },
+            }]);
+            let [Edit::RemoveNode { node }] = inverse.as_slice() else {
+                unreachable!("InsertNode's inverse is RemoveNode")
+            };
+            parent = *node;
+        }
+        doc.apply(&[Edit::InsertNode {
+            parent,
+            index: 0,
+            block: Block::Paragraph {
+                text: mt_doc::Text::from("[a]: /u".to_string()),
+            },
+        }]);
+
+        // Each of these used to overflow the stack on this document. The
+        // assertions are deliberately weak — that they *return* is the claim.
+        let labels = labels::collect(&doc);
+        assert_eq!(labels.len(), 1, "the walk reached the deepest paragraph");
+
+        // The blocks below the limit are flattened onto the deepest one that
+        // is inside it, so all three keep the paragraph rather than emptying
+        // the document — `leaves_below`'s docs argue for that over the
+        // alternative, which for `serialize` is losing the `>` markers too.
+        let quotes = "> ".repeat(MAX_NESTING_DEPTH - 1);
+        let markdown = serialize(&doc, Options::MUYA_DEFAULT);
+        assert!(
+            markdown.contains(&format!("{quotes}[a]: /u")),
+            "{markdown:?}"
+        );
+
+        let json = state::to_state_json(&doc);
+        assert_eq!(
+            json.matches("\"block-quote\"").count(),
+            MAX_NESTING_DEPTH - 1,
+            "one per level inside the limit and none below it"
+        );
+
+        let rendered = html::to_html(&doc, &labels, Options::MUYA_DEFAULT);
+        assert_eq!(
+            rendered.matches("<blockquote>").count(),
+            MAX_NESTING_DEPTH - 1
+        );
+    }
+
+    /// The constant is the number the docs quote, in one place, so that a
+    /// change to it is a change to the paragraph that argues for it.
+    #[test]
+    fn the_nesting_limit_is_the_number_its_own_documentation_states() {
+        assert_eq!(MAX_NESTING_DEPTH, 128);
     }
 
     #[test]

@@ -4,10 +4,11 @@
 Cargo.lock
 
 # The corpus is **generated**, not committed: `cargo xtask fuzz-seed` writes
-# 4,237 files per target from the differential sweep's own inputs, and three
-# copies of that is 12,711 files whose content is already in the repository
-# under `bench/corpus/` and `spec/fixtures/`. Committing them would triple the
-# file count of the repository to store a derived artifact.
+# 4,237 files into each of the three `mt-inline` targets' directories and 712
+# into each of the three `mt-md` ones, which is **14,847** files whose content
+# is already in the repository under `bench/corpus/` and `spec/fixtures/`.
+# Committing them would multiply the file count of the repository to store a
+# derived artifact.
 #
 # What that costs is the *accumulated* corpus — the inputs libFuzzer discovers,
 # which are the valuable half after the first run. `.github/workflows/soak.yml`
@@ -15,8 +16,9 @@ Cargo.lock
 # night's frontier rather than restarting.
 /corpus/
 
-# Crashing inputs libFuzzer writes on a failure. A real one should be committed
-# **deliberately**, as a named regression test in
-# `crates/mt-inline/tests/`, not left here as an untracked file that only the
-# machine that found it has.
+# Crashing inputs libFuzzer writes on a failure, and the slow units
+# `-report_slow_units` records. A real crash should be committed
+# **deliberately**, as a named regression test in `crates/mt-inline/tests/` or
+# `crates/mt-md/tests/`, not left here as an untracked file that only the
+# machine that found it has; a slow unit belongs in a bench.
 /artifacts/

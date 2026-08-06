@@ -132,7 +132,7 @@ bumping it is a deliberate commit that re-runs the whole sweep.
 
 ---
 
-# A second upstream, and this one is a dependency — `pulldown-cmark`, M2 S6
+# A second upstream, and this one is a dependency — `pulldown-cmark`, M2 S6, widened at S7
 
 **Status: not filed, and unlike the three above this one has a cost.**
 
@@ -168,6 +168,43 @@ definition, followed by a line that is whitespace-only and ends in a tab.
 `crates/mt-md/src/block/tests.rs` carries both tables as tests. The reproducing
 one is `#[should_panic]`, which makes it a ratchet in the useful direction: the
 day the upstream fix lands, `cargo test` fails and points here.
+
+## The class is wider than that — corrected at M2 S7
+
+S7's generated markdown reached the same `unwrap()` from inputs the table above
+says should be fine. **The block quote is not required, and the tab is not
+either**: any whitespace character CommonMark does not count as blank will do.
+
+| Input | Result |
+|---|---|
+| `"- [a]:x\n\u{b}"` | **panic** — no block quote, no tab, twelve bytes |
+| `"> - [a]: /x\n\t"` | **panic** — the shape recorded at S6, still true |
+
+Every row of the S6 table stays correct and the `#[should_panic]` test stays
+green; this **widens** the class rather than contradicting it. Two ingredients
+are load-bearing — a list item containing a link reference definition, and a
+following line that is whitespace in `str::trim`'s sense but not a blank line in
+CommonMark's — and the block quote that looked like a third is an accident of the
+input the generator happened to find first.
+
+**Why the widening matters more than the extra reproducer.** Option 3 below is
+*"pre-scan for the shape in `mt_md::block` and route around it"*, and a pre-scan
+written against the four-ingredient reading would have let most of the class
+through while reporting that it was handled. `is_the_known_upstream_panic` in
+`crates/mt-md/tests/round_trip_properties.rs` is the widened predicate — it skips
+**89 of 1,600** generated documents, narrow enough that
+`the_only_panics_the_generators_reach_are_the_ones_the_guards_name` still fails
+on anything else that panics — and
+`the_upstream_panic_guard_covers_the_recorded_shape_and_the_wider_class` pins
+both readings so neither can be quietly narrowed again.
+
+S7 also found, and **repaired**, a panic on the neighbouring shape
+`"- a\n\u{2028}"` that had been read as a second face of this one. It was not:
+it was `mt_md::block`'s own `apply_prefix` cutting a line mid-`char`.
+`docs/M2.md` §6's "S7's verification" has the measurement that chose the fix —
+26,035 of 47,264 enumerated rows, against `marked`'s UTF-16 `slice`. The
+distinction is the point: one of the two was upstream's and one was this port's,
+and only running them separately said which.
 
 ## Why it matters more than the three above
 

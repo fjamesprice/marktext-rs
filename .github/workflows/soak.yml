@@ -9,6 +9,11 @@ name: Soak
 #   - "tiling holds on all corpus files"  — release, including 1mb.md and 5mb.md
 #   - the divergence register's full sweep — 41,009 inputs, ~120 s of Node
 #
+# docs/M2.md §6's S7 row adds the second milestone's half — round-trip property
+# tests and `cargo-fuzz` on the parse/serialize path (§11.3) — *"wired into
+# soak.yml beside `mt-inline`'s three targets"*. That is what the three extra
+# fuzz targets and the second proptest-soak step below are.
+#
 # ci.yml runs the bounded versions of the last two on every push; this runs the
 # unbounded ones nightly. Nothing here is a *different* check — it is the same
 # check with the cap taken off, which is why each job says what ci.yml's version
@@ -17,12 +22,12 @@ name: Soak
 on:
   schedule:
     # 03:00 UTC. Nothing depends on the hour; it is off-peak for the shared
-    # runner pool and the fuzz matrix asks for six concurrent runners.
+    # runner pool and the fuzz matrix asks for twelve concurrent runners.
     - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
       fuzz_minutes:
-        description: 'Minutes per fuzz shard (6 shards run in parallel; 240 = 24 CPU-hours)'
+        description: 'Minutes per fuzz shard (12 shards run in parallel; 240 = 48 CPU-hours)'
         required: false
         default: '240'
 
@@ -44,9 +49,9 @@ jobs:
   #
   # `fuzz/` is its own workspace so that nightly stays out of the repository's
   # rust-toolchain.toml, and the price of that is that `cargo test --workspace`
-  # does not compile these targets — a rename in `mt-inline` breaks them
-  # silently. This job is what turns "silently, four hours in" into "in one
-  # minute".
+  # does not compile these targets — a rename in `mt-inline`, `mt-md` or
+  # `mt-doc` breaks them silently. This job is what turns "silently, four hours
+  # in" into "in one minute".
   # ---------------------------------------------------------------------------
   fuzz-build:
     name: fuzz build
@@ -72,7 +77,11 @@ jobs:
             ~/.cargo/git/db
             ~/.cargo/bin/cargo-fuzz
             fuzz/target
-          key: fuzz-${{ hashFiles('fuzz/Cargo.toml', 'crates/mt-inline/**') }}
+          # Every crate a target links, not only `mt-inline`. A key that names
+          # one of three would restore a stale `fuzz/target` after a change to
+          # `mt-md` — and the build this job exists to catch would be the build
+          # it skips.
+          key: fuzz-${{ hashFiles('fuzz/Cargo.toml', 'crates/mt-inline/**', 'crates/mt-md/**', 'crates/mt-doc/**') }}
           restore-keys: fuzz-
 
       - name: Install cargo-fuzz
@@ -89,13 +98,19 @@ jobs:
         run: cargo +nightly fuzz build
 
   # ---------------------------------------------------------------------------
-  # The 24 hours.
+  # The 24 hours, twice over.
   #
   # A GitHub-hosted runner is killed at 6 hours, so "24 h" cannot be one job.
-  # 3 targets × 2 shards × 4 h = 24 CPU-hours in 4 hours of wall clock, every
-  # shard well under the limit. The shards of one target differ only in their
-  # libFuzzer `-seed` and share a restored corpus, so they explore different
-  # mutation sequences from the same frontier instead of repeating each other.
+  # **6 targets × 2 shards × 4 h = 48 CPU-hours in 4 hours of wall clock**,
+  # every shard well under the limit. It was 3 × 2 × 4 = 24 until M2 S7 added
+  # the three `mt-md` targets; each target keeps its own **8 CPU-hours**, which
+  # is the point of widening the matrix rather than shortening the runs — M1's
+  # exit gate says *"fuzzer runs 24 h without a panic"* about `mt-inline`, and
+  # halving `tokenize` to pay for `parse` would meet M2's gate by weakening M1's.
+  #
+  # The shards of one target differ only in their libFuzzer `-seed` and share a
+  # restored corpus, so they explore different mutation sequences from the same
+  # frontier instead of repeating each other.
   # ---------------------------------------------------------------------------
   fuzz:
     name: fuzz ${{ matrix.target }} (shard ${{ matrix.shard }})
@@ -105,7 +120,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [tokenize, autolink, backtracking]
+        # The first three are M1's (`mt-inline`); the last three are M2 S7's
+        # (`mt-md`), and `fuzz/README.md`'s table says what each is separate for.
+        target: [tokenize, autolink, backtracking, parse, round_trip, reparse]
         shard: [1, 2]
     steps:
       - uses: actions/checkout@v4
@@ -125,7 +142,11 @@ jobs:
             ~/.cargo/git/db
             ~/.cargo/bin/cargo-fuzz
             fuzz/target
-          key: fuzz-${{ hashFiles('fuzz/Cargo.toml', 'crates/mt-inline/**') }}
+          # Every crate a target links, not only `mt-inline`. A key that names
+          # one of three would restore a stale `fuzz/target` after a change to
+          # `mt-md` — and the build this job exists to catch would be the build
+          # it skips.
+          key: fuzz-${{ hashFiles('fuzz/Cargo.toml', 'crates/mt-inline/**', 'crates/mt-md/**', 'crates/mt-doc/**') }}
           restore-keys: fuzz-
 
       - name: Install cargo-fuzz
@@ -149,6 +170,12 @@ jobs:
       # taking `&str` needs this: libfuzzer-sys rejects any mutation that is not
       # valid UTF-8, so a run from nothing spends its budget rediscovering
       # UTF-8 rather than the tokenizer.
+      #
+      # Two seed sets since M2 S7, chosen per target by `xtask/src/fuzz.rs`: the
+      # three `mt-inline` targets get the sweep's 4,237 line-shaped inputs,
+      # unchanged, and the three `mt-md` targets get 712 **whole documents** —
+      # because a block-structure target seeded with single lines starts from a
+      # frontier with no block structure in it.
       - name: Seed the corpus
         run: cargo xtask fuzz-seed
 
@@ -160,11 +187,17 @@ jobs:
           set -o pipefail
           # -report_slow_units=5 is what turns a soak into a benchmark row:
           # whatever it reports slowest belongs in benches/tokenizer.rs, tagged
-          # with which of the three cost terms it exercises.
+          # with which of the three cost terms it exercises. It fires more often
+          # on `parse` than on the inline targets and that is expected rather
+          # than a fault — one case there is two option sets × (parse, serialize,
+          # dump_state, two sanitiser walks and an Incremental) — so read a slow
+          # unit from it as a benchmark candidate, not as a hang.
           #
           # -rss_limit_mb=4096 rather than libFuzzer's 2048 default: the
-          # tokenizer allocates a Token tree per level and a deeply nested
-          # input is a legitimate shape, not an OOM to report.
+          # tokenizer allocates a Token tree per level, `mt-md` allocates a
+          # Document plus a SourceMap plus (in `reparse`) a second parse of the
+          # whole string to compare against, and a deeply nested input is a
+          # legitimate shape, not an OOM to report.
           cargo +nightly fuzz run ${{ matrix.target }} -- \
             -max_total_time=$((MINUTES * 60)) \
             -seed=${{ matrix.shard }} \
@@ -190,6 +223,12 @@ jobs:
   # that is right — but §9 says Windows ships first, so a gate met only on Linux
   # is a gate met on the platform whose failures block least. This is the same
   # properties over the same generators, coverage-blind, on all three.
+  #
+  # Two soaks since M2 S7, one per milestone, both `#[ignore]`d tests that read
+  # `MT_SOAK_SECONDS` and rank their slowest inputs by ns/byte so that a night's
+  # run produces a **benchmark row** and not only a pass/fail. They are separate
+  # steps rather than one `--workspace` invocation because each is an hour and a
+  # failure should name which layer it is in.
   # ---------------------------------------------------------------------------
   proptest-soak:
     name: proptest soak (${{ matrix.name }})
@@ -227,20 +266,48 @@ jobs:
       # unreachable and reproduces anyway, and S7 turned each proof into a
       # `debug_assert!` so a soak can falsify it. A plain --release run compiles
       # all four out — faster, and worth less.
-      - name: Soak
+      #
+      # It is not optional for `mt-md` either, and for a second reason:
+      # `overflow-checks` rides on the same flag, and the block layer's
+      # container-prefix stripper is column arithmetic on `usize`. An underflow
+      # there is a range that wraps to something enormous — a wrong answer with
+      # no crash — unless the assertions are on.
+      - name: Soak mt-inline
         shell: bash
         env:
           MT_SOAK_SECONDS: 3600
           RUSTFLAGS: -C debug-assertions=yes
         run: cargo test -p mt-inline --release --test properties -- --ignored soak --nocapture
 
+      # M2 S7's half: the parse/serialize path over generated *documents*,
+      # asserting totality, sliceable ranges, map completeness, the incremental
+      # entry point, and that the round trip settles by the fourth application.
+      # `fuzz/`'s `parse`, `round_trip` and `reparse` targets are its
+      # coverage-guided siblings above; neither subsumes the other.
+      - name: Soak mt-md
+        shell: bash
+        env:
+          MT_SOAK_SECONDS: 3600
+          RUSTFLAGS: -C debug-assertions=yes
+        run: cargo test -p mt-md --release --test round_trip_properties -- --ignored soak --nocapture
+
   # ---------------------------------------------------------------------------
   # "Tiling holds on all corpus files" — the clause ci.yml runs bounded.
   #
-  # `round_trip.rs` puts 1mb.md and 5mb.md behind `#[ignore]` because they are
-  # minutes in a debug profile. --release is not only for speed: `check_tiling`
-  # is compiled out there, so this checks the property through the public API
-  # alone, which is the honest version of it.
+  # `mt-inline`'s `round_trip.rs` puts 1mb.md and 5mb.md behind `#[ignore]`
+  # because they are minutes in a debug profile. --release is not only for
+  # speed: `check_tiling` is compiled out there, so this checks the property
+  # through the public API alone, which is the honest version of it.
+  #
+  # **`mt-md` is deliberately not here, and that is a measurement rather than an
+  # omission.** M2 S7 checked: `crates/mt-md/tests/round_trip.rs` and
+  # `crates/mt-md/tests/source_ranges.rs` contain **no** `#[ignore]`d cases —
+  # both already read every `bench/corpus/` file, `1mb.md` and `5mb.md`
+  # included, on every push in the debug profile that `cargo test --workspace`
+  # runs. Adding them under `--release` would be a second copy of a check that
+  # already ran, at forty minutes a night, testing nothing the first run did
+  # not. If either ever grows an `#[ignore]`d case, this is the job it belongs
+  # in and this comment is what says so.
   # ---------------------------------------------------------------------------
   release-invariants:
     name: release invariants (${{ matrix.name }})

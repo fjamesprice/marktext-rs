@@ -1,5 +1,9 @@
 [package]
-name = "mt-inline-fuzz"
+# Renamed from `mt-inline-fuzz` at M2 S7. It held three targets for one crate;
+# it now holds six for three, and the old name would say the `mt-md` targets
+# were somebody else's. `publish = false`, so nothing anywhere depends on it and
+# the rename costs a line in `fuzz/README.md` and nothing else.
+name = "mt-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -14,9 +18,9 @@ edition = "2024"
 # Linux job — would trade the whole project's build for one job's convenience.
 #
 # The cost of the split is that `cargo test --workspace` does not compile these
-# targets, so a change to `mt-inline`'s public API can break them silently.
-# `.github/workflows/soak.yml` runs `cargo fuzz build` on every dispatch, and
-# `fuzz/README.md` says to run it after an API change.
+# targets, so a change to the public API of `mt-inline`, `mt-md` or `mt-doc` can
+# break them silently. `.github/workflows/soak.yml` runs `cargo fuzz build` on
+# every dispatch, and `fuzz/README.md` says to run it after an API change.
 [workspace]
 
 [package.metadata]
@@ -24,18 +28,51 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+
+# M2 S7. `fuzz_targets/reparse.rs`'s input is a *session* — a document and a
+# list of `(at, remove, insert)` edits — rather than a string, so it derives
+# `Arbitrary` and lets `libfuzzer-sys` cut the byte string into one. The root
+# `Cargo.toml` names this crate beside `libfuzzer-sys` as one that deliberately
+# lives here and not in the workspace lockfile, for the nightly reason above.
+arbitrary = { version = "1", features = ["derive"] }
+
 mt-inline = { path = "../crates/mt-inline" }
+# M2 S7, per RUST-REWRITE-PLAN.md §11.3's *"cargo-fuzz on the parse/serialize
+# path"* and `docs/M2.md` §6's S7 row. `mt-doc` is `mt-md`'s own dependency and
+# is named here as well because `fuzz_targets/parse.rs` and `reparse.rs` walk a
+# `Document` directly — a path dependency, so this adds nothing to any lockfile
+# the application ships.
+mt-md = { path = "../crates/mt-md" }
+mt-doc = { path = "../crates/mt-doc" }
 
 [profile.release]
 debug = true
-# **The assertions are the point.** M1.md §6 records four branches this crate
+# **The assertions are the point.** M1.md §6 records four branches `mt-inline`
 # proves unreachable and reproduces anyway, each with the proof as a test; S7
 # turned each proof into a `debug_assert!` so a fuzzer can falsify it rather
 # than agree with it. A release profile with assertions compiled out would run
 # faster and check less — and "less" here is precisely the four claims nobody
 # has been able to break by hand.
+#
+# It applies to `mt-md` and `mt-doc` for the same reason and not by accident:
+# `overflow-checks` in particular is what turns a column-arithmetic underflow in
+# the container-prefix stripper into a crash with a reproducer instead of a
+# range that wraps to something enormous.
 debug-assertions = true
 overflow-checks = true
+
+# ---------------------------------------------------------------------------
+# The six targets. `fuzz_targets/known_panics.rs` is deliberately **not** one:
+# cargo-fuzz treats every `[[bin]]` here as a fuzz target and would try to run
+# it. It is a `mod` of the three `mt-md` targets, nothing more.
+#
+# It is not a `[[test]]` either, and that was measured rather than assumed:
+# `cargo test --test <name>` builds *every* `[[bin]]` of the package so that an
+# integration test can exec them, and these bins are `#![no_main]` — they link
+# only under the flags `cargo fuzz` passes, so a plain `cargo test` here fails
+# at `LNK1561: entry point must be defined`. The guard's coverage assertions run
+# once per process instead; `known_panics.rs`'s module doc has the argument.
+# ---------------------------------------------------------------------------
 
 [[bin]]
 name = "tokenize"
@@ -54,6 +91,27 @@ bench = false
 [[bin]]
 name = "backtracking"
 path = "fuzz_targets/backtracking.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse"
+path = "fuzz_targets/parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "round_trip"
+path = "fuzz_targets/round_trip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "reparse"
+path = "fuzz_targets/reparse.rs"
 test = false
 doc = false
 bench = false

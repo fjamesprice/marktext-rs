@@ -45,11 +45,19 @@ use serde_json::{Map, Value, json};
 /// tree is rooted at `ScrollPage`, whose `blockName` is not a `TState` member
 /// either), and what `MarkdownToState.generate()` returns is an *array* of the
 /// top-level blocks.
+/// It takes a [`Document`] rather than a parse, so the tree need not have come
+/// from [`crate::parse`] and need not be inside
+/// [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH) — `mt_doc::Edit::InsertNode`
+/// reaches any depth without going near this crate. §11.3 therefore applies
+/// here on its own account, and the walk stops descending at the limit rather
+/// than trusting its caller. **Two recursions are bounded by that, not one**:
+/// this function's, and `serde_json`'s over the nested [`Value`] it returns —
+/// `to_string_pretty` and `Value`'s own drop glue both descend once per level.
 pub fn to_state(doc: &Document) -> Value {
     Value::Array(
         doc.children(doc.root())
             .iter()
-            .map(|id| node_to_state(doc, *id))
+            .map(|id| node_to_state(doc, *id, 1))
             .collect(),
     )
 }
@@ -59,7 +67,9 @@ pub fn to_state_json(doc: &Document) -> String {
     serde_json::to_string_pretty(&to_state(doc)).expect("a state tree is always serializable")
 }
 
-fn node_to_state(doc: &Document, id: NodeId) -> Value {
+/// `depth` is the node's own depth, counting a top-level block as 1 — the same
+/// unit [`crate::MAX_NESTING_DEPTH`] is stated in.
+fn node_to_state(doc: &Document, id: NodeId, depth: usize) -> Value {
     let block = doc
         .block(id)
         .expect("only the root has no block, and the root is not serialized");
@@ -76,15 +86,24 @@ fn node_to_state(doc: &Document, id: NodeId) -> Value {
             object.insert("text".into(), json!(text.to_str().as_ref()));
         }
         None => {
-            object.insert(
-                "children".into(),
-                Value::Array(
-                    doc.children(id)
-                        .iter()
-                        .map(|child| node_to_state(doc, *child))
-                        .collect(),
-                ),
-            );
+            // The clamp, for a document this crate did not parse. A tree from
+            // `parse` is inside the limit by construction, so this branch is
+            // unreachable from any markdown; a hand-built one has the blocks
+            // below the limit flattened onto it, which is the same answer
+            // `serialize` and `html` give the same document — see
+            // `crate::leaves_below`.
+            let children: Vec<Value> = if depth + 1 >= crate::MAX_NESTING_DEPTH {
+                crate::leaves_below(doc, doc.children(id))
+                    .into_iter()
+                    .map(|leaf| node_to_state(doc, leaf, depth + 1))
+                    .collect()
+            } else {
+                doc.children(id)
+                    .iter()
+                    .map(|child| node_to_state(doc, *child, depth + 1))
+                    .collect()
+            };
+            object.insert("children".into(), Value::Array(children));
         }
     }
 

@@ -709,6 +709,77 @@ fn a_tab_in_a_list_items_continuation_line_becomes_four_spaces() {
     assert_eq!(texts("- foo\n\n\tbar\n", SPEC), ["foo", "  bar"]);
 }
 
+/// **The dedent's cut is a `char` boundary, and the S7 repair that made it
+/// one.** `str::trim` calls U+2028 whitespace, so a continuation line of one
+/// wide space takes the dedent branch with `indent = 2` landing inside a
+/// three-byte character, and the arm's `text[cut..]` was a panic — §11.3's
+/// *"malformed input must never panic"*, with `panic = "abort"` behind it.
+///
+/// Every whitespace character `str::trim` accepts and CommonMark does **not**
+/// count as blank, one row each, all at `indent = 2`:
+///
+/// | Line | Bytes | Before | Now |
+/// |---|---|---|---|
+/// | U+2028 LINE SEPARATOR | 3 | **panic** | `""` |
+/// | U+2029 PARAGRAPH SEPARATOR | 3 | **panic** | `""` |
+/// | U+3000 IDEOGRAPHIC SPACE | 3 | **panic** | `""` |
+/// | U+1680 OGHAM SPACE MARK | 3 | **panic** | `""` |
+/// | U+202F NARROW NO-BREAK SPACE | 3 | **panic** | `""` |
+/// | U+0085 NEL | 2 | `""` | `""` |
+/// | U+00A0 NO-BREAK SPACE | 2 | `""` | `""` |
+/// | U+000B, U+000C | 1 | `""` | `""` |
+///
+/// So the repair does not choose a new answer, it extends the one the
+/// two-byte rows already gave: at `indent = 2` their cut was a boundary and
+/// `text[2..]` was already empty.
+///
+/// # Why empty, and not the other three readings
+///
+/// The arm transcribes `nextLineWithoutTabs.slice(indent)`, and JavaScript
+/// slices in **UTF-16 code units** — one per character here — so the line is
+/// shorter than `indent` and `String.prototype.slice` past the end is `''`.
+/// Enumerated over every whitespace-only line of one to three characters at
+/// `indent` 1..=6, of the **47,264** rows whose byte cut lands mid-character:
+/// empty reproduces `slice(indent)` on **26,035**, snapping the cut up to the
+/// next boundary on **20,584**, and snapping it down or keeping the line whole
+/// on **0**. It is also the answer the three sibling arms of this same `match`
+/// already give, via `str::get(..).unwrap_or("")`.
+///
+/// # What this does not fix, measured against the running engine
+///
+/// muya puts the wide line **outside** the list — `- a\n\u{2028}` is a
+/// `bullet-list › list-item › paragraph "a"` followed by a sibling
+/// `paragraph "\u{2028}"` — because `marked`'s `list` rule is an `m`-flagged
+/// regular expression and JavaScript's regular expressions treat U+2028 as a
+/// line terminator, while the `src.split('\n', 1)` that feeds the continuation
+/// loop does not. The port takes its block structure from `pulldown-cmark`,
+/// which keeps the line inside the item, so the disagreement is upstream of
+/// this function and no choice of cut can close it. It costs nothing measured:
+/// no input in `cargo xtask blocks`' 1344, `cargo xtask diff`'s 22 or
+/// `round_trip.rs`' 1346 has this shape.
+#[test]
+fn a_wide_whitespace_continuation_line_dedents_to_nothing() {
+    for line in [
+        "\u{2028}", "\u{2029}", "\u{3000}", "\u{1680}", "\u{202f}", "\u{85}", "\u{a0}", "\u{b}",
+        "\u{c}",
+    ] {
+        assert_eq!(texts(&format!("- a\n{line}"), SPEC), ["a"], "{line:?}");
+    }
+
+    // The character need not be alone on the line, and the item need not come
+    // first — row four of the reproducer table this replaced.
+    assert_eq!(texts("- a\n \u{2028}", SPEC), ["a"]);
+    assert_eq!(texts("- a\n\u{2028}\u{2028}", SPEC), ["a"]);
+    assert_eq!(texts("- [ ] a\n\u{2028}", SPEC), ["a"]);
+    assert_eq!(texts("\u{3000}\n- a", SPEC), ["\u{3000}", "a"]);
+
+    // The neighbours that never took the dedent branch, unchanged: a line with
+    // content is not whitespace-only, and a tab takes the sibling arm.
+    assert_eq!(texts("- a\n\u{2028}b", SPEC), ["a\n\u{2028}b"]);
+    assert_eq!(texts("- a\n\t\u{2028}", SPEC), ["a\n  \u{2028}"]);
+    assert_eq!(texts("- a\n  \u{2028}", SPEC), ["a\n\u{2028}"]);
+}
+
 /// `blockquoteSetextReplace`, which inserts four spaces rather than removing
 /// anything — and only for a lazy line that follows another lazy line.
 #[test]
@@ -1001,6 +1072,178 @@ fn the_neighbours_of_the_upstream_panic_parse_normally() {
             .into_offset_iter()
             .count();
         assert!(count > 0, "{src:?}");
+    }
+}
+
+// --- the nesting limit, §11.3 -----------------------------------------------
+
+/// The deepest node in `src`'s tree, counting a top-level block as 1.
+fn tree_depth(src: &str, options: Options) -> usize {
+    let doc = parse_blocks(src, options);
+    let mut deepest = 0;
+    let mut stack: Vec<(NodeId, usize)> =
+        doc.children(doc.root()).iter().map(|id| (*id, 1)).collect();
+    while let Some((id, depth)) = stack.pop() {
+        deepest = deepest.max(depth);
+        stack.extend(doc.children(id).iter().map(|child| (*child, depth + 1)));
+    }
+    deepest
+}
+
+/// **The recursion §11.3 found is this crate's, not `pulldown-cmark`'s** — and
+/// that had to be measured rather than assumed, because the fuzz target drives
+/// `parse`, which calls into the parser.
+///
+/// Its `OffsetIter` is a position loop: 50,000 nested block quotes, which is
+/// 391× the depth at which this crate's own walks used to abort on the same
+/// stack, produce a full event stream and no growth in frames. So the fix
+/// belongs here and there is nothing to add to `docs/upstream-issues.md`
+/// beside the abort that file already records.
+#[test]
+fn pulldown_cmark_is_iterative_over_container_depth() {
+    let src = "> ".repeat(50_000) + "x";
+    let events = pulldown_cmark::Parser::new_ext(&src, cmark_options())
+        .into_offset_iter()
+        .count();
+    // Start + End per quote, plus the paragraph's own three events.
+    assert!(events > 100_000, "{events}");
+}
+
+/// **The reproducer.** `"> "` × 2000 — 4,001 bytes — aborted
+/// `mt-cli --dump-state` before S7: *"thread 'main' has overflowed its stack"*,
+/// which `panic = "abort"` (§12) makes a crash with no `catch_unwind` and no
+/// `Result`. Depth 1000 was fine and 2000 was not.
+///
+/// Every depth here used to abort on `mt-cli`'s 1 MiB main thread, and 50,000
+/// is here because the first repair S7 wrote — a pass over the finished tree —
+/// turned the abort into a **35.5 s** parse at depth 8000 rather than into an
+/// answer. §12 has no budget row for that, so the limit is enforced in
+/// [`Builder::would_exceed_depth`], where it keeps the prefix chain bounded and
+/// the whole path linear.
+#[test]
+fn a_document_two_thousand_containers_deep_returns_instead_of_aborting() {
+    for depth in [2000usize, 8000, 50_000] {
+        let src = "> ".repeat(depth) + "x";
+        assert!(
+            tree_depth(&src, MUYA) <= MAX_NESTING_DEPTH,
+            "depth {depth} built past the limit"
+        );
+    }
+}
+
+/// The limit holds for every nesting shape, not only for the one that found it.
+///
+/// Six shapes, because the reservation
+/// ([`Builder::would_exceed_depth`], [`deepest_legal_depth`]) is per-kind and a
+/// list costs two levels where a quote costs one: a bullet list is
+/// `list › list-item`, an ordered list the same, and the alternating shapes are
+/// what would catch a reservation that is right for one kind and wrong for the
+/// pair.
+#[test]
+fn no_input_of_any_shape_or_size_builds_a_tree_past_the_limit() {
+    for marker in ["> ", "- ", "* ", "20. ", "- > ", "> - "] {
+        for depth in [126usize, 127, 128, 129, 200, 2000] {
+            for options in [SPEC, MUYA] {
+                let src = marker.repeat(depth) + "x";
+                let built = tree_depth(&src, options);
+                assert!(
+                    built <= MAX_NESTING_DEPTH,
+                    "{marker:?} × {depth} built {built} deep"
+                );
+            }
+        }
+    }
+}
+
+/// At the limit the port **stops opening containers and the rest of the source
+/// becomes one paragraph's text** — the first of the three candidates S7
+/// weighed, and the only one that keeps `serialize(parse(s)) == s` here.
+///
+/// `"> "` × 130 keeps 127 quotes, and the paragraph carries the three markers
+/// they did not consume. Serializing re-emits exactly the 127 prefixes it
+/// stripped and the text supplies the remainder, so the output *is* the input —
+/// which makes the fixed point §11.3's first row asks for hold by identity
+/// rather than by luck. Truncating would lose the `x`; reparenting the deep
+/// leaves would lose the markers between them and the second parse would
+/// differ from the first.
+#[test]
+fn the_source_below_the_limit_becomes_one_paragraphs_text() {
+    let src = "> ".repeat(130) + "x";
+    assert_eq!(
+        texts(&src, MUYA),
+        ["> > > x"],
+        "the three quotes the limit refused, verbatim"
+    );
+    assert_eq!(tree_depth(&src, MUYA), MAX_NESTING_DEPTH);
+    assert_eq!(
+        crate::serialize(&parse_blocks(&src, MUYA), MUYA),
+        format!("{src}\n"),
+        "the round trip is the identity at the limit — modulo the final newline\n\
+         `ExportMarkdown` adds to every document, which is 348 of the identity\n\
+         exceptions `tests/round_trip.rs` already enumerates and is not this\n\
+         limit's doing"
+    );
+}
+
+/// The two halves of the limit must allow exactly the same depths.
+///
+/// [`Builder::would_exceed_depth`] decides on a `pulldown-cmark` tag as the
+/// walk runs; [`deepest_legal_depth`] decides on a finished [`Block`] when
+/// [`clamp_depth`] checks the composed document. If the second is stricter it
+/// re-cuts a tree the first already clamped — which is not hypothetical: S7's
+/// first pairing cost a level and broke the identity above.
+#[test]
+fn the_two_halves_of_the_limit_allow_the_same_depths() {
+    let quote = Tag::BlockQuote(None);
+    let list = Tag::List(None);
+    for (tag, block) in [
+        (
+            &quote,
+            Block::BlockQuote {
+                children: Vec::new(),
+            },
+        ),
+        (
+            &list,
+            Block::BulletList {
+                loose: false,
+                marker: BulletMarker::Dash,
+                children: Vec::new(),
+            },
+        ),
+        (
+            &Tag::Item,
+            Block::ListItem {
+                children: Vec::new(),
+            },
+        ),
+        (&Tag::Paragraph, Block::Paragraph { text: Text::new() }),
+    ] {
+        let allowed = deepest_legal_depth(&block);
+        // `would_exceed_depth` reads the depth off the frame stack, so a stack
+        // of `n` frames (root included) is asking about depth `n`.
+        let builder = |depth: usize| Builder {
+            src: "",
+            options: MUYA,
+            stack: Vec::with_capacity(depth),
+            seen_labels: HashSet::new(),
+            prefixes: Vec::new(),
+            overflow: 0,
+        };
+        for depth in [allowed, allowed + 1] {
+            let mut b = builder(depth);
+            b.stack.resize_with(depth, || Frame {
+                kind: FrameKind::Root,
+                range: 0..0,
+                children: Vec::new(),
+                scanned_to: 0,
+            });
+            assert_eq!(
+                b.would_exceed_depth(tag),
+                depth > allowed,
+                "{block:?} at depth {depth}"
+            );
+        }
     }
 }
 

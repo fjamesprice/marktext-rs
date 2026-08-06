@@ -1,0 +1,54 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+#
+# ---------------------------------------------------------------------------
+# One seed, and four findings that are named tests instead. Both halves are
+# deliberate.
+#
+# `tests/reparse_properties.proptest-regressions` holds twenty-five, and §8's
+# risk table names them as the mitigation that "sixteen hard-won seeds re-run
+# before any new case". The seed below earns its place on the same terms: it
+# replays `"*\n\ta\n\u{2028}"`, which is the input that showed
+# `opens_a_list_item` was too narrow — `*` alone is an *empty* list item in
+# CommonMark, and a predicate that required whitespace after the marker walked
+# straight past it. A guard that is one CommonMark rule short is exactly the
+# kind of thing that stops being checked once it is fixed, so this replays
+# before every new case. `is_the_known_upstream_panic` still reads that
+# predicate, so the seed outlived the guard it was found for.
+#
+# The other four findings were promoted out of a seed and into a **named
+# test**, because for each of them a hash would have said less than a
+# sentence:
+#
+#   - `mt_md::parse` panicked on "- a\n\u{2028}", a bounds-safe but not
+#     boundary-safe dedent in `block.rs`'s `apply_prefix`. **Repaired at S7**,
+#     because §11.3's "malformed input must never panic" is this file's own
+#     claim. Pinned by
+#     `parse_does_not_panic_on_a_wide_whitespace_line_inside_a_list_item`, and
+#     by `block::tests::a_wide_whitespace_continuation_line_dedents_to_nothing`
+#     for the text the dedent now returns.
+#
+#   - `pulldown-cmark`'s panic is wider than docs/M2.md §10 records: no block
+#     quote is needed, and any whitespace character CommonMark does not count
+#     as blank will do. Pinned by
+#     `the_upstream_panic_guard_covers_the_recorded_shape_and_the_wider_class`.
+#
+#   - The round trip has no constant settling time when a code fence's info
+#     string holds a backtick: n such fences take n + 2 applications. Pinned by
+#     `the_settling_time_grows_with_the_number_of_backtick_info_strings`, which
+#     asserts the coefficients rather than one instance of them.
+#
+#   - The round trip oscillates with period two on "> - [a]: /x\n>   * ", where
+#     muya settles on the first pass. Pinned by
+#     `the_round_trip_oscillates_between_a_tight_and_a_loose_rendering`.
+#
+# A named test beats a seed on three counts: it says what the input *means*, it
+# survives a change to the generator that would make a seed replay something
+# else entirely, and it fails with a sentence rather than with a hash. A seed
+# beats a named test on one — it costs nothing to keep and it re-runs the exact
+# draw — which is why the one above stayed.
+cc 8177cf0516b9751c39c5168d000f321392feeabaeb21f42896d3f128e009fa55 # shrinks to src = "*\n\ta\n\u{2028}"

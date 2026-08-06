@@ -185,6 +185,13 @@ impl Incremental {
     /// which is the one thing this type exists to prevent; the reason it is
     /// still offered is that clearing the dirty set is a `&mut` operation that
     /// has nothing to do with the text.
+    ///
+    /// It is also the one way to put a node past [`crate::MAX_NESTING_DEPTH`]
+    /// into a document this type holds — every tree it builds itself comes from
+    /// `block::build_span`, which clamps — and the recursive walks below
+    /// (`graft`, `subtree_eq`, `record_ranges`, `shift_subtree`) are bounded by
+    /// that clamp rather than by a guard of their own. Both consequences have
+    /// the same cause and the same answer: do not edit through this.
     pub fn document_mut(&mut self) -> &mut Document {
         &mut self.document
     }

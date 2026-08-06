@@ -65,15 +65,22 @@ use mt_inline::Labels;
 /// and a leaf kind it skips is one it never has to re-read.
 ///
 /// A `footnote` is a container, so a definition inside one *is* collected.
+/// This one takes a [`Document`] rather than a parse, so it cannot assume the
+/// tree came from [`crate::parse`] and is inside
+/// [`MAX_NESTING_DEPTH`](crate::MAX_NESTING_DEPTH) — `mt_doc::Edit::InsertNode`
+/// builds a document to any depth at all, and `tests/edit_inverse.rs` does. So
+/// the walk is **iterative**: `travel`'s recursion is muya's shape, not a
+/// requirement, and an explicit worklist reproduces its order exactly while
+/// keeping §11.3's "malformed input must never panic" true for a tree this
+/// crate did not build.
 pub fn collect(doc: &Document) -> Labels {
     let mut labels = Labels::new();
-    visit(doc, doc.root(), &mut labels);
-    labels
-}
-
-fn visit(doc: &Document, id: NodeId, labels: &mut Labels) {
-    for child in doc.children(id) {
-        match doc.block(*child) {
+    // Depth-first, in document order: children are pushed reversed so that the
+    // first child is the next one popped, which is the order `travel`'s
+    // `for (const child of st.children)` visits in.
+    let mut work: Vec<NodeId> = doc.children(doc.root()).iter().rev().copied().collect();
+    while let Some(id) = work.pop() {
+        match doc.block(id) {
             Some(Block::Paragraph { text }) => {
                 if let Some((label, info)) = mt_inline::label_info(&text.to_str()) {
                     // `labels.set` — the last definition of a label wins. See
@@ -86,9 +93,10 @@ fn visit(doc: &Document, id: NodeId, labels: &mut Labels) {
             // `travel` falls off the end of the `else if`.
             Some(block) if block.text().is_some() => {}
             // A container, or the root.
-            _ => visit(doc, *child, labels),
+            _ => work.extend(doc.children(id).iter().rev().copied()),
         }
     }
+    labels
 }
 
 #[cfg(test)]

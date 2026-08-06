@@ -87,6 +87,7 @@ pub fn to_markdown(doc: &Document, options: Options) -> String {
         list_type: Vec::new(),
         is_loose_parent_list: true,
         list_indentation: options.list_indentation,
+        depth: 0,
     };
     let top = doc.children(doc.root()).to_vec();
     export.convert(&top, "", "")
@@ -157,6 +158,18 @@ struct ExportMarkdown<'a> {
     /// of a document not get a leading blank line.
     is_loose_parent_list: bool,
     list_indentation: ListIndentation,
+    /// How many [`ExportMarkdown::convert`] frames are open — the depth of the
+    /// blocks the innermost one is walking, in [`crate::MAX_NESTING_DEPTH`]'s
+    /// unit.
+    ///
+    /// muya has no counterpart: `_convertStatesToMarkdown` recurses freely and
+    /// dies of a `RangeError` at whatever depth V8's stack runs out, which S7
+    /// measured at 1,757 on Node 24's default stack and at 938 with
+    /// `--stack-size=500`. This function is handed a [`Document`] rather than a
+    /// parse, so it cannot assume [`crate::block::parse_blocks`] built it, and
+    /// §11.3's clause is not satisfiable by a limit that moves with the
+    /// interpreter.
+    depth: usize,
 }
 
 impl ExportMarkdown<'_> {
@@ -178,7 +191,34 @@ impl ExportMarkdown<'_> {
     }
 
     /// `_convertStatesToMarkdown`.
+    ///
+    /// The one addition to the transcription is the depth clamp on
+    /// [`ExportMarkdown::depth`]: a document deeper than
+    /// [`crate::MAX_NESTING_DEPTH`] serializes down to the limit and stops,
+    /// rather than aborting the process. `parse` cannot produce one
+    /// (`block::clamp_depth`), so this is reachable only from a hand-built
+    /// document — the shape `mt_doc::Edit::InsertNode` allows and
+    /// `crates/mt-doc/tests/edit_inverse.rs` generates.
     fn convert(&mut self, states: &[NodeId], indent: &str, list_indent: &str) -> String {
+        // The blocks about to be converted sit at `self.depth + 1`, and a
+        // container may not sit at `MAX_NESTING_DEPTH` — it would have to put
+        // its own content below it. `block::deepest_legal_depth` is the same
+        // arithmetic on the other half of the limit.
+        if self.depth + 1 >= crate::MAX_NESTING_DEPTH {
+            // The leaves, at this indent — `crate::leaves_below`'s docs carry
+            // the argument. They cannot recurse back into here: a leaf has no
+            // children, and the two arms that would (`block-quote`, the lists)
+            // are containers.
+            let leaves = crate::leaves_below(self.doc, states);
+            return self.convert_inner(&leaves, indent, list_indent);
+        }
+        self.depth += 1;
+        let markdown = self.convert_inner(states, indent, list_indent);
+        self.depth -= 1;
+        markdown
+    }
+
+    fn convert_inner(&mut self, states: &[NodeId], indent: &str, list_indent: &str) -> String {
         let mut result: Vec<String> = Vec::new();
         // "helper for CommonMark 264" — the example where a change of bullet
         // character starts a new list rather than continuing the old one.
