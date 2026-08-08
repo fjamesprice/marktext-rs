@@ -915,6 +915,28 @@ fn the_round_trip_settles(src: &str, options: Options, label: &str) -> Result<()
 ///   §11.3's *"Data safety"* row), and repairing them is blocked on the
 ///   `ExportMarkdown` differential runner §10 has declined to build. Neither is
 ///   repaired here; this constant only stops asserting something false.
+///
+/// # And the sentence above came true one soak later, which is why this
+/// constant is now stated **here only**
+///
+/// The very next nightly run falsified 8 from bytes, with a **305-byte** input
+/// — ` ```o ` and 300 backslashes, needing ⌊log₂ 300⌋ + 1 = 9. The response was
+/// not to raise the constant again: a coverage-guided fuzzer over
+/// `-max_len=65536` can always make the run longer, so against *bytes* any
+/// constant is a statement about `max_len` rather than about the engine, and
+/// the exclusion list would grow every run into an enumeration of engine
+/// defects the property had been made blind to.
+///
+/// So `fuzz/fuzz_targets/round_trip.rs` **no longer asserts settling at all**
+/// — it asserts totality under repetition, which is §11.3's actual clause —
+/// and the settling claim lives here alone, where the generators emit shapes
+/// this repository enumerates and the three laws above are the whole space.
+/// The asymmetry is deliberate and is the opposite of the usual rule that two
+/// harnesses should carry one claim: a claim that is true of a generator and
+/// false of a fuzzer is **two** claims, and writing it once in each place
+/// would have been the hole. §10's *"Owed by S7"* carries the day it goes
+/// back: when the serializer defects are repaired the bound becomes real and
+/// small, and the byte fuzzer should assert it again.
 const SETTLES_BY: usize = 8;
 
 /// **The first of the two families with no constant settling time at all** — a
