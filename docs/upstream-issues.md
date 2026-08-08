@@ -206,6 +206,26 @@ it was `mt_md::block`'s own `apply_prefix` cutting a line mid-`char`.
 distinction is the point: one of the two was upstream's and one was this port's,
 and only running them separately said which.
 
+## It is now the only panic left, over 3,000,000 runs — M2 S7 round 2
+
+S7's first soak dispatch went red, and the triage behind it swept **1.5 M**
+generated documents from a 34-token alphabet × **2** option sets × round trips.
+Before the repairs, that sweep produced **284 panics at 5 distinct sites** —
+four of them `mt_md::block`'s own and one of them this. After them:
+**3,000,000 runs, 0 panics in this crate**, and **4 hits** on `parse.rs:2199`.
+
+So the decision below is no longer one of several outstanding panics; it is the
+only one. The four `mt_md::block` sites that kept it company were a **single**
+root cause — a lone `\r`, where the port's line grid disagreed with this parser's
+about where a line ends — rather than a family of their own, which is why they
+went in one commit and this one did not. `docs/M2.md` §6's "S7's verification"
+carries the sweep and its denominator.
+
+What that does **not** buy is a totality claim on this port's side: five slice
+sites in `mt_md::block` are recorded as **unproven rather than safe** (§10, "Owed
+by S7"), and none of them fired in the 3,000,000. This entry is unaffected either
+way — the panic here happens before any of this crate's code runs.
+
 ## Why it matters more than the three above
 
 **`mt_md::parse`'s doc comment says it is total** — *"every string is a

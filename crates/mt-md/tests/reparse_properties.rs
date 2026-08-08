@@ -190,6 +190,37 @@ const SHAPES: &[&str] = &[
     "",
     "\n",
     "x\n",
+    // **The lone `\r` shapes, and the hole they close.** S6's gate asserted this
+    // file's property over 3.2 million edit sequences and **could not have
+    // found** the class S7's nightly soak found in one run, because a lone `\r`
+    // could not enter the generator from any of its three input sources: no
+    // shape above contained one, `INSERTS` contained none, and `fixtures()`
+    // passes every file through `mt_md::normalize_source`, which folds `\r\n`
+    // *and* a lone `\r` to `\n` — all 11 of the 11 files in that corpus contain
+    // a `\r` and not one of them reached the property with it intact.
+    //
+    // §8's risk table already carries the row this is: *"a harness that
+    // pre-normalises its inputs cannot test the layer that normalizes them"*,
+    // firing a second time. **The repair is here and not in `fixtures()`**, and
+    // the choice is deliberate. Those files are read from disk, and reading a
+    // file through the file layer is exactly how a real document arrives —
+    // `normalize_source` **is** `mt-cli::read_markdown` and is where `mt-fs`
+    // will live, so a fixture that skipped it would model a caller that does not
+    // exist and would change what all 11 fixtures mean at once. The exposure
+    // that is real is a caller handing `parse`/`Incremental` a string directly:
+    // a paste from the clipboard, and this fuzz target. That caller is modelled
+    // by the shapes and the inserts, so that is where the `\r` belongs.
+    //
+    // `"=\r#"` is the reduced reproducer from the soak: the edit that appends to
+    // the `#` turns an ATX heading into paragraph text, which a full parse then
+    // merges into the paragraph above as a lazy continuation, and before S7 the
+    // region reparse could not see it because `preceded_by_blank_line` computed
+    // a line start of 0 for a block at byte 2.
+    "=\r#",
+    "a\rb\rc\r",
+    "0é\r1. x",
+    "para\r\nwith\r\ncrlf\r\n\r\n- list\r\n",
+    "> q\r> q\r\rafter\r",
 ];
 
 /// The round-trip fixtures — real documents, which is what the shapes above are
@@ -207,6 +238,21 @@ fn fixtures() -> Vec<(String, String)> {
             } else if path.extension().is_some_and(|e| e == "md")
                 && let Ok(source) = std::fs::read_to_string(&path)
             {
+                // **The normalisation stays, and `SHAPES` is where the `\r`
+                // went instead.** This call is why S6's 3.2-million-sequence
+                // gate could not see a lone `\r`: it folds `\r\n` and `\r` to
+                // `\n`, and all 11 of the 11 files here contain one. That is
+                // §8's *"a harness that pre-normalises its inputs cannot test
+                // the layer that normalizes them"* row, firing a second time —
+                // but the answer is not to stop calling it. These files are read
+                // **from disk**, `mt_md::normalize_source` *is*
+                // `mt-cli::read_markdown` and is where `mt-fs` will live, so a
+                // fixture read without it would model a caller that does not
+                // exist; and dropping it would change what all 11 fixtures mean
+                // in one edit rather than adding a case. The caller who really
+                // does hand `Incremental` a raw `\r` — a paste from the
+                // clipboard, or a fuzz target — is modelled by `SHAPES` and
+                // `INSERTS`, and that is where S7 put the coverage.
                 out.push((path.display().to_string(), mt_md::normalize_source(&source)));
             }
         }
@@ -240,6 +286,13 @@ const INSERTS: &[&str] = &[
     "", "x", "xy", " ", "  ", "\n", "\n\n", "#", "# ", "## ", ">", "> ", "- ", "* ", "+ ", "1. ",
     "20. ", "```", "~~~", "---", "===", "|", "[", "]", ":", "$$", "<div>", "</div>", "\t", "*",
     "_", ".", ")", "[a]: /x", "é", "日本",
+    // The three carriage-return spellings, for the reason `SHAPES` gives at
+    // length: the lone `\r` is a line terminator to `pulldown-cmark` and an
+    // ordinary character to `marked`, and every offset where the two grids
+    // disagreed was a defect. A `\r` is already in `MID_LINE_TRIGGERS`, so an
+    // insert containing one always takes the **region** path — which is the path
+    // the soak's disagreement was on, and the one no `\r` could reach before.
+    "\r", "\r\n", "\r#",
 ];
 
 #[derive(Debug, Clone)]
@@ -507,5 +560,69 @@ fn typing_into_every_paragraph_of_every_fixture_reparses_one_block() {
     assert!(
         leaf_path * 2 >= typed,
         "the leaf-text path took {leaf_path} of {typed} — it used to take more than half"
+    );
+}
+
+/// **The hole S6's gate had, closed and measured.** S7's soak found a class the
+/// property test asserted 3.2 million sequences about and *could not have
+/// reached*: a lone `\r`, which `pulldown-cmark` treats as a line ending and
+/// `marked` as an ordinary character, so every offset where the two grids
+/// disagreed was a defect. The gate's denominator was large and its input space
+/// had a hole in it.
+///
+/// A denominator is not coverage, so this asserts reachability directly rather
+/// than trusting that the constants above were edited: the class is in the
+/// generator, it is in **both** of the two sources an edit is built from, and a
+/// sequence built only from those `\r`-bearing pieces really does exercise the
+/// property. Deleting the shapes or the inserts fails here rather than quietly
+/// shrinking what the 3.2 million covers.
+#[test]
+fn the_generator_can_reach_the_lone_carriage_return_class() {
+    let shapes: Vec<&&str> = SHAPES.iter().filter(|s| s.contains('\r')).collect();
+    let inserts: Vec<&&str> = INSERTS.iter().filter(|s| s.contains('\r')).collect();
+    assert!(
+        shapes.len() >= 5,
+        "the seed documents cannot produce a `\\r`: {shapes:?}"
+    );
+    assert!(
+        inserts.len() >= 3,
+        "no edit can insert a `\\r`: {inserts:?}"
+    );
+    // A lone `\r` and not merely a `\r\n`, which `normalize_source` and
+    // `pulldown-cmark` agree about and which therefore proves nothing.
+    assert!(
+        shapes.iter().any(|s| s.replace("\r\n", "").contains('\r')),
+        "every `\\r` in the shapes is half of a `\\r\\n`"
+    );
+    assert!(
+        inserts.iter().any(|s| s.replace("\r\n", "").contains('\r')),
+        "every `\\r` in the inserts is half of a `\\r\\n`"
+    );
+
+    // And the property itself over exactly those pieces, at every offset in
+    // each shape — the run S6 never made. `"=\r#"` with `"a"` appended is the
+    // soak's own reduced reproducer and is in the sweep by construction.
+    let mut checked = 0usize;
+    for shape in &shapes {
+        for at in 0..=shape.len() {
+            if !shape.is_char_boundary(at) {
+                continue;
+            }
+            for insert in INSERTS {
+                for options in [Options::SPEC, Options::MUYA_DEFAULT] {
+                    let edit = Edit {
+                        at,
+                        remove: 0,
+                        insert: (*insert).to_string(),
+                    };
+                    run_sequence(shape, options, &[edit], &format!("{shape:?} @{at}"));
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert!(
+        checked >= 1_000,
+        "the sweep is too small to be evidence: {checked}"
     );
 }

@@ -1444,3 +1444,187 @@ fn the_three_shapes_the_task_marker_fix_does_not_reach() {
         ]
     );
 }
+
+// --- S7: the port's line grid, and the five panics behind one disagreement ---
+
+/// **The root cause the soak found, stated directly.** The block structure comes
+/// from `pulldown-cmark`, which ends a line at a bare `\r`; the text is
+/// re-derived `marked`-style, and `marked` spells a line `[^\n]`. Where the two
+/// grids disagreed, an offset from one was measured against a string cut by the
+/// other and the resulting index need not have been a character boundary.
+///
+/// The asymmetry is the fix: a **lone** `\r` terminates a line so that the two
+/// engines' line *starts* agree, and the `\r` of a `\r\n` does not, so that a
+/// CRLF line keeps the `\r` that is content to `marked` and to muya
+/// ([`crate::normalize_source`]'s recorded measurement, `"a\r\nb\r\n"` → one
+/// paragraph `"a\r\nb\r"`).
+#[test]
+fn a_lone_carriage_return_ends_a_line_and_a_crlfs_does_not() {
+    // A lone `\r`: byte 2 starts its own line, byte 1 terminates the line
+    // before it, and that line ends at byte 1.
+    assert_eq!(line_start_of("=\r#", 2), 2);
+    assert_eq!(line_end_of("=\r#", 0), 1);
+    assert_eq!(line_start_of("=\r#", 0), 0);
+
+    // A `\r\n`: the `\n` terminates and the `\r` is content. Both were already
+    // true before this fix and both must stay true — every fixture that reaches
+    // `--require-ts` comes through the file layer and is `\n`-only, but a caller
+    // handing `parse` a CRLF string directly is exactly the muya measurement.
+    assert_eq!(
+        line_end_of("a\r\nb", 0),
+        2,
+        "the `\\n`, so the text keeps `\\r`"
+    );
+    assert_eq!(line_start_of("a\r\nb", 3), 3);
+    assert_eq!(line_start_of("a\r\nb", 2), 0, "a `\\r` is not a line start");
+
+    // `preceded_by_blank_line`'s `start == 0` fast path is *"a block at the
+    // start of the document"*, and this is the input that used to reach it from
+    // byte 2 — the one that made `reparse::hard_boundary` lie. See
+    // `crate::reparse::tests::a_lone_carriage_return_hides_a_paragraph_merge_from_the_region_reparse`.
+    assert!(!preceded_by_blank_line("=\r#", 2));
+    assert!(
+        preceded_by_blank_line("=\r\r#", 3),
+        "the middle line is blank"
+    );
+    // And the CRLF half of the same question: a line after an ordinary CRLF
+    // line is *not* blank-preceded, which reading that `\r` as a terminator
+    // would have got backwards for every CRLF document there is.
+    assert!(!preceded_by_blank_line("a\r\nb", 3));
+    assert!(preceded_by_blank_line("a\r\n\r\nb", 6));
+}
+
+/// **`block.rs`'s two sites on one wrong index** — the `.get(marker_len..)` that
+/// returned `""` silently and the `&text[marker_len..]` one line further on that
+/// panicked. Both read a marker length measured against `"0é\r1. x"`, which is
+/// one line to the port and two to the parser that reported the item.
+///
+/// The assertion is the **right answer** rather than the absence of a panic:
+/// the item's first line is byte 4, its marker is the two ASCII bytes `1.`, and
+/// its content indent is three columns. Before the fix `first_line` was `0`,
+/// `marker_len` was `2` measured on a string whose byte 2 is inside the `é`, and
+/// `indent` came from the blank-line arm — `rest` was `""` — instead of from the
+/// item's own text.
+#[test]
+fn an_items_marker_is_measured_on_its_own_line_after_a_lone_carriage_return() {
+    let src = "0é\r1. x";
+    let parsed = crate::parse(src, SPEC);
+    let doc = &parsed.document;
+    let list = doc.children(doc.root())[1];
+    let item = doc.children(list)[0];
+    let ancestors = vec![(
+        doc.block(item).expect("a block"),
+        parsed.source_map.get(item).expect("a range"),
+    )];
+
+    assert_eq!(
+        prefix_chain(src, &ancestors),
+        vec![Prefix::Item {
+            indent: 3,
+            marker_len: 2,
+            first_line: 4,
+        }]
+    );
+    // Which is the prefix the same item gets with the `\r` spelled `\n`, because
+    // `pulldown-cmark` reads the two documents the same way and the grid now
+    // does too. `"x"` rather than `""` is the wrong answer repaired.
+    assert_eq!(texts("0é\r1. x", SPEC), ["0é", "x"]);
+    assert_eq!(texts("0é\n1. x", SPEC), ["0é", "x"]);
+}
+
+/// The four soak reproducers for the `apply_prefix` slice, at both option sets.
+///
+/// The soak's own message — *"index 2 … inside `'\u{2028}'` (bytes 1..4)"* — is
+/// the second of these. §11.3: *"malformed input must never panic"*.
+#[test]
+fn parse_does_not_panic_on_a_lone_carriage_return_before_a_list_item() {
+    for options in [SPEC, MUYA] {
+        for src in ["0é\r1. x", "0\u{2028}\r1. x", "0\u{2028}\r- x", "12é\r1. x"] {
+            let _ = crate::parse(src, options);
+        }
+    }
+    // The controls that isolate the ingredient: only a `\r` *not* followed by a
+    // newline, with a digit run before it and a list item after it, ever reached
+    // the slice.
+    for src in ["0é\n1. x", "0é\r\n1. x", "0\u{2028}1. x", "\r0é\r1. x"] {
+        let _ = crate::parse(src, SPEC);
+    }
+}
+
+/// The other half of the marker fix: `marked`'s `bullet` is
+/// `/ {0,3}(?:[*+-]|\d{1,9}[.)])/` and it **requires** the delimiter, where the
+/// port added one byte for a character it never looked at. On the item's own
+/// line `pulldown-cmark` guarantees the `.` or `)` is there, so this changes
+/// nothing a real list does; on any other line it is the difference between a
+/// length and a guess.
+#[test]
+fn an_ordered_markers_delimiter_is_checked_rather_than_assumed() {
+    assert_eq!(texts("1. x", SPEC), ["x"]);
+    assert_eq!(texts("1) x", SPEC), ["x"]);
+    // Ten digits is past `\d{1,9}`, so `marked` finds no bullet and neither does
+    // this — the tenth character is a digit and not a delimiter.
+    assert_eq!(texts("1234567890. x", SPEC), ["1234567890. x"]);
+}
+
+/// `indentCodeCompensation` mixed two units — a byte count of a Unicode-trimmed
+/// run against a count of ASCII spaces — so a body line beginning with an
+/// ideographic space passed the `>=` on three bytes and then cut one byte into
+/// the character.
+///
+/// The assertion is `marked`'s answer and not merely the absence of a panic:
+/// `indentToCode` is `" "` (one code unit), `indentInNode` is `"\u{3000}"` (one
+/// code unit), `1 >= 1` holds, so `node.slice(1)` drops the wide space.
+#[test]
+fn an_indented_backtick_fence_compensates_a_wide_space_by_characters() {
+    for options in [SPEC, MUYA] {
+        assert_eq!(texts(" ```\n\u{3000}x\n ```", options), ["x"]);
+    }
+    // Two columns of compensation against a one-character run: `1 >= 2` is
+    // false, so the line is kept whole.
+    assert_eq!(texts("  ```\n\u{3000}x\n  ```", SPEC), ["\u{3000}x"]);
+    // The ASCII case, where bytes and characters agree, is unchanged.
+    assert_eq!(texts(" ```\n  x\n ```", SPEC), [" x"]);
+    // A line that is nothing but its indent slices to nothing, which is
+    // `String.prototype.slice` past the end.
+    assert_eq!(texts(" ```\n\u{3000}\n ```", SPEC), [""]);
+}
+
+/// `item_blank_lines` accumulates `Built::range` ends and asks
+/// [`has_blank_line`] of the gaps between them. §10 already records that those
+/// ranges are neither injective nor always nested, so neither end is a boundary
+/// by construction — and the soak reached both ends, one input each.
+///
+/// Snapping down is sound because the question is only *"are there two newlines
+/// in this gap"*: a newline is ASCII and can never be inside the character being
+/// snapped over, so a gap moved by those few bytes has the same answer.
+#[test]
+fn parse_does_not_panic_on_an_item_whose_child_ranges_are_not_on_boundaries() {
+    for options in [SPEC, MUYA] {
+        let _ = crate::parse("*\t[a]:\u{a0}", options);
+        let _ = crate::parse("+\t[a]:\u{a0}_\u{feff}\n\\\t", options);
+    }
+}
+
+/// The grid change must be invisible to every document with no lone `\r`, which
+/// is every document the file layer produces — [`crate::normalize_source`] folds
+/// both spellings to `\n` before the editor sees the text. This is the guard on
+/// that claim at the level the corpus harnesses cannot reach, because they all
+/// read through that function: a CRLF string handed straight to `parse`, whose
+/// text keeps its `\r` exactly as muya's does.
+#[test]
+fn a_crlf_document_parses_exactly_as_it_did_before_the_grid_changed() {
+    // `lib.rs`'s recorded muya measurement, reproduced through `parse`.
+    assert_eq!(texts("a\r\nb\r\n", SPEC), ["a\r\nb\r"]);
+    assert_eq!(texts("a\r\nb\r\n", MUYA), ["a\r\nb\r"]);
+    assert_eq!(texts("a\r\n\r\nb\r\n", SPEC), ["a\r", "b\r"]);
+    assert_eq!(
+        names("> a\r\n> b\r\n", SPEC),
+        ["block-quote", "  paragraph"]
+    );
+    // Inside a list item the last `\r` is *not* kept, because `pulldown-cmark`
+    // ends an item's range at its last non-space byte where it ends a top-level
+    // paragraph's at its last content byte — the asymmetry `leaf_text_edit`'s
+    // "strictly inside" guard already names. Measured, not chosen, and measured
+    // to be the same before and after this change.
+    assert_eq!(texts("- a\r\n  b\r\n", SPEC), ["a\r\nb"]);
+}

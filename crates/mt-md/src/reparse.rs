@@ -268,9 +268,49 @@ impl Incremental {
         {
             return None;
         }
-        // Not at a line start: a line start is where every block-start pattern
-        // is anchored, and it is also where four spaces become indented code.
-        if at == 0 || self.source.as_bytes()[at - 1] == b'\n' {
+        // **Strictly inside a line's content**, which is two questions and not
+        // one.
+        //
+        // Not at a line start, because a line start is where every block-start
+        // pattern is anchored and where four spaces become indented code. Asked
+        // through the grid rather than of one byte, because a lone `\r` starts a
+        // line too — see the note above `block::line_start_of`.
+        //
+        // And not **inside a line terminator**: an edit between a `\r` and its
+        // `\n` splits one line ending into two, a lone `\r` and a `\n`, and the
+        // line grid moves under the whole document from a single space. Not one
+        // character of that edit is in `MID_LINE_TRIGGERS` — the `\r` it changes
+        // the meaning of is not in the edit at all, it is beside it. Found by
+        // `reparse_properties::the_generator_can_reach_the_lone_carriage_return_class`
+        // on its first run, which is the run S6's gate could not make.
+        // `at - 1` is safe under the first disjunct, and it is the whole test:
+        // a `\r` **not** followed by `\n` already makes `at` a line start.
+        if at == 0
+            || block::line_start_of(&self.source, at) == at
+            || self.source.as_bytes()[at - 1] == b'\r'
+        {
+            return None;
+        }
+        // **The guard `span_for` already has, and this path did not.** Every
+        // other check here asks whether the edited *line* becomes a different
+        // block; none of them asks whether the enclosing block still ends where
+        // it did. A link reference definition whose destination sits on the
+        // following line makes the paragraph's extent depend on that line's
+        // content — `"[a]:\naa\na"` is one paragraph, and inserting a space into
+        // `aa` invalidates the destination, so the construct stops terminating
+        // there and the block runs on and swallows the line below. Not one
+        // character of that edit is a `MID_LINE_TRIGGERS` character and the
+        // `[a]:` is on a *different* line, so nothing above can see it.
+        //
+        // The question is asked of the old source up to the end of the edited
+        // line: `defines_a_label` is `marked`'s `def` rule head loosened to a
+        // scan, and a definition *after* the edited line cannot have its extent
+        // changed by an edit above it. The new source needs no separate ask —
+        // an edit that *creates* a definition has to put a `[` first on its
+        // line, and `BLOCK_STARTERS` already declines that. Declining sends the
+        // edit to the region path, where the `defines_a_label` check at
+        // [`Incremental::span_for`] widens it to the whole document.
+        if defines_a_label(&self.source[..block::line_end_of(&self.source, at)]) {
             return None;
         }
 
@@ -702,6 +742,32 @@ impl Incremental {
         // by construction, because the definition it has to notice is the one
         // the edit removed.
         if defines_a_label(&source[..end]) || defines_a_label(&self.source[..was_end]) {
+            return None;
+        }
+        // **A lone `\r` in the region makes it unreasonable in isolation too**,
+        // and for a sharper reason than a label's. This crate has two engines
+        // behind it: the block structure is `pulldown-cmark`'s, which ends a
+        // line at a bare `\r`, and the text is re-derived `marked`-style, where
+        // a `\r` is an ordinary character (see the grid note above
+        // `block::line_start_of`). Unifying the grid stops the port
+        // *crashing* on the disagreement; it does not make the two engines agree
+        // about what the document **is**, and a region is exactly a bet that
+        // parsing a slice gives what parsing the whole would. That bet loses
+        // here: `parse("    indented\n    code\n\n\r#")` drops the trailing
+        // heading, while the same region parsed on its own keeps it, because in
+        // isolation there is no indented code block in front of it.
+        //
+        // Asked of **both** sources for the same reason the labels are: the `\r`
+        // that matters may be the one the edit brought in, which the old source
+        // cannot show, or the one it took out, which the new one cannot. It
+        // costs a whole-document reparse on a document containing a lone `\r`
+        // and nothing at all on one that does not — and the file layer
+        // ([`crate::normalize_source`]) means no document opened from disk can
+        // contain one. Found by `reparse_properties`' generated sequences at
+        // 6,000 cases, twice, once from each side.
+        if block::holds_a_lone_carriage_return(source, start..end)
+            || block::holds_a_lone_carriage_return(&self.source, start..was_end)
+        {
             return None;
         }
         // The front matter is a whole-document construct with an unanchored

@@ -153,7 +153,19 @@ fn next_code_open(html: &str, at: usize) -> Option<(usize, &'static str, usize)>
     while let Some(found) = html[i..].find('<').map(|x| x + i) {
         for tag in ["code", "pre"] {
             let after = found + 1 + tag.len();
-            if after <= html.len()
+            // **`is_char_boundary` and not merely `<= html.len()`.** `found` is
+            // the index of a `<`, and the three or four bytes after it are only
+            // a tag name if they *are* three or four characters — an accented
+            // letter within four bytes of a `<` makes `after` land inside one,
+            // and this slice then aborts the process. S7's soak reached it from
+            // `render_to_static_html("é[^a]\n\n[^a]: n\n", …)`, which is an
+            // ordinary document and not a hostile one; §11.3's *"malformed input
+            // must never panic"* is about this and the bounds check alone was
+            // not it. `is_char_boundary` is false past the end too, so it
+            // subsumes the length check rather than sitting beside it. The two
+            // slices below reuse `after` and were unreachable only because this
+            // one aborted first.
+            if html.is_char_boundary(after)
                 && html[found + 1..after].eq_ignore_ascii_case(tag)
                 // `\b` — the name may not run on into another word.
                 && html[after..]
@@ -356,5 +368,44 @@ mod tests {
             out.contains("</ul>\n <a href=\"#fnref-1\" class=\"footnote-backref\">↩</a></li>"),
             "{out}"
         );
+    }
+
+    /// **The most alarming of S7's five panics, and the only one not in
+    /// `block.rs`.** `next_code_open` reads the three or four bytes after a `<`
+    /// to see whether they spell `code` or `pre`, bounds-checking `after`
+    /// against `html.len()` and never against a character boundary. An accented
+    /// letter within four bytes of a `<` in the *rendered* HTML puts the cut
+    /// inside it and aborts the process — on the public
+    /// `render_to_static_html` path, from a document containing nothing more
+    /// exotic than an `é`. §11.3: *"malformed input must never panic"*, and this
+    /// input is not even malformed.
+    ///
+    /// The two slices after it reuse the same `after` and were unreachable only
+    /// because this one aborted first, so the guard covers all three.
+    #[test]
+    fn a_tag_name_is_never_read_across_a_character_boundary() {
+        let mut options = crate::Options::MUYA_DEFAULT;
+        options.footnote = true;
+        let out = crate::render_to_static_html("é[^a]\n\n[^a]: n\n", options, false)
+            .expect("static html is implemented for this document");
+        assert!(out.contains("<sup class=\"footnote-ref\""), "{out}");
+        assert!(out.contains("<section class=\"footnotes\">"), "{out}");
+
+        // The unit underneath, at every offset a multi-byte character can sit
+        // at relative to the `<`: `code` and `pre` are 4 and 3 bytes, so a two-,
+        // three- or four-byte character starting 1..=4 bytes after the `<` is
+        // the whole reachable set.
+        for pad in ["", "a", "aa", "aaa"] {
+            for wide in ["é", "\u{3000}", "\u{1f600}"] {
+                assert_eq!(
+                    next_code_open(&format!("<{pad}{wide}x"), 0),
+                    None,
+                    "pad {pad:?} wide {wide:?}"
+                );
+            }
+        }
+        // And it still finds the tags it is for.
+        assert_eq!(next_code_open("<code>x", 0), Some((0, "code", 6)));
+        assert_eq!(next_code_open("é<pre>x", 0), Some((2, "pre", 7)));
     }
 }

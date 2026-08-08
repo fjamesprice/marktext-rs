@@ -583,3 +583,149 @@ fn the_prefix_chain_rebuilt_from_ranges_re_derives_the_leaf_text() {
             .to_str()
     );
 }
+
+// --- S7: the two shapes on which the incremental tree disagreed -------------
+
+/// **Mechanism 1 — the leaf-text fast path was blind to reference
+/// definitions.** Every guard on that path asks whether the edited *line*
+/// becomes a different block; none asked whether the enclosing block still
+/// **ends** where it did.
+///
+/// A link reference definition whose destination sits on the following line
+/// makes the paragraph's extent depend on that line's content: while `aa` is a
+/// valid destination the construct terminates after it, and when a space makes
+/// it invalid the block runs on and swallows the line below. Not one character
+/// of the edit is a `MID_LINE_TRIGGERS` character and the `[a]:` is on a
+/// different line, so nothing looked at it — the path took the edit, spliced one
+/// leaf, and left the model holding **two** paragraphs where a full parse has
+/// one. That is not a transient bookkeeping difference: `Incremental` is the
+/// editing model, so the leaf source ranges disagree for every byte after the
+/// split and saving in that state writes the wrong file.
+///
+/// The repair is the guard `span_for` already had, moved in front of the fast
+/// path, so the edit takes the region path instead — which is why this test
+/// asserts the path as well as the tree. Inserting `"b"` here was always clean;
+/// `"\u{0}"` and `"\u{1}"` failed exactly as `" "` did.
+#[test]
+fn a_mid_line_edit_that_dissolves_a_reference_definition_keeps_one_paragraph() {
+    for insert in [" ", "\u{0}", "\u{1}"] {
+        let mut doc = Incremental::new("[a]:\naa\na", MUYA);
+        let report = doc.edit(6, 0, insert);
+        assert!(
+            matches!(report.path, ReparsePath::Region),
+            "a definition at or before the edited line is the region path's \
+             question, not the fast path's: {:?}",
+            report.path
+        );
+        let full = crate::parse(doc.source(), MUYA);
+        assert_eq!(state(doc.document()), state(&full.document), "{insert:?}");
+    }
+    // The fast path is still the fast path where no definition is in reach —
+    // the guard is scoped to the source *up to the edited line*, so a paragraph
+    // with no `[…]:` above it is untouched.
+    let mut doc = Incremental::new("aaa\nbbb\nccc", MUYA);
+    let report = doc.edit(5, 0, "x");
+    assert!(matches!(report.path, ReparsePath::LeafText { .. }));
+}
+
+/// **Mechanism 2 — the same root cause as the five parse panics**, reached from
+/// a different direction and fixed by the same change.
+///
+/// `hard_boundary` asks `block::preceded_by_blank_line` whether the region may
+/// stop widening leftward. For `"=\r#"` the `#` block starts at byte 2, whose
+/// line start was computed as **0** because the grid found line starts with
+/// `\n` alone — so the function took its `start == 0` fast path, *"a block at
+/// the start of the document is preceded by a blank line"*, and the boundary was
+/// declared hard. The region never widened to include the first block, and the
+/// merge the full parse performs — the edit turns `#` from an ATX heading into
+/// paragraph text, which then joins the paragraph above it as a lazy
+/// continuation — was invisible to it. The guard was not conservative in the
+/// wrong direction; it was being asked about a line that does not exist.
+///
+/// `"=\n#"` with the identical edit was always clean, which is the control that
+/// names the ingredient.
+#[test]
+fn a_lone_carriage_return_hides_a_paragraph_merge_from_the_region_reparse() {
+    for options in [SPEC, MUYA] {
+        for (source, at, insert) in [("=\r#", 3, "a"), ("=\n#", 3, "a")] {
+            let mut doc = Incremental::new(source, options);
+            let report = doc.edit(at, 0, insert);
+            // **Still the region path**, which is the point: the `\r` is outside
+            // this region, so `Incremental::span_for`'s coarser
+            // `holds_a_lone_carriage_return` guard never fires and the grid fix
+            // is what carries this. A future change that repaired the symptom by
+            // declining the region would pass the assertion below while leaving
+            // `preceded_by_blank_line` lying, so the path is pinned too.
+            assert!(
+                matches!(report.path, ReparsePath::Region),
+                "{source:?}: {:?}",
+                report.path
+            );
+            let full = crate::parse(doc.source(), options);
+            assert_eq!(
+                state(doc.document()),
+                state(&full.document),
+                "{source:?} + {insert:?}"
+            );
+        }
+    }
+}
+
+/// **Two more of the same class, both found by the generator on its first runs
+/// after the `\r` shapes went in** — which is the point of that change and the
+/// reason it is worth more than the 3.2 million sequences it adds to.
+///
+/// Neither is a grid defect. Unifying the line grid stops the port *crashing* on
+/// the disagreement between the two engines behind it; it does not make
+/// `pulldown-cmark` and `marked` agree about what a document containing a lone
+/// `\r` **is**, and both of these are places that assumed they did.
+///
+/// 1. **A one-space insert between a `\r` and its `\n`** splits one line ending
+///    into two — a lone `\r` and a `\n` — so the line grid moves under the whole
+///    document. The `\r` whose meaning changed is not *in* the edit, it is
+///    beside it, so no `MID_LINE_TRIGGERS` check could see it; the leaf-text
+///    path now declines an edit that starts inside a terminator as well as one
+///    at a line start.
+/// 2. **A region containing a lone `\r` is not reasonable in isolation.**
+///    `parse("    indented\n    code\n\n\r#")` drops the trailing heading
+///    entirely, while the same region parsed on its own keeps it, because in
+///    isolation there is no indented code block in front of it. `span_for` now
+///    declines such a region in both sources, exactly as it already declines one
+///    holding a label.
+#[test]
+fn an_edit_that_changes_what_a_carriage_return_means_declines_the_fast_paths() {
+    // 1 — the split terminator. `"para\r\nwith"` is one CRLF line ending; a
+    // space at byte 5 makes it two line endings and two more lines.
+    let mut doc = Incremental::new("para\r\nwith\r\ncrlf\r\n\r\n- list\r\n", SPEC);
+    let report = doc.edit(5, 0, " ");
+    assert!(
+        !matches!(report.path, ReparsePath::LeafText { .. }),
+        "an edit inside a `\\r\\n` is not a leaf-text edit: {:?}",
+        report.path
+    );
+    assert_eq!(
+        state(doc.document()),
+        state(&crate::parse(doc.source(), SPEC).document)
+    );
+
+    // 2 — the region that cannot be parsed alone. The `\r` arrives *with* the
+    // edit, so no check against the source as it was could have seen it.
+    let mut doc = Incremental::new("    indented\n    code\n\nafter\n", MUYA);
+    doc.edit(23, 6, "\r#");
+    assert_eq!(doc.source(), "    indented\n    code\n\n\r#");
+    assert_eq!(
+        state(doc.document()),
+        state(&crate::parse(doc.source(), MUYA).document),
+        "a full parse drops the heading here; a region parsed alone keeps it"
+    );
+
+    // And the same shape with the `\r` already present before the edit, which is
+    // the other side `span_for` has to ask about.
+    let mut doc = Incremental::new("a\n\n    cod---e\n\nb\n\n    \r#", SPEC);
+    doc.edit(8, 11, "\n\n");
+    assert_eq!(doc.source(), "a\n\n    c\n\n    \r#");
+    assert_eq!(
+        state(doc.document()),
+        state(&crate::parse(doc.source(), SPEC).document)
+    );
+}

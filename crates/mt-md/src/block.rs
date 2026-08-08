@@ -1462,8 +1462,14 @@ impl<'a> Builder<'a> {
                 .range
                 .end,
         );
-        if paragraph_range.start < item_end
-            || has_blank_line(&self.src[item_end..paragraph_range.start])
+        // Both ends are `Built::range` values, so neither is a character
+        // boundary by construction — the same class as [`Builder::item_blank_lines`],
+        // snapped for the same reason: the question is whether two newlines fall
+        // in this gap, and a newline is ASCII and can never be inside the
+        // character being snapped over.
+        let item_end = boundary_at_or_below(self.src, item_end);
+        let paragraph_start = boundary_at_or_below(self.src, paragraph_range.start);
+        if paragraph_range.start < item_end || has_blank_line(&self.src[item_end..paragraph_start])
         {
             return false;
         }
@@ -1521,7 +1527,12 @@ impl<'a> Builder<'a> {
         if gap_end < gap_start {
             return;
         }
-        let blank = has_blank_line(&self.src[gap_start..gap_end]);
+        // `gap_start` comes from `trim_trailing_blanks` and `gap_end` from a
+        // child's `Built::range`; see [`Builder::item_blank_lines`] for why
+        // snapping is answer-preserving for a blank-line question.
+        let gap =
+            boundary_at_or_below(self.src, gap_start)..boundary_at_or_below(self.src, gap_end);
+        let blank = has_blank_line(&self.src[gap]);
         let next = children.remove(i + 1);
         let next_loose = list_looseness(&next.block);
         let list = &mut children[i];
@@ -1581,7 +1592,10 @@ impl<'a> Builder<'a> {
     /// the paragraph, in both engines. `">\n> foo\n>  \n> bar\n"` is two
     /// paragraphs for muya as well.
     fn absorb_trailing_blank_quote_line(&self, frame: &mut Frame) {
-        let end = frame.range.end;
+        // A `Built::range` end, snapped: the question below is whether the byte
+        // before it is a newline, and snapping over a character cannot change
+        // that answer any more than it can in [`Builder::item_blank_lines`].
+        let end = boundary_at_or_below(self.src, frame.range.end);
         let last = if self.src[..end].ends_with('\n') {
             end - 1
         } else {
@@ -1789,15 +1803,27 @@ impl<'a> Builder<'a> {
     /// The two positions are reported separately because `marked` treats them
     /// differently; see [`list_is_loose`].
     fn item_blank_lines(&self, frame: &Frame) -> (bool, bool) {
-        let mut at = frame.range.start;
+        // **The gap ends are snapped to character boundaries before they index
+        // the source.** `at` accumulates `Built::range` ends and the children's
+        // starts come from `pulldown-cmark`; §10 already records that those
+        // ranges are neither injective nor always nested, so nothing in their
+        // type says either end is a boundary, and S7's soak reached both — on
+        // `"*\t[a]:\u{a0}"` and `"+\t[a]:\u{a0}_\u{feff}\n\\\t"`. The question
+        // asked here is only *"is there a blank line in this gap"*, and a gap
+        // widened or narrowed by the few bytes of one character cannot change
+        // that answer: [`has_blank_line`] needs two newlines, which are ASCII
+        // and therefore never inside the character being snapped over.
+        let mut at = boundary_at_or_below(self.src, frame.range.start);
         let mut internal = false;
         for child in &frame.children {
-            if child.range.start > at && has_blank_line(&self.src[at..child.range.start]) {
+            let start = boundary_at_or_below(self.src, child.range.start);
+            if start > at && has_blank_line(&self.src[at..start]) {
                 internal = true;
             }
-            at = at.max(child.range.end);
+            at = at.max(boundary_at_or_below(self.src, child.range.end));
         }
-        let trailing = at < frame.range.end && has_blank_line(&self.src[at..frame.range.end]);
+        let end = boundary_at_or_below(self.src, frame.range.end);
+        let trailing = at < end && has_blank_line(&self.src[at..end]);
         (internal, trailing)
     }
 
@@ -2922,9 +2948,27 @@ fn fenced_code_text(raw: &str) -> String {
     }
     text.split('\n')
         .map(|node| {
-            let node_indent = node.len() - node.trim_start().len();
+            // **Characters, not bytes, and that is `marked`'s unit rather than
+            // a defensive choice.** `indentCodeCompensation` compares
+            // `node.match(/^\s+/)[0].length` against `indentToCode.length` and
+            // then does `node.slice(indentToCode.length)` — both UTF-16 code
+            // unit counts. Counting the run in *bytes* and slicing by a *space
+            // count* mixes two units, and S7's soak found the mix: a body line
+            // beginning with an ideographic space made the `>=` pass on three
+            // bytes and then cut one byte into a three-byte character.
+            //
+            // `indent` is a run of ASCII spaces, so its column, character and
+            // code-unit counts are the same number; and `\s` matches no astral
+            // character, so the run's character count is its code-unit count
+            // too. Taking `indent` characters is therefore exactly
+            // `String.prototype.slice`'s cut, and it cannot land inside one.
+            let node_indent = node.chars().take_while(|c| c.is_whitespace()).count();
             if node_indent >= indent {
-                &node[indent..]
+                // `slice` past the end is `''`, which is reachable when the
+                // line is nothing but its indent.
+                node.char_indices()
+                    .nth(indent)
+                    .map_or("", |(i, _)| &node[i..])
             } else {
                 node
             }
@@ -3350,15 +3394,36 @@ fn item_prefix_at(src: &str, outer: &[Prefix], range: &Range<usize>) -> Prefix {
                 .take(9)
                 .take_while(char::is_ascii_digit)
                 .count();
-            leading + digits + 1
+            // **The delimiter is looked at rather than assumed.** `marked`'s
+            // `bullet` is `/ {0,3}(?:[*+-]|\d{1,9}[.)])/` and it *requires* the
+            // `.` or `)`; the `+ 1` used to add a byte for a character nobody
+            // had checked, which on a line that is not the item's own line is a
+            // length measured against the wrong string. S7's soak reached it as
+            // a mid-character index — see the grid note above [`line_start_of`]
+            // for why the line could be the wrong one at all.
+            match text.as_bytes().get(leading + digits) {
+                Some(b'.' | b')') => leading + digits + 1,
+                _ => 0,
+            }
         }
         // No marker on the item's first line. `pulldown-cmark` does not
         // produce one, so this is unreachable rather than tolerated — but
         // a zero-width prefix is the answer that changes nothing.
         _ => 0,
     };
+    // Every arm above is built from ASCII — a run of spaces, then one ASCII
+    // bullet or an ASCII digit run and its ASCII delimiter — so `marker_len` is
+    // a character boundary of `text` and is at most its length. Stated here,
+    // once, because [`apply_prefix`] indexes the *same* line with it and the
+    // empty slice is the wrong answer there: it would return `""` as the item's
+    // first-line content and silently delete the item's text. `marked` has no
+    // slice at that site at all (`cap[1]`/`cap[2]` are regex-capture
+    // boundaries), so there is no JavaScript answer to reproduce; the correct
+    // response to a marker length that is not on a boundary is to stop
+    // measuring it against the wrong string, which is what the grid fix does.
+    debug_assert!(text.is_char_boundary(marker_len));
 
-    let rest = text.get(marker_len..).unwrap_or("");
+    let rest = &text[marker_len..];
     let expanded = expand_tabs(rest, marker_len);
     let indent = if expanded.trim().is_empty() {
         marker_len + 1
@@ -3459,6 +3524,91 @@ fn expand_tabs(s: &str, mut col: usize) -> String {
     out
 }
 
+// --- the line grid ---------------------------------------------------------
+//
+// **A lone `\r` ends a line here, and a `\r\n` does not — the asymmetry is the
+// whole point of this block and it is measured on both sides.**
+//
+// The port has two engines behind it and they disagree about carriage returns.
+// The block *structure* comes from `pulldown-cmark`, which follows CommonMark:
+// `\n`, `\r\n` and a bare `\r` are all line endings. The block *text* is
+// re-derived `marked`-style, and every one of `marked`'s block regexes spells a
+// line `[^\n]`, so to `marked` a `\r` is an ordinary character — muya proves it
+// directly, `"a\r\nb\r\n"` being one paragraph whose text is `"a\r\nb\r"`
+// ([`crate::normalize_source`] carries that measurement and the reason `parse`
+// must not normalise).
+//
+// Where the two grids disagree, an offset produced by one is measured against a
+// string cut by the other, and the result is an index that need not be a
+// character boundary. S7's soak found it as five separate panics; it is one
+// defect. See `item_prefix_at`, which is where it surfaced.
+//
+// Splitting the difference is not a compromise, it is the only reading that is
+// right on both counts:
+//
+// * **A lone `\r` is a terminator.** The two engines' *line starts* then agree
+//   exactly, which is all the offsets are ever used for. The cost is that the
+//   port's tree for a lone `\r` follows `pulldown-cmark` rather than muya — a
+//   genuine structural divergence, recorded rather than crashed on, and
+//   unreachable through the file layer, which folds `\r` to `\n` before any
+//   text reaches the editor.
+// * **A `\r\n` is terminated by its `\n`, and the `\r` stays in the line's
+//   text.** Line starts agree here under either reading, so nothing is gained
+//   by moving the content end back onto the `\r` — and everything is lost,
+//   because that `\r` is content to `marked` and to muya, and dropping it would
+//   change the text of every CRLF document the port has ever been measured
+//   against. The one byte of disagreement is ASCII and can never split a
+//   character.
+
+/// `at`, clamped into `src` and snapped down to a character boundary.
+///
+/// The one place a range whose provenance does not promise a boundary is made
+/// safe to slice with. Snapping *down* rather than rejecting is what every
+/// caller wants: each of them is asking a question about a neighbourhood — which
+/// line is this on, is there a blank line in this gap — whose answer is decided
+/// by ASCII characters that can never be the one being snapped over.
+fn boundary_at_or_below(src: &str, at: usize) -> usize {
+    let mut at = at.min(src.len());
+    while at > 0 && !src.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
+}
+
+/// Whether the byte at `i` ends a line: `\n`, or a `\r` that no `\n` follows.
+///
+/// See the note above this function for why the `\r` of a `\r\n` is *not* a
+/// terminator here even though CommonMark says the pair is one.
+fn is_a_line_terminator(src: &str, i: usize) -> bool {
+    match src.as_bytes()[i] {
+        b'\n' => true,
+        b'\r' => src.as_bytes().get(i + 1) != Some(&b'\n'),
+        _ => false,
+    }
+}
+
+/// Whether `src[range]` holds a `\r` that no `\n` follows.
+///
+/// The one question a caller can ask to find out whether the two engines behind
+/// this port agree about a stretch of source. `pulldown-cmark` ends a line at a
+/// lone `\r` and `marked` does not, so **any** structural reasoning across one —
+/// where a line starts, how far a block is indented, whether a blank line
+/// separates two blocks — is one engine's grid answering a question about the
+/// other's ranges. [`crate::reparse`]'s `hard_boundary` is the caller: it
+/// answers *"not a boundary"* there, which widens the region and lets a full
+/// parse of it decide, and widening is the direction that function's own doc
+/// comment already calls the safe one.
+pub(crate) fn holds_a_lone_carriage_return(src: &str, range: Range<usize>) -> bool {
+    let start = boundary_at_or_below(src, range.start);
+    let end = boundary_at_or_below(src, range.end).max(start);
+    // `is_a_line_terminator` reads one byte *past* the match, which is why the
+    // offsets are mapped back onto `src`: a `\r` at the very end of `range`
+    // whose `\n` is just outside it is half of a `\r\n` and not a lone `\r`.
+    src[start..end]
+        .match_indices('\r')
+        .any(|(i, _)| is_a_line_terminator(src, start + i))
+}
+
 /// The start of the line `at` is on.
 ///
 /// **Tolerant of an `at` inside a character, and that is a fix rather than
@@ -3469,19 +3619,64 @@ fn expand_tabs(s: &str, mut col: usize) -> String {
 /// single byte and cannot be inside a code point, so snapping down names the
 /// same line; the alternative is the same `while` loop at every caller.
 pub(crate) fn line_start_of(src: &str, at: usize) -> usize {
-    let mut at = at.min(src.len());
-    while at > 0 && !src.is_char_boundary(at) {
-        at -= 1;
+    let at = boundary_at_or_below(src, at);
+    // Backwards over both spellings, stepping over the `\r` of a `\r\n`: that
+    // pair is terminated by its `\n`, so a match on its `\r` would name a line
+    // start one byte early and make every CRLF line begin with its own newline.
+    let mut hi = at;
+    while let Some(found) = src[..hi].rfind(['\r', '\n']) {
+        if is_a_line_terminator(src, found) {
+            return found + 1;
+        }
+        hi = found;
     }
-    src[..at].rfind('\n').map_or(0, |i| i + 1)
+    0
 }
 
-fn line_end_of(src: &str, at: usize) -> usize {
-    let mut at = at.min(src.len());
-    while at > 0 && !src.is_char_boundary(at) {
-        at -= 1;
+/// The end of the line `at` is on — the index of the terminator, or `src.len()`.
+pub(crate) fn line_end_of(src: &str, at: usize) -> usize {
+    let mut i = boundary_at_or_below(src, at);
+    while let Some(found) = src[i..].find(['\r', '\n']).map(|x| x + i) {
+        if is_a_line_terminator(src, found) {
+            return found;
+        }
+        // The `\r` of a `\r\n`, which is content. Its `\n` is one byte on.
+        i = found + 1;
     }
-    src[at..].find('\n').map_or(src.len(), |i| at + i)
+    src.len()
+}
+
+/// The start of the line after the one whose content ends at `end`.
+///
+/// `end + 1` for a lone `\r` and for a `\n`; `end + 2` for the `\r\n` pair that
+/// [`line_end_of`] reports at its `\n`… which is `end + 1` again, because that
+/// index *is* the `\n`. It exists so the walk in [`strip_lines`] says what it
+/// means rather than relying on that coincidence, and so that a future change
+/// to the grid has one place to land.
+fn next_line_start(src: &str, end: usize) -> usize {
+    match src.as_bytes().get(end) {
+        Some(b'\r' | b'\n') => end + 1,
+        // Past the last line: no terminator to step over. `end + 1` keeps the
+        // caller's `while at < range.end` loop terminating on an empty tail.
+        _ => end + 1,
+    }
+}
+
+/// The content end of the line that ends at line start `start`, terminator off.
+///
+/// `start` must be a line start greater than zero. The terminator is one byte
+/// (`\n` or a lone `\r`) except for a `\r\n`, where it is two and both must come
+/// off — reading the `\r` as the previous line's last *content* byte is what
+/// would make [`preceded_by_blank_line`] call every line after a CRLF line
+/// blank-preceded.
+fn previous_line_end(src: &str, start: usize) -> usize {
+    let bytes = src.as_bytes();
+    let end = start - 1;
+    if bytes[end] == b'\n' && end > 0 && bytes[end - 1] == b'\r' {
+        end - 1
+    } else {
+        end
+    }
 }
 
 /// Whether the line `at` sits on is preceded by a blank one.
@@ -3491,13 +3686,22 @@ fn line_end_of(src: &str, at: usize) -> usize {
 /// consistent about whether the newline that ends a block is inside it (S4's
 /// "the trap nobody named"), so a gap measured from a block's *end* can read one
 /// newline short. Measured from the following block's start it cannot.
+///
+/// S7: the `start == 0` fast path is *"a block at the start of the document is
+/// preceded by a blank line"*, and before the grid above knew about a lone `\r`
+/// it was reached by blocks that are not at the start of the document at all —
+/// `"=\r#"`'s second block starts at byte 2, whose line start was computed as 0.
+/// `reparse::hard_boundary` then declared a boundary hard that a full parse
+/// merges straight across. See
+/// `reparse::tests::a_lone_carriage_return_hides_a_paragraph_merge_from_the_region_reparse`.
 pub(crate) fn preceded_by_blank_line(src: &str, at: usize) -> bool {
     let start = line_start_of(src, at);
     if start == 0 {
         return true;
     }
-    let previous = line_start_of(src, start - 1);
-    src[previous..start - 1].trim().is_empty()
+    let end = previous_line_end(src, start);
+    let previous = line_start_of(src, end);
+    src[previous..end].trim().is_empty()
 }
 
 /// Apply one container's prefix to one whole source line.
@@ -3598,6 +3802,18 @@ fn apply_prefix(
                 // where `indent` here already includes `cap[1].length`.
                 if marker_len >= text.len() {
                     return (String::new(), source_start + text.len(), exact);
+                }
+                // **The backstop, and the empty slice is not what it returns.**
+                // `marker_len` is ASCII-derived and this is the line it was
+                // measured on (`item_prefix_at`), so the cut is a boundary and
+                // this guard is unreachable. Should a future range-provenance
+                // mistake make it reachable, the answer is the zero-width prefix
+                // — the line unchanged, which is what `item_prefix_at`'s own
+                // "no marker on this line" arm means. Returning `""` instead
+                // would report the item as having no text at all, and losing a
+                // user's content is worse than showing them a stray `1.`.
+                if !text.is_char_boundary(marker_len) {
+                    return (text, source_start, exact);
                 }
                 let rest = &text[marker_len..];
                 if rest.trim().is_empty() {
@@ -3710,8 +3926,16 @@ fn strip_lines(src: &str, range: &Range<usize>, prefixes: &[Prefix]) -> Vec<Stri
     // line, and at level `i` that is `previous[i]`.
     let mut previous: Vec<String> = Vec::new();
     if at > 0 {
-        let mut text = src[line_start_of(src, at - 1)..at - 1].to_string();
-        let (mut start, mut exact) = (line_start_of(src, at - 1), true);
+        // The previous line is named through the grid rather than by stepping
+        // back one byte: a lone `\r` is a terminator and the `\r` of a `\r\n` is
+        // not, and `at - 1` cannot tell those apart. Its text is then taken with
+        // [`line_end_of`] so that it is the same string the loop below would
+        // have produced for that line — a CRLF line keeps its `\r`, which is
+        // content to `marked`.
+        let previous_start = line_start_of(src, previous_line_end(src, at));
+        let previous_end = line_end_of(src, previous_start);
+        let mut text = src[previous_start..previous_end].to_string();
+        let (mut start, mut exact) = (previous_start, true);
         for prefix in prefixes {
             previous.push(text.clone());
             let next = apply_prefix(*prefix, start, None, text, start, exact);
@@ -3793,7 +4017,7 @@ fn strip_lines(src: &str, range: &Range<usize>, prefixes: &[Prefix]) -> Vec<Stri
             terminated: end < range.end,
             starts_scan,
         });
-        at = end + 1;
+        at = next_line_start(src, end);
     }
     out
 }

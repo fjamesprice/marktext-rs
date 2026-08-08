@@ -51,9 +51,13 @@
 //! unwriteable.
 //!
 //! Over **generated** documents the second application is not enough: 316 in
-//! 466,909 settle only on the third and four need a fourth. So the generated
-//! property is stated at [`SETTLES_BY`] `= 4`, with the full distribution on
-//! [`the_round_trip_settles`].
+//! 466,909 settle only on the third and four need a fourth. **And that
+//! distribution is not a bound** — S7's soak drove a byte fuzzer at the same
+//! claim and found one input settling at 8 and one at 6, neither of them
+//! reachable by these strategies. So the generated property is stated at
+//! [`SETTLES_BY`] `= 8`, which is that measured maximum; the distribution is on
+//! [`the_round_trip_settles`] and the argument for the number is on
+//! [`SETTLES_BY`] itself.
 //!
 //! # What this file found, which is more than it was built to assert
 //!
@@ -129,7 +133,7 @@
 //! | 1 | Nothing panics — `parse`, `serialize`, `dump_state`, `render_to_static_html` at both `sanitize` values | [`parse_and_its_consumers_are_total_over_generated_documents`] |
 //! | 2 | Every source range is inside `0..src.len()` and both ends are `char` boundaries | [`every_source_range_is_in_bounds_and_on_a_char_boundary`] |
 //! | 3 | Every live node carries a `SourceMap` entry, and the map holds nothing else | [`every_live_node_has_a_source_range`] |
-//! | 4 | The round trip settles within [`SETTLES_BY`] applications | [`the_round_trip_settles_by_the_fourth_application`] |
+//! | 4 | The round trip settles within [`SETTLES_BY`] applications | [`the_round_trip_settles_within_the_measured_bound`] |
 //! | 5 | `Incremental::new(s, o)` is `parse(s, o)` | [`the_incremental_entry_point_agrees_with_a_full_parse_before_any_edit`] |
 //!
 //! Claim 1 is the gate itself — §11.3: *"Malformed input must never panic —
@@ -834,9 +838,12 @@ fn the_map_covers_the_live_tree(
 ///
 /// So the honest statement of *"repeated open/save must not drift or
 /// oscillate"* is a **bounded** settling time with the bound measured, and
-/// [`SETTLES_BY`] is that bound. The three families for which no bound is right
-/// are named by [`the_settling_claim_does_not_apply`], and two of them are
-/// findings this file reports rather than behaviours it tolerates.
+/// [`SETTLES_BY`] is that bound. **The table above is this generator's and not
+/// the language's**, which is the mistake that put the bound at 4 — see
+/// [`SETTLES_BY`] for the two soak inputs above it and for the re-measure. The
+/// four families for which no bound is right are named by
+/// [`the_settling_claim_does_not_apply`], and three of them are findings this
+/// file reports rather than behaviours it tolerates.
 fn the_round_trip_settles(src: &str, options: Options, label: &str) -> Result<(), TestCaseError> {
     let mut sequence = Vec::with_capacity(SETTLES_BY + 1);
     let mut current = src.to_string();
@@ -866,21 +873,54 @@ fn the_round_trip_settles(src: &str, options: Options, label: &str) -> Result<()
 /// How many applications of `serialize ∘ parse` the bytes are allowed to keep
 /// moving for.
 ///
-/// **Four, measured** — see [`the_round_trip_settles`] for the table, where 4
-/// of 466,909 generated documents need exactly this many and none needs more.
+/// **Eight, measured — and it was 4, which was false.** The number is a named
+/// constant precisely so that raising it has to be written down and argued, so
+/// here is the argument.
 ///
-/// It is therefore the observed maximum rather than a comfortable round number,
-/// and that is deliberate. Raising it is not a free way to make a failure go
-/// away: a document that needs five passes to stop moving is a document a user
-/// can watch change under them on the fourth save, so the number is a named
-/// constant precisely so that raising it has to be written down and argued. The
-/// families for which no constant works are excluded **by name** in
-/// [`the_settling_claim_does_not_apply`] rather than by inflating this, and each
-/// one carries a ratchet test asserting the behaviour it was excluded for.
-const SETTLES_BY: usize = 4;
+/// # Why 4 was wrong
+///
+/// 4 was the observed maximum over [`the_round_trip_settles`]'s 466,909
+/// generated documents, and an observed maximum over a generator that does not
+/// cover the space is not a bound. S7's nightly soak drove the byte fuzzer at
+/// the same claim and found two inputs above it inside one run:
+///
+/// | Soak input | bytes | settles after | mechanism |
+/// |---|---:|---:|---|
+/// | `crash-8e6638ae…` | 267 | **8** | over-indented child of a list item |
+/// | `crash-d5e4b027…` | 163 | **6** | backslash run in a fence info string |
+///
+/// Both **settle**; neither oscillates, and none of the three exclusion
+/// predicates fired on either input or on any of its first twenty
+/// intermediates. So this was simply below the true maximum, and 8 is that
+/// maximum re-measured here.
+///
+/// # The two laws behind the number, because a maximum without a law is the
+/// mistake that produced 4
+///
+/// * **An over-indented child of a list item sheds four columns per pass**, so
+///   its settling time is *linear in the indentation* and no constant covers
+///   it. That family is excluded **by name** —
+///   [`the_settling_time_is_known_to_grow_with_a_list_items_stray_indent`] —
+///   and its threshold is derived from this constant rather than guessed.
+///   `crash-8e6638ae…` carries 32 columns and is excluded by it.
+/// * **A backslash run in a fence info string halves per pass**, so its
+///   settling time is ⌊log₂ n⌋ + 1 in the run's length: 8 of 8 measured, `n` = 1
+///   to 128. 8 therefore covers runs up to 255 backslashes, and
+///   `crash-d5e4b027…`'s 37 settle at 6 with two passes to spare. This is a
+///   *logarithmic* law rather than an unbounded one, which is why it is covered
+///   by the constant instead of excluded by name — but it is bounded only by
+///   the document's size, so a fence info string with 256 backslashes is where
+///   8 stops being true. That is a **finding, not a guard**: both laws are
+///   serializer defects (data the user loses or watches move on every save,
+///   §11.3's *"Data safety"* row), and repairing them is blocked on the
+///   `ExportMarkdown` differential runner §10 has declined to build. Neither is
+///   repaired here; this constant only stops asserting something false.
+const SETTLES_BY: usize = 8;
 
-/// **The one family with no constant settling time at all** — a code fence
-/// whose info string contains a backtick.
+/// **The first of the two families with no constant settling time at all** — a
+/// code fence whose info string contains a backtick. S7 characterised the
+/// second, and it is
+/// [`the_settling_time_is_known_to_grow_with_a_list_items_stray_indent`].
 ///
 /// # The measurement that makes this a guard rather than a fudge
 ///
@@ -940,7 +980,7 @@ const SETTLES_BY: usize = 4;
 /// over-approximation in one direction: such a line inside *another* fence is
 /// content rather than an opener, and this predicate cannot tell without being
 /// a second block parser.
-/// The three shapes the settling claim is not made about, asked of **every**
+/// The four shapes the settling claim is not made about, asked of **every**
 /// element of the sequence and not only of the source.
 ///
 /// Asking only about the source is wrong twice over, and both were found by
@@ -953,7 +993,103 @@ const SETTLES_BY: usize = 4;
 fn the_settling_claim_does_not_apply(m: &str) -> bool {
     is_a_known_panic(m)
         || the_settling_time_is_known_to_be_unbounded(m)
+        || the_settling_time_is_known_to_grow_with_a_list_items_stray_indent(m)
         || the_round_trip_is_known_to_oscillate(m)
+}
+
+/// **The second family with no constant settling time** — a list item whose
+/// content is indented past its own column. S7's soak found it; nothing in this
+/// repository had characterised it before.
+///
+/// # The law, measured
+///
+/// The serializer re-emits four columns fewer than `apply_prefix` consumed, so
+/// each application peels one level and the settling time is **linear in the
+/// indentation**:
+///
+/// ```text
+/// format!("- a\n{}```o\n", " ".repeat(4 * n))   settles after exactly n
+/// n        | 1 | 2 | 4 | 8 | 16 | 32
+/// settles  | 1 | 2 | 4 | 8 | 16 | 32     6 of 6, and the tab spelling matches
+/// ```
+///
+/// The tab is incidental — `"\t".repeat(n)` gives the identical table — so the
+/// quantity is the indentation in **columns**, which is what this counts. The
+/// list container is required: replacing the `- ` with `p ` makes the same
+/// document settle on the first pass.
+///
+/// # Why a threshold, and why *this* threshold
+///
+/// A predicate that named the family without a magnitude would skip every
+/// nested list in the corpus, which is most of the property. Instead the
+/// threshold is **derived from [`SETTLES_BY`]**: over a 4,590-document sweep of
+/// five markers × nine bodies × five container wraps × seventeen indents × two
+/// option sets, the worst settling time among documents kept by a threshold of
+/// `t` columns was exactly `t / 4 + 2`, monotone in `t`, for every `t` from 4 to
+/// 32. At 24 columns that worst case is 8 — this file's constant, reached
+/// exactly and not exceeded. So the two numbers are one statement: *beyond 24
+/// columns the measured law says no bound of 8 can hold.*
+///
+/// **It skips nothing the fixed corpus contains**: 0 of 1,324 spec examples and
+/// 0 of 11 round-trip fixtures are excluded by it. The cost of the exclusion is
+/// therefore paid entirely by generated and fuzzed documents, which is where the
+/// family lives.
+///
+/// It over-approximates in one direction, as its three siblings do: an indented
+/// line inside a fenced code block is content rather than an over-indented
+/// child, and this predicate cannot tell without being a second block parser.
+///
+/// Pinned by
+/// [`the_settling_time_grows_with_a_list_items_indentation`].
+fn the_settling_time_is_known_to_grow_with_a_list_items_stray_indent(src: &str) -> bool {
+    /// A tab advances to the next multiple of four, which is the unit the law
+    /// above is stated in. `>` is a container marker rather than indentation, so
+    /// it advances the column without being counted as a run — a quoted list is
+    /// the same family one level in.
+    fn stray_indent_columns(src: &str) -> usize {
+        src.split('\n')
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let (mut column, mut widest) = (0usize, 0usize);
+                for byte in line.bytes() {
+                    match byte {
+                        b' ' => {
+                            column += 1;
+                            widest = widest.max(column);
+                        }
+                        b'\t' => {
+                            column += 4 - column % 4;
+                            widest = widest.max(column);
+                        }
+                        b'>' => column += 1,
+                        _ => break,
+                    }
+                }
+                widest
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// ` {0,3}` then `[*+-]` or `\d{1,9}[.)]` — `marked`'s `bullet`, loosened to
+    /// a scan for the same reason [`is_a_reference_definition`] is.
+    fn opens_a_list_item(line: &str) -> bool {
+        let rest = line.trim_start_matches([' ', '\t', '>']);
+        let bytes = rest.as_bytes();
+        if matches!(bytes.first(), Some(b'-' | b'*' | b'+'))
+            && matches!(bytes.get(1), Some(b' ' | b'\t') | None)
+        {
+            return true;
+        }
+        let digits = rest.bytes().take(9).take_while(u8::is_ascii_digit).count();
+        digits > 0 && matches!(bytes.get(digits), Some(b'.' | b')'))
+    }
+
+    // `worst = columns / 4 + 2`, so `worst <= SETTLES_BY` exactly while
+    // `columns <= 4 * (SETTLES_BY - 2)` — 24. Written as the inequality rather
+    // than as `24` so that the threshold cannot drift away from the constant it
+    // was derived from.
+    stray_indent_columns(src) > 4 * (SETTLES_BY - 2) && src.split('\n').any(opens_a_list_item)
 }
 
 /// **The round trip oscillates with period two on `"> - [a]: /x\n>   * "`, and
@@ -1178,7 +1314,7 @@ proptest! {
     /// D3 claim 4, at both option sets — the round trip settles within
     /// [`SETTLES_BY`] applications, which is what this file exists for.
     #[test]
-    fn the_round_trip_settles_by_the_fourth_application(src in a_document()) {
+    fn the_round_trip_settles_within_the_measured_bound(src in a_document()) {
         at_both_option_sets(&src, the_round_trip_settles)?;
     }
 
@@ -1557,6 +1693,95 @@ fn the_settling_time_grows_with_the_number_of_backtick_info_strings() {
              and stop skipping it:\n{sequence:#?}"
         );
     }
+}
+
+/// **The ratchet on the second family with no constant settling time**: a list
+/// item's over-indented child sheds four columns per application, so the
+/// settling time is the indentation divided by four and no [`SETTLES_BY`] can
+/// ever cover it.
+///
+/// [`the_settling_time_is_known_to_grow_with_a_list_items_stray_indent`]
+/// excludes an input from this file's central claim, so the exclusion has to be
+/// a claim of its own or it is a hole — the same argument
+/// [`the_settling_time_grows_with_the_number_of_backtick_info_strings`] makes
+/// next door, and the same shape. "This input is awkward" is not a claim; "the
+/// settling time is the indentation in columns divided by four, and here is the
+/// table" is.
+///
+/// The day the serializer emits the same number of indent columns
+/// `block::apply_prefix` consumes, this fails with the new number and the guard
+/// can be deleted rather than quietly outliving the behaviour it was written
+/// for. That repair is a **serializer** change, which this repository settles
+/// against `ExportMarkdown` and not against a guess — §10's owed differential
+/// runner — so S7 reports the law rather than closing it.
+///
+/// Measured to `n = 32` and asserted to `n = 8`, which is where the documents
+/// stop being small enough to be worth parsing nine times in an every-commit
+/// test.
+#[test]
+fn the_settling_time_grows_with_a_list_items_indentation() {
+    for n in 1..=8usize {
+        // Spaces rather than tabs: the two spellings give the identical table,
+        // so the quantity is columns, and spaces say so without a tab stop.
+        let src = format!("- a\n{}```o\n", " ".repeat(4 * n));
+
+        let mut sequence = vec![src.clone()];
+        for _ in 0..(n + 4) {
+            let last = sequence.last().expect("non-empty").clone();
+            sequence.push(serialize(
+                &parse(&last, Options::SPEC).document,
+                Options::SPEC,
+            ));
+        }
+        let settled_at = (1..sequence.len() - 1)
+            .find(|&i| sequence[i] == sequence[i + 1])
+            .unwrap_or_else(|| {
+                panic!(
+                    "n = {n}: still moving after {} applications",
+                    sequence.len() - 1
+                )
+            });
+
+        assert_eq!(
+            settled_at, n,
+            "n = {n}: the settling time is no longer the indentation over four. If the family \
+             now settles in a bounded number of passes, delete \
+             `the_settling_time_is_known_to_grow_with_a_list_items_stray_indent` and stop \
+             skipping it:\n{sequence:#?}"
+        );
+    }
+
+    // The guard names its own reproducer only past the threshold, and the
+    // threshold is the point at which `SETTLES_BY` stops covering the law — so
+    // these two assertions are the derivation, run.
+    let under = format!("- a\n{}```o\n", " ".repeat(4 * (SETTLES_BY - 2)));
+    let over = format!("- a\n{}```o\n", " ".repeat(4 * (SETTLES_BY - 2) + 1));
+    assert!(
+        !the_settling_time_is_known_to_grow_with_a_list_items_stray_indent(&under),
+        "24 columns settles inside SETTLES_BY and must stay in the claim"
+    );
+    assert!(
+        the_settling_time_is_known_to_grow_with_a_list_items_stray_indent(&over),
+        "25 columns cannot settle inside SETTLES_BY and must leave it"
+    );
+    // And the container is required: the same indentation with no list opener
+    // above it is not this family and is not skipped.
+    assert!(
+        !the_settling_time_is_known_to_grow_with_a_list_items_stray_indent(&format!(
+            "p a\n{}```o\n",
+            " ".repeat(64)
+        )),
+        "no list opener, no shed"
+    );
+
+    // The soak input this whole family was characterised from: 32 columns of
+    // stray indent, excluded, and it settles at 8 — which is where
+    // [`SETTLES_BY`] came from.
+    assert!(
+        the_settling_time_is_known_to_grow_with_a_list_items_stray_indent(
+            "* *\n\t\t\t\t\t\t\t```o\n"
+        )
+    );
 }
 
 /// The guard is narrow enough to be worth having, and wide enough to be the
