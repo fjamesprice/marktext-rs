@@ -1,0 +1,16 @@
+[package]
+name = "e4-syntect"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# E4 (M3 S0, D3). Default `regex-onig` backend, matching E2's binary-size
+# measurement (`spikes/e2-syntect-onig`) and the default `syntect` a
+# `cargo add syntect` would pull — so this crate's throughput numbers and
+# E2's size numbers describe the *same* build, not two different features.
+[dependencies]
+e4-common = { path = "../e4-common" }
+syntect = { version = "5.3.0", default-features = false, features = [
+    "default-onig",
+] }

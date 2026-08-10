@@ -1,0 +1,16 @@
+[package]
+name = "e1-parley-0-11"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# The released version, exactly as `mt-layout` would take it today. Default
+# features, so `system` is on and Windows' own Arabic/Hebrew faces are
+# available — E1's primary question is about bidi placement, and starving the
+# layout of fonts would answer a different question. The font-strategy probe
+# that *does* starve it is `e1-fonts-0-11`.
+parley = "=0.11.0"
+
+unicode-bidi.workspace = true

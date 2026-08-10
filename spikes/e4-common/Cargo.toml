@@ -1,0 +1,17 @@
+[package]
+name = "e4-common"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# E4 (M3 S0, D3 — mt-highlight's engine) shares this path-dependency crate
+# between e4-syntect and e4-treesitter the way e2-common anchors E2's builds.
+# It owns exactly one job: turn a markdown file into the (language, code text)
+# pairs `mt-highlight`'s real contract hands the highlighter — via `mt-md` and
+# `Block::highlight_language()`, not by hand-parsing fences, so a discrepancy
+# between the corpus's own fence syntax and this harness's guess can never be
+# the thing under test.
+[dependencies]
+mt-md = { path = "../../crates/mt-md" }
+mt-doc = { path = "../../crates/mt-doc" }

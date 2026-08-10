@@ -1,0 +1,14 @@
+[package]
+name = "e2-treesitter-1"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Build 4a: build 1 (parley + `vello_cpu`) plus `tree-sitter` core plus ONE
+# grammar. Paired with `e2-treesitter-20` so the marginal per-grammar cost is
+# separable from tree-sitter core's own fixed cost.
+[dependencies]
+e2-common = { path = "../e2-common" }
+tree-sitter = "0.26.12"
+tree-sitter-rust = "0.24.2"

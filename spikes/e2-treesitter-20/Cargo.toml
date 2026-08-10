@@ -1,0 +1,36 @@
+[package]
+name = "e2-treesitter-20"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Build 4b: build 1 (parley + `vello_cpu`) plus `tree-sitter` core plus 20
+# grammars — §12.2's "tree-sitter core + ~20 bundled grammars" row, measured
+# rather than assumed. Versions are whatever `=` pins resolved to at the time
+# this experiment ran; exact resolved versions are echoed in
+# results/e2-binary-size.md from this file and `Cargo.lock`.
+[dependencies]
+e2-common = { path = "../e2-common" }
+tree-sitter = "0.26.12"
+tree-sitter-language = "0.1"
+tree-sitter-rust = "0.24.2"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-python = "0.25.0"
+tree-sitter-c = "0.24.2"
+tree-sitter-cpp = "0.23.4"
+tree-sitter-java = "0.23.5"
+tree-sitter-go = "0.25.0"
+tree-sitter-ruby = "0.23.1"
+tree-sitter-php = "0.24.2"
+tree-sitter-html = "0.23.2"
+tree-sitter-css = "0.25.0"
+tree-sitter-json = "0.24.8"
+tree-sitter-yaml = "0.7.2"
+tree-sitter-bash = "0.25.1"
+tree-sitter-md = "0.5.3"
+tree-sitter-toml-ng = "0.7.0"
+tree-sitter-c-sharp = "0.23.5"
+tree-sitter-kotlin-ng = "1.1.0"
+tree-sitter-scala = "0.26.2"

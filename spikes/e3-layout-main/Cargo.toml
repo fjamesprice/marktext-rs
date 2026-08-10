@@ -1,0 +1,23 @@
+[package]
+name = "e3-layout-main"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# The same pin E1 used, for the reason E1 found: `main` carries two features M3
+# needs that 0.11.0 does not (PR #639's inline-box baselines, PR #708's
+# `set_base_direction`) and one silent fix (#740, Arabic joining across an
+# inline box). D9's numbers should therefore come from the version M3 is most
+# likely to ship against, with 0.11.0 as the spot-check rather than the other
+# way round.
+#
+# Default features, so `system` is available — `e3` needs the *option* of
+# system fonts to answer "does font enumeration change the timing", and the
+# no-I/O path is selected at run time via `CollectionOptions`, not at compile
+# time. E1 already proved `default-features = false` builds.
+parley = { git = "https://github.com/linebender/parley", rev = "a0752c7bdc3ad88dac19fc194d2b8e57e59bea2e" }
+
+mt-md.workspace = true
+mt-doc.workspace = true

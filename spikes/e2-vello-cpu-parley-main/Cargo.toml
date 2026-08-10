@@ -1,0 +1,18 @@
+[package]
+name = "e2-vello-cpu-parley-main"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Not one of the four required builds. This is the optional "parley main vs
+# 0.11.0" size delta: build 1's exact program (parley + `vello_cpu`), against
+# git `main` instead of the pinned crates.io release. Rev matches
+# `e1-parley-main` / `e1-fonts-main` exactly, for the same reason those pin
+# it: reproducibility. `default-features = false` for the same reason
+# `e2-common` does (E1's finding: no filesystem font enumeration).
+[dependencies]
+parley = { git = "https://github.com/linebender/parley", rev = "a0752c7bdc3ad88dac19fc194d2b8e57e59bea2e", default-features = false, features = [
+    "std",
+] }
+vello_cpu = "0.2.0"

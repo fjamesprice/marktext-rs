@@ -1,0 +1,17 @@
+[package]
+name = "e2-common"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# The "build 1" foundation every other E2 build adds one component to: parley
+# (text layout, `default-features = false` per E1's finding — no filesystem
+# font enumeration) + `vello_cpu` (CPU renderer; its `text` feature is
+# default-on). Centralised here rather than copy-pasted into five `main.rs`
+# files so that build 2/3/4's "+X" is *exactly* build 1 plus X — if this
+# baseline drifted between crates, the deltas the results file reports would
+# not be attributable to the named component.
+[dependencies]
+parley = { version = "=0.11.0", default-features = false, features = ["std"] }
+vello_cpu = "0.2.0"

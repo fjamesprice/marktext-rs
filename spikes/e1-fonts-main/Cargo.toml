@@ -1,0 +1,17 @@
+[package]
+name = "e1-fonts-main"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# Same probe, same pin as `e1-parley-main`. See `e1-fonts-0-11/Cargo.toml` for
+# why `default-features = false` is the experiment and why this crate must be
+# built on its own.
+parley = { git = "https://github.com/linebender/parley", rev = "a0752c7bdc3ad88dac19fc194d2b8e57e59bea2e", default-features = false, features = [
+    "std",
+] }
+
+[features]
+complex-scripts = ["parley/complex-scripts"]

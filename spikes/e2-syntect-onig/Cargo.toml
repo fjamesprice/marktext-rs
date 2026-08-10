@@ -1,0 +1,17 @@
+[package]
+name = "e2-syntect-onig"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Not one of the four required E2 builds. `mt-highlight`'s engine (D3) is a
+# separate M3 decision (E4); this crate exists so E4 can reuse a size number
+# instead of rebuilding a size harness. `syntect`'s DEFAULT backend:
+# `regex-onig`, which pulls the C library `oniguruma` via `onig_sys`'s
+# `build.rs` (a second, independent data point for "does a C toolchain get
+# pulled in", alongside the tree-sitter grammars).
+[dependencies]
+syntect = { version = "5.3.0", default-features = false, features = [
+    "default-onig",
+] }

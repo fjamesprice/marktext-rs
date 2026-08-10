@@ -1,0 +1,14 @@
+[package]
+name = "e2-syntect-fancy"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Same as `e2-syntect-onig`, but the pure-Rust `regex-fancy` backend — no C
+# library. C11 already sourced the *speed* tradeoff ("about half the speed"
+# of `regex-onig`); this prices the *size* side of that tradeoff.
+[dependencies]
+syntect = { version = "5.3.0", default-features = false, features = [
+    "default-fancy",
+] }

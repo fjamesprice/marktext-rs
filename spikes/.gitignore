@@ -1,0 +1,20 @@
+# `spikes/` is its own workspace (see spikes/Cargo.toml), so this is a second
+# target directory, not the repository's — `/target/` in the root `.gitignore`
+# is anchored and does not reach here. Same shape as `fuzz/.gitignore`.
+/target/
+
+# Not committed, for the same reason `fuzz/Cargo.lock` is not: this workspace
+# exists to hold *two* revisions of a churning 0.x graph side by side, and a
+# committed lockfile would present that resolution as though the project had
+# chosen it. The pins that matter are in each spike's `Cargo.toml` — an exact
+# `=0.11.0` and an exact git `rev` — so a rebuild resolves to the same parley
+# either way, which is the only reproducibility the results file claims.
+Cargo.lock
+
+# `e3 gen-code-dense` writes here. Deliberately NOT in `bench/corpus/`: that
+# directory is written by `cargo xtask corpus` and CI runs `--check` against the
+# generator, so any file it did not produce fails the build. The generator is a
+# mode of the spike binary and the seed is in the results file, so the input is
+# reproducible without being committed — the same argument `fuzz/.gitignore`
+# makes about its own corpus.
+/.gen/

@@ -1,0 +1,20 @@
+[package]
+name = "e1-parley-main"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# Pinned, not floating. `main` is the whole point of this arm — PR #639
+# (inline-box baselines) merged 2026-07-08, after 0.11.0 was cut on 2026-06-24
+# — but a `branch = "main"` dependency would make the result unreproducible the
+# next time anyone pushes. This rev is `main` as of 2026-08-10:
+#
+#   a0752c7  2026-08-10  Move `char_style_indices` out of the per-item `ShapeOptions` (#741)
+#
+# and it contains a5ea9a7 ("Implement `baseline` field on inline boxes", #639),
+# verified with `git merge-base --is-ancestor`.
+parley = { git = "https://github.com/linebender/parley", rev = "a0752c7bdc3ad88dac19fc194d2b8e57e59bea2e" }
+
+unicode-bidi.workspace = true

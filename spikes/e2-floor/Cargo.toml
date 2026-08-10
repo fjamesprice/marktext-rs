@@ -1,0 +1,11 @@
+[package]
+name = "e2-floor"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Build 0: the floor. No dependencies at all — this is §12.2's "Rust std +
+# runtime, ~0.3 MB" row and the subtrahend every other E2 build's delta is
+# taken against.
+[dependencies]

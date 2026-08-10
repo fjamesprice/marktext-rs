@@ -1,0 +1,12 @@
+[package]
+name = "e2-vello-cpu"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Build 1: parley (text layout) + `vello_cpu` (CPU renderer). No wgpu, no
+# vello, no tiny-skia. This is the "floor plus a renderer" every other E2
+# build's "+X" is measured against.
+[dependencies]
+e2-common = { path = "../e2-common" }

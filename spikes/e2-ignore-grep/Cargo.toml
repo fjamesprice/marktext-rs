@@ -1,0 +1,18 @@
+[package]
+name = "e2-ignore-grep"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Not one of the four required E2 builds. §12.2 bills `ignore` + `grep-
+# searcher` at ~1.5 MB; both belong to a later milestone (in-document /
+# in-project search) but link cheaply today. `grep-regex` is added because
+# `grep-searcher`'s `Searcher` needs a `Matcher` impl to do anything, and
+# `grep-regex` (Ripgrep's own regex matcher) is the natural one `mt-search`
+# would use.
+[dependencies]
+ignore = "0.4"
+grep-searcher = "0.1"
+grep-regex = "0.1"
+grep-matcher = "0.1"

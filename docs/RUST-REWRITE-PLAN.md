@@ -458,28 +458,37 @@ Build this in M0 and run it in CI for the entire project. It converts "did I por
 
 ### 12.2 Binary size
 
-Estimated contributions, `dist` profile with LTO and `panic = "abort"`:
+**Measured at M3 S0, 2026-08-10**, replacing the estimates this section carried until then. `dist` profile as specified in §1 — `lto = "fat"`, `codegen-units = 1`, `panic = "abort"`, `strip = "symbols"`, `opt-level = "s"` — on `x86_64-pc-windows-msvc`, rustc 1.97.1. Sizes are the stripped artifact. Evidence and per-crate `cargo bloat` output: `spikes/results/e2-binary-size.md`.
 
-| Component | Size |
-|---|---:|
-| `wgpu` + `vello` (incl. shaders) | 4–6 MB |
-| tree-sitter core + ~20 bundled grammars | ~4 MB |
-| `parley` + `swash` + `fontique` + `rustybuzz` + ICU segmentation | 2–3 MB |
-| `ignore` + `grep-searcher` | ~1.5 MB |
-| Bundled fonts | 1–3 MB |
-| `accesskit` | ~0.5 MB |
-| `rex` (math) | ~0.5 MB |
-| `pulldown-cmark`, `serde`, `notify`, `pdf-writer`, `spellbook`, misc | ~1.5 MB |
-| Rust std + runtime | ~0.3 MB |
-| Icons, themes, locales | ~0.5 MB |
-| **Default total** | **~17–25 MB** |
+Each row is a whole-binary delta against the row above it or against the floor, because that is the only attribution that survives — see the warning at the end of this section.
 
-Two components dominate, and both have a lever:
+| Component | Size | Provenance |
+|---|---:|---|
+| Rust std + runtime (empty `fn main`) | **0.098 MB** | measured |
+| `parley` + `vello_cpu` + skrifa + harfrust + ICU | **2.383 MB** | measured |
+| `vello` + `wgpu` + `naga`, on top of the above | **4.318 MB** | measured |
+| `tiny-skia`, on top of the above | 0.390 MB | measured — **and it renders no text** |
+| tree-sitter core + **1** grammar | **1.180 MB** | measured |
+| tree-sitter, each additional grammar | **~1.301 MB** | measured (20-grammar build) |
+| `syntect` 5.3.0 | **1.000 MB** | measured |
+| parley `complex-scripts` feature (CJK/Thai/Khmer/Lao/Myanmar line breaking) | **3.6 MB** | measured — **not previously budgeted at all** |
+| `ignore` + `grep-searcher` | **1.289 MB** | measured |
+| `accesskit` core, no platform adapter | 0.016 MB | measured — floor only, adapters unpriced |
+| Bundled fonts | **1.178 MB** for 4 mono faces | measured — see the caveat below |
+| `rex` (math), `notify`, `pdf-writer`, `spellbook`, icons, themes, locales | — | **still unmeasured**; the crates belong to M5/M6 |
 
-- **Drop `wgpu`/`vello`, ship `tiny-skia` only:** −4–6 MB. Plausible for a markdown editor; benchmark in M3 before assuming GPU is required.
-- **Load tree-sitter grammars on demand** rather than bundling twenty: −3–4 MB.
+**M3's own configuration, as decided at S0** (CPU-only renderer, Prism-port highlighter, no tree-sitter): **≈ 2.5 MB before fonts and `complex-scripts`, ≈ 7.3 MB with both.** That is the whole shipped previewer.
 
-Taking both lands at **~8–11 MB**, which clears the stretch target. Treat the GPU-vs-CPU default as a real M3 decision informed by measurement, not a foregone conclusion.
+### Both levers were wrong, in opposite directions
+
+- **"Drop `wgpu`/`vello`, ship `tiny-skia` only: −4–6 MB."** The magnitude is right — **measured −4.318 MB** — but the mechanism is impossible. `tiny-skia`'s README lists text rendering as out of scope, so a `tiny-skia`-only build cannot draw a character of a text editor's content. The real lever is *ship `vello_cpu` only*, which did not exist when this section was written (`vello_cpu` 0.2.0, 2026-08-07). **M3 takes it.**
+- **"Load tree-sitter grammars on demand: −3–4 MB."** Understated by **6–8×**. Twenty grammars measure **25.907 MB**, ~1.301 MB each — more than this section's entire *default total*. And it is not a flag: grammar crates compile checked-in generated C via `build.rs` (`tree-sitter-rust` ships a 6.5 MB `parser.c`) and link statically, so "on demand" means shipping dynamic libraries or embedding a wasm engine. M3 S0 dropped tree-sitter instead; see M3.md D3.
+
+**A methodological warning.** `cargo bloat --crates` **under-reports tree-sitter by an order of magnitude**, because parse tables live in `.rdata` and `cargo bloat` attributes `.text`. Grammar cost is only recoverable from whole-binary deltas. Any future re-measurement that trusts `cargo bloat` alone will conclude grammars are nearly free.
+
+**A caveat on the font row.** The 1.178 MB is MarkText's four bundled DejaVu Sans Mono `.ttf` files. Its eight Open Sans faces ship as `.woff`, which skrifa **rejects silently**, and the bundled set covers no Hebrew, CJK or emoji. A font row that satisfies M3's own exit gate is therefore larger than measured and not yet sized — see M3.md D7.
+
+Treat this table as the scoreboard it now is: rows marked measured are facts about this repository at a stated commit; the remaining rows are still estimates and are marked as such rather than totalled into a headline number.
 
 ---
 

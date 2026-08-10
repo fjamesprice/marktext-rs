@@ -1,0 +1,24 @@
+[package]
+name = "e1-fonts-0-11"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# `default-features = false` is the experiment. parley's default set is
+# `["system"]`, which walks the filesystem to enumerate installed fonts —
+# exactly the I/O RUST-REWRITE-PLAN.md §1 forbids `mt-layout`. `std` is added
+# back because parley is `#![no_std]` and needs either `std` or `libm` for float
+# math; `std` is not the thing under test, `system` is.
+#
+# Build this crate ON ITS OWN. Cargo unifies features across whatever it builds
+# at once, so `cargo build --workspace` would silently hand this a parley with
+# `system` re-enabled by `e1-parley-0-11`, and the probe would prove nothing.
+parley = { version = "=0.11.0", default-features = false, features = ["std"] }
+
+[features]
+# Re-exported so that `cargo tree --features complex-scripts` measures what
+# question 3(c) asks: what enabling parley's dictionary-based line breaking for
+# CJK/Thai/Khmer/Lao/Myanmar costs in dependencies.
+complex-scripts = ["parley/complex-scripts"]

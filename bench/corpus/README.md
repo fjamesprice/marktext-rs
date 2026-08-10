@@ -50,11 +50,19 @@ being deliberate about content rather than just size:
 
 ## What is deliberately not here yet
 
-- **`BASELINE.md`.** NATIVE-REWRITE-PLAN.md §1.1 obliges capturing the real
-  Electron numbers for every §12.1 row before the targets mean anything —
-  "without this file the rewrite has no scoreboard and the targets are
-  unfalsifiable". That needs a full `pnpm install` and `pnpm run build:win` in
-  the marktext clone, which M0 deliberately did not do.
+- ~~**`BASELINE.md`.**~~ **Built at M3 S0, 2026-08-10 — see [`../BASELINE.md`](../BASELINE.md).**
+  NATIVE-REWRITE-PLAN.md §1.1 obliged capturing the real Electron numbers for
+  every §12.1 row before the targets mean anything — "without this file the
+  rewrite has no scoreboard and the targets are unfalsifiable". It needed a full
+  `pnpm install` and packaged build of the marktext clone, which M0 deliberately
+  did not do and M3 S0 did.
+
+  The scoreboard it produced is worth knowing before reading the table above:
+  packaged Electron MarkText takes **818 ms** to reach an editable caret, holds
+  **485 MB** RSS on an empty document, takes **43.3 s** to open `1mb.md`, and
+  **never finishes opening `5mb.md`** — it stays responsive and burns CPU
+  indefinitely. So `5mb.md`'s line in the table above — *"this is the case
+  Electron cannot do"* — was written as an expectation and is now a measurement.
 - **`criterion` harnesses.** §12.1's latency budgets run in CI on fixed
   hardware; a GitHub-hosted runner is not fixed hardware. The corpus exists
   now so that the benchmarks have inputs the day the machine does.

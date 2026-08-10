@@ -1,0 +1,12 @@
+[package]
+name = "e2-accesskit"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Not one of the four required E2 builds. §12.2 bills `accesskit` at ~0.5 MB;
+# it belongs to M4 (R6), but links cheaply today, so it is measured here
+# rather than left as an unsourced number for M4 to discover.
+[dependencies]
+accesskit = "0.21"

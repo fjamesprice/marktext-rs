@@ -1,0 +1,35 @@
+[package]
+name = "e4-treesitter"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# E4 (M3 S0, D3). `tree-sitter-highlight` produces the real
+# HighlightStart/Source/HighlightEnd event stream C11 cites, not just a parse
+# tree — parsing alone is not highlighting. Grammar set is E2's 20-grammar
+# binary-size build (`spikes/e2-treesitter-20`) trimmed to the languages this
+# corpus actually names (kotlin, scala, c-sharp, php, ruby, md drop out; toml
+# stays because the corpus has toml fences). `sql` and `diff` — both present
+# in `50-code-fences.md` — have no grammar here: no `tree-sitter-sql` or
+# `tree-sitter-diff` was part of E2's pinned set, and that absence is itself
+# a coverage data point this experiment records rather than papers over.
+[dependencies]
+e4-common = { path = "../e4-common" }
+tree-sitter = "0.26.12"
+tree-sitter-highlight = "0.26.12"
+tree-sitter-language = "0.1"
+tree-sitter-rust = "0.24.2"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-python = "0.25.0"
+tree-sitter-c = "0.24.2"
+tree-sitter-cpp = "0.23.4"
+tree-sitter-java = "0.23.5"
+tree-sitter-go = "0.25.0"
+tree-sitter-html = "0.23.2"
+tree-sitter-css = "0.25.0"
+tree-sitter-json = "0.24.8"
+tree-sitter-yaml = "0.7.2"
+tree-sitter-bash = "0.25.1"
+tree-sitter-toml-ng = "0.7.0"

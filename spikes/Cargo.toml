@@ -1,0 +1,124 @@
+# The spike workspace, deliberately outside the root one.
+#
+# Two reasons, and the first is mechanical. `cargo xtask deps` asserts that
+# `crates/` holds exactly the 14 crates RUST-REWRITE-PLAN.md §1 names; a 15th is
+# a hard failure, and that check is the thing that keeps the crate graph from
+# drifting one convenient exception at a time. A spike is by definition a crate
+# that should not survive, so it must not be able to enter that count.
+#
+# The second reason is the lockfile. M3 shops for `parley`, and `parley` shops
+# for `fontique`, `harfrust`, `skrifa`, `read-fonts`, `peniko`, `swash` — a 0.x
+# graph that has had four breaking releases since April and that this experiment
+# specifically wants to hold at *two different revisions at once* (0.11.0 from
+# crates.io and a pinned git `main`). Putting that in the root `Cargo.lock`
+# would put a churning dependency tree in front of every `cargo build` on three
+# platforms, and would make "which parley?" a workspace-wide answer at exactly
+# the moment the project needs it to be a per-experiment one.
+#
+# `fuzz/` carries its own `[workspace]` for the same shape of reason (a
+# nightly-only toolchain that must not reach the shipped lockfile); this follows
+# that precedent rather than inventing one.
+#
+# The cost is the same cost `fuzz/` pays: `cargo test --workspace` at the root
+# does not build any of this, so nothing here is protected against a change to
+# the crates it does not depend on. These crates depend on no `mt-*` crate at
+# all, so today that cost is zero.
+[workspace]
+resolver = "3"
+members = [
+    "e1-parley-0-11",
+    "e1-parley-main",
+    "e1-fonts-0-11",
+    "e1-fonts-main",
+    "e3-layout-main",
+    "e3-layout-0-11",
+    "e2-common",
+    "e2-floor",
+    "e2-vello-cpu",
+    "e2-vello-gpu",
+    "e2-tiny-skia",
+    "e2-treesitter-1",
+    "e2-treesitter-20",
+    "e2-vello-cpu-parley-main",
+    "e2-syntect-onig",
+    "e2-syntect-fancy",
+    "e2-accesskit",
+    "e2-ignore-grep",
+    "e4-common",
+    "e4-syntect",
+    "e4-treesitter",
+]
+
+# NOTE ON BUILDING: the `e1-fonts-*` members set `default-features = false` on
+# `parley` to prove that `mt-layout`'s "No I/O" constraint (§1) is expressible.
+# Cargo's feature resolver unifies features across everything it builds at once,
+# so `cargo build --workspace` here would hand those members a `parley` that
+# still has `system` enabled — via the `e1-parley-*` members, which need it.
+# Build each member on its own (`cargo run -p e1-fonts-0-11`) for that claim to
+# mean anything. `results/e1-bidi-inline-box.md` prints the exact command lines.
+
+[workspace.package]
+edition = "2024"
+version = "0.0.0"
+publish = false
+license = "MIT"
+
+[workspace.dependencies]
+# The ground truth for every bidi assertion in E1.
+#
+# The experiment must not grade parley against parley. `unicode-bidi` is an
+# independent implementation of UAX #9 (it is what Servo shipped), so the
+# harness computes the expected visual order itself and compares parley's
+# numbers to that, rather than to a hand-written expectation that could be as
+# wrong as the thing it is checking.
+unicode-bidi = "0.3"
+
+# E3 path-depends on two shipped crates, the way `fuzz/` does.
+#
+# The alternative was re-implementing a markdown parser to get block structure,
+# which would measure the spike's parser rather than the project's. These are
+# path dependencies, so they add nothing to any lockfile the application ships,
+# and neither crate gains a dependency on anything in `spikes/` — the edge runs
+# one way only, exactly as `cargo xtask deps` requires of everything it checks.
+#
+# `mt-doc` is named as well as `mt-md` because the harness walks a `Document`
+# and matches on `Block` directly; it is `mt-md`'s own dependency either way.
+mt-md = { path = "../crates/mt-md" }
+mt-doc = { path = "../crates/mt-doc" }
+
+# Cargo honours `[profile.*]` only at a workspace root, so this lives here
+# rather than in `e3-layout-*/Cargo.toml` (where it emits a warning and is
+# ignored). E3's measurements are meaningless in a debug build; `debug = true`
+# keeps the optimised binary symbol-bearing so a profiler can be pointed at
+# exactly the artifact that produced the numbers.
+#
+# E2 (results/e2-binary-size.md) needed root Cargo.toml's `[profile.release]`
+# and `[profile.dist]` copied in verbatim — this workspace has a
+# `[profile.release]` already (E3's, above), just not the one that matters for
+# a size measurement. Rather than delete E3's `debug = true`, the fields below
+# are *added* to it: on the MSVC target this workspace builds for, `debug`
+# controls whether a separate `.pdb` is emitted, not what's embedded in the
+# `.exe` — `strip = "symbols"` still fully strips the executable regardless of
+# `debug`. So this is root's release profile verbatim for every field that
+# affects `.exe` bytes, plus E3's `debug = true`, which is inert for that
+# purpose and left alone rather than fought over.
+[profile.release]
+debug = true
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.dist]          # size-tuned; see root Cargo.toml and RUST-REWRITE-PLAN.md §12
+inherits = "release"
+opt-level = "s"
+
+# `cargo bloat` needs symbols to attribute bytes to crates; `dist` strips them.
+# This is `dist` with stripping turned back off and debug info turned on, used
+# ONLY for `cargo bloat --crates -n 40` — never for a reported file size. See
+# results/e2-binary-size.md for which number came from which profile.
+[profile.dist-bloat]
+inherits = "dist"
+strip = false
+debug = 1
