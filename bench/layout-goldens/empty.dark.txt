@@ -1,0 +1,33 @@
+layout-golden v1
+theme          dark
+theme-width    750.00
+content-width  650.00
+parley         a0752c7bdc3ad88dac19fc194d2b8e57e59bea2e
+faces          ce47b2244a2ee54b2189d04641b5381824cfa80b6872d656931c5127437f7f58 rev 1
+options        wrap-code-blocks=false line-numbers=false
+input          empty.md
+input-bytes    0
+form           full
+
+list           width=650.00 height=125.60 blocks=1
+count paragraph      1
+count atx-heading    0
+count setext-heading 0
+count thematic-break 0
+count code-block     0
+count html-block     0
+count math-block     0
+count frontmatter    0
+count diagram        0
+count table.cell     0
+count block-quote    0
+count bullet-list    0
+count order-list     0
+count list-item      0
+count task-list      0
+count task-list-item 0
+count table          0
+count table.row      0
+count footnote       0
+
+block 0 paragraph bounds=[0.00 0.00 650.00 25.60] items=0

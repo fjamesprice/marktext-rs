@@ -19,3 +19,17 @@ mt-md.workspace = true
 # alternative was a `--dump-tokens` mode on `mt-cli` and a second process per
 # run, which buys nothing: this comparison is in-process on the Rust side.
 mt-inline.workspace = true
+# M3 S1: `cargo xtask layout` (D10) builds the font collection D7 says lives
+# *above* `mt-layout`, lays every `bench/corpus/` input out at both shipped
+# themes and compares the serialized display list against a committed golden.
+# `mt-layout` is where the display list and the theme model live, so the edge
+# is unavoidable and — like the two above — points upward from dev tooling that
+# nothing ships, which is why §1's dependency direction is untouched by it.
+#
+# **The cost is real and is recorded here rather than discovered.** This edge
+# pulls parley (and with it fontique, swash, skrifa and the ICU4X segmenter)
+# into `cargo xtask`'s build, so *every* `cargo xtask <anything>` invocation
+# now compiles them once. The alias is `cargo run --package xtask`, i.e. the
+# dev profile, so the corpus's three large files are laid out unoptimised —
+# see `layout.rs`'s note on what that costs.
+mt-layout.workspace = true

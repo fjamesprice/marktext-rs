@@ -14,6 +14,7 @@
 //! | `divergences` | The register of intentional differences from muya | M1 §5 D3 |
 //! | `normalize` | `normalizeHtml` vs `spec/runner.ts`'s | M2 §10, owed since M0 |
 //! | `corpus` | Generate `bench/corpus/` | §14 step 4 |
+//! | `layout` | Textual layout goldens for every corpus file × theme | M3 §5 D10 |
 //! | `fuzz-seed` | Write `fuzz/corpus/` from the sweep's inputs | M1 §5 D6 |
 //! | `deps` | Enforce the dependency-direction constraints | §1 |
 //! | `ci` | All of the above, in order | §9 M0 exit gate |
@@ -26,6 +27,7 @@ mod diff;
 mod divergences;
 mod fuzz;
 mod html;
+mod layout;
 mod normalize;
 mod tokens;
 
@@ -88,11 +90,30 @@ COMMANDS:
                            unavailable.
     corpus [--check]     Generate bench/corpus/ (§14 step 4); --check verifies
                          the committed files match the generator.
+    layout [OPTIONS]     Lay every bench/corpus/ file out at both shipped
+                         themes and compare the serialized display list against
+                         bench/layout-goldens/, on exact equality
+                         (docs/M3.md §5 D10). Verifies the face files against
+                         faces.toml's SHA-256s and hard-fails on any codepoint
+                         that resolves to tofu before comparing anything.
+        --update           Rewrite the goldens from the measured output. The
+                           SOLE writer, never implied. A golden update is a
+                           reviewable event on the same footing as a parley pin
+                           move: see bench/layout-goldens/README.md.
+        --only <SUBSTR>    Only corpus files whose name contains SUBSTR.
+        --verbose          Print every differing line rather than the first 20,
+                           and the per-block-kind census of each input.
+        --glyphs           Dump the serialization with one line per glyph to
+                           stdout. Debugging only: writes nothing, compares
+                           nothing, and requires --only.
+        --measure          Print the would-be full serialization size of every
+                           input at both themes. This is the measurement the
+                           three digest goldens were cut from.
     fuzz-seed [--check]  Write fuzz/corpus/<target>/ from the differential
                          sweep's inputs (M1 §5 D6). Not part of `ci`.
     deps                 Enforce the §1 dependency-direction constraints.
-    ci                   deps, corpus --check, divergences, conformance, blocks,
-                         normalize, diff — in order.
+    ci                   deps, corpus --check, layout, divergences, conformance,
+                         blocks, normalize, diff — in order.
 ";
 
 fn main() {
@@ -112,6 +133,7 @@ fn main() {
         "divergences" => divergences::main(&root, rest),
         "normalize" => normalize::main(&root, rest),
         "corpus" => corpus::main(&root, rest),
+        "layout" => layout::main(&root, rest),
         "fuzz-seed" => fuzz::main(&root, rest),
         "deps" => deps::main(&root),
         "ci" => ci(&root, rest),
@@ -157,6 +179,16 @@ fn ci(root: &Path, rest: &[String]) -> Result<i32, String> {
             "corpus --check",
             Box::new(|| corpus::main(root, &["--check".to_string()])),
         ),
+        // Immediately after `corpus --check`, and that adjacency is the point:
+        // `bench/layout-goldens/` is generated from `bench/corpus/`, and the
+        // committed CJK face is a subset derived from the same corpus, so a
+        // hand-edited corpus file should be reported by the generator check
+        // before this step spends a minute discovering it as tofu. It is also
+        // the slowest step in the chain by a wide margin — see `layout.rs`'s
+        // module doc on what the dev profile costs on `5mb.md` — so putting it
+        // early means the expensive step is the second thing that reports,
+        // rather than the thing everyone waits for at the end.
+        ("layout", Box::new(|| layout::main(root, &[]))),
         // Before the two harnesses that will consult it: a malformed register
         // is a register that silently widens what `diff` tolerates, so it
         // should be reported before `diff`'s own output, not after. As of M1 S7

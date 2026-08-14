@@ -1,0 +1,33 @@
+layout-golden v1
+theme          muya-default
+theme-width    800.00
+content-width  700.00
+parley         a0752c7bdc3ad88dac19fc194d2b8e57e59bea2e
+faces          ce47b2244a2ee54b2189d04641b5381824cfa80b6872d656931c5127437f7f58 rev 1
+options        wrap-code-blocks=false line-numbers=false
+input          1mb.md
+input-bytes    1048796
+form           digest
+
+list           width=700.00 height=552907.12 blocks=10744
+full-sha256    13c98ce4d37b41147f4a5794bf8e182f81b08f7eb91968fbf1e277f379e480f0
+full-bytes     3241045
+count paragraph      3861
+count atx-heading    1944
+count setext-heading 0
+count thematic-break 0
+count code-block     391
+count html-block     0
+count math-block     0
+count frontmatter    0
+count diagram        0
+count table.cell     1520
+count block-quote    400
+count bullet-list    372
+count order-list     0
+count list-item      1116
+count task-list      0
+count task-list-item 0
+count table          380
+count table.row      760
+count footnote       0

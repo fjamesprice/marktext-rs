@@ -1227,6 +1227,7 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "mt-inline",
+ "mt-layout",
  "mt-md",
  "serde_json",
 ]

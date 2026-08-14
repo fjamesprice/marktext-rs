@@ -1,0 +1,347 @@
+layout-golden v1
+theme          muya-default
+theme-width    800.00
+content-width  700.00
+parley         a0752c7bdc3ad88dac19fc194d2b8e57e59bea2e
+faces          ce47b2244a2ee54b2189d04641b5381824cfa80b6872d656931c5127437f7f58 rev 1
+options        wrap-code-blocks=false line-numbers=false
+input          10kb.md
+input-bytes    10521
+form           full
+
+list           width=700.00 height=4357.04 blocks=86
+count paragraph      46
+count atx-heading    4
+count setext-heading 0
+count thematic-break 1
+count code-block     1
+count html-block     0
+count math-block     0
+count frontmatter    0
+count diagram        0
+count table.cell     12
+count block-quote    0
+count bullet-list    0
+count order-list     1
+count list-item      12
+count task-list      1
+count task-list-item 3
+count table          1
+count table.row      4
+count footnote       0
+
+block 0 atx-heading bounds=[0.00 0.00 700.00 42.00] items=1
+  glyphs font=OpenSans-Bold size=30.00 rtl=0 text=0..37 origin=[0.00 32.00] advance=575.46 n=35 seq=9fd90f14
+block 1 paragraph bounds=[0.00 58.00 700.00 102.40] items=4
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..76 origin=[0.00 76.00] advance=615.42 n=75 seq=ad2cc31b
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=76..155 origin=[0.00 102.00] advance=572.90 n=76 seq=fce0b32d
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=155..225 origin=[0.00 127.00] advance=473.34 n=69 seq=9d6ca2e8
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=225..263 origin=[0.00 153.00] advance=277.54 n=37 seq=e11b8827
+block 2 atx-heading bounds=[0.00 176.40 700.00 33.60] items=1
+  glyphs font=OpenSans-Bold size=24.00 rtl=0 text=0..10 origin=[0.00 202.40] advance=112.45 n=10 seq=cb63f626
+block 3 code-block bounds=[0.00 231.60 700.00 53.84] lang=sh items=6
+  rect [0.00 231.60 700.00 53.84] fill=#00000008 radius=3.00
+  rect [0.00 231.60 700.00 1.00] fill=#e6e6e6ff
+  rect [0.00 284.44 700.00 1.00] fill=#e6e6e6ff
+  rect [0.00 232.60 1.00 51.84] fill=#e6e6e6ff
+  rect [699.00 232.60 1.00 51.84] fill=#e6e6e6ff
+  glyphs font=DejaVuSansMono size=14.40 rtl=0 text=0..25 origin=[15.40 263.00] advance=216.74 n=25 seq=c397ace5
+block 4 atx-heading bounds=[0.00 301.44 700.00 33.60] items=1
+  glyphs font=OpenSans-Bold size=24.00 rtl=0 text=0..6 origin=[0.00 327.44] advance=89.87 n=6 seq=a7923a55
+block 5 paragraph bounds=[0.00 351.04 700.00 76.80] items=3
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..93 origin=[0.00 369.04] advance=673.48 n=92 seq=e990104d
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=93..175 origin=[0.00 395.04] advance=652.24 n=80 seq=3b0bf847
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=175..205 origin=[0.00 420.04] advance=250.80 n=30 seq=998f736c
+block 6 paragraph bounds=[0.00 435.84 700.00 128.00] items=5
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..77 origin=[0.00 453.84] advance=603.02 n=76 seq=9fd696b9
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=77..166 origin=[0.00 479.84] advance=678.77 n=89 seq=4cc684d9
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=166..255 origin=[0.00 504.84] advance=682.19 n=89 seq=7fe4bb28
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=255..351 origin=[0.00 530.84] advance=692.67 n=93 seq=2c9acb23
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=351..423 origin=[0.00 555.84] advance=544.73 n=71 seq=3d0b050d
+block 7 paragraph bounds=[0.00 571.84 700.00 179.20] items=7
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..90 origin=[0.00 589.84] advance=681.56 n=90 seq=813aee89
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=90..173 origin=[0.00 615.84] advance=643.25 n=82 seq=c8bb1c21
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=173..262 origin=[0.00 640.84] advance=674.07 n=88 seq=a1d70c24
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=262..359 origin=[0.00 666.84] advance=693.70 n=96 seq=c752c482
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=359..449 origin=[0.00 691.84] advance=662.30 n=89 seq=2baee587
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=449..540 origin=[0.00 717.84] advance=679.83 n=89 seq=401586d6
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=540..549 origin=[0.00 743.84] advance=60.90 n=9 seq=71036681
+block 8 paragraph bounds=[0.00 759.04 700.00 153.60] items=6
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..91 origin=[0.00 777.04] advance=695.98 n=90 seq=27418e15
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=91..181 origin=[0.00 803.04] advance=703.65 n=88 seq=75f13487
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=181..270 origin=[0.00 828.04] advance=649.39 n=88 seq=51b42d64
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=270..352 origin=[0.00 854.04] advance=627.70 n=81 seq=43e3a6df
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=352..441 origin=[0.00 879.04] advance=686.08 n=89 seq=cef7d4ec
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=441..530 origin=[0.00 905.04] advance=675.98 n=88 seq=5f6d856b
+block 9 paragraph bounds=[0.00 920.64 700.00 51.20] items=2
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..89 origin=[0.00 938.64] advance=654.98 n=88 seq=ac6e935c
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=89..120 origin=[0.00 964.64] advance=228.47 n=30 seq=53987a2c
+block 10 paragraph bounds=[0.00 979.84 700.00 76.80] items=3
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..86 origin=[0.00 997.84] advance=637.28 n=86 seq=b64afdf0
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=86..169 origin=[0.00 1023.84] advance=625.40 n=83 seq=0f0d16ab
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=169..251 origin=[0.00 1048.84] advance=617.38 n=81 seq=233b32d8
+block 11 atx-heading bounds=[0.00 1072.64 700.00 30.80] items=1
+  glyphs font=OpenSans-Bold size=22.00 rtl=0 text=0..12 origin=[0.00 1096.64] advance=144.64 n=12 seq=769566b5
+block 12 order-list bounds=[0.00 1119.44 700.00 486.40] items=0
+block 13 list-item bounds=[30.00 1119.44 670.00 51.20] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..2 origin=[8.65 1137.44] advance=13.35 n=2 seq=b0fe6c29
+block 14 paragraph bounds=[30.00 1119.44 670.00 51.20] items=2
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..85 origin=[30.00 1137.44] advance=632.99 n=83 seq=45bd6f66
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=85..115 origin=[30.00 1163.44] advance=245.01 n=30 seq=70e5f8fb
+block 15 list-item bounds=[30.00 1170.64 670.00 51.20] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..2 origin=[8.65 1188.64] advance=13.35 n=2 seq=b8f04c5e
+block 16 paragraph bounds=[30.00 1170.64 670.00 51.20] items=2
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..81 origin=[30.00 1188.64] advance=644.86 n=80 seq=989222c0
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=81..106 origin=[30.00 1214.64] advance=197.88 n=24 seq=230d154b
+block 17 list-item bounds=[30.00 1221.84 670.00 51.20] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..2 origin=[8.65 1239.84] advance=13.35 n=2 seq=19232640
+block 18 paragraph bounds=[30.00 1221.84 670.00 51.20] items=2
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..81 origin=[30.00 1239.84] advance=591.30 n=80 seq=0550cc5b
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=81..107 origin=[30.00 1265.84] advance=196.09 n=26 seq=15615458
+block 19 list-item bounds=[30.00 1273.04 670.00 51.20] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..2 origin=[8.65 1291.04] advance=13.35 n=2 seq=7f69ec5e
+block 20 paragraph bounds=[30.00 1273.04 670.00 51.20] items=2
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..89 origin=[30.00 1291.04] advance=644.71 n=87 seq=9dc26324
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=89..112 origin=[30.00 1317.04] advance=172.27 n=23 seq=ea141cd6
+block 21 list-item bounds=[30.00 1324.24 670.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..2 origin=[8.65 1342.24] advance=13.35 n=2 seq=a069dfca
+block 22 paragraph bounds=[30.00 1324.24 670.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..61 origin=[30.00 1342.24] advance=469.62 n=61 seq=417ef89e
+block 23 list-item bounds=[30.00 1349.84 670.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..2 origin=[8.65 1367.84] advance=13.35 n=2 seq=e9b065a4
+block 24 paragraph bounds=[30.00 1349.84 670.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..67 origin=[30.00 1367.84] advance=514.30 n=66 seq=ed1e3155
+block 25 list-item bounds=[30.00 1375.44 670.00 51.20] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..2 origin=[8.65 1393.44] advance=13.35 n=2 seq=5f294457
+block 26 paragraph bounds=[30.00 1375.44 670.00 51.20] items=2
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..89 origin=[30.00 1393.44] advance=668.84 n=85 seq=41bb5b15
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=89..118 origin=[30.00 1419.44] advance=210.43 n=29 seq=3e604bfc
+block 27 list-item bounds=[30.00 1426.64 670.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..2 origin=[8.65 1444.64] advance=13.35 n=2 seq=f4f3715f
+block 28 paragraph bounds=[30.00 1426.64 670.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..80 origin=[30.00 1444.64] advance=574.92 n=79 seq=dc3bc2bb
+block 29 list-item bounds=[30.00 1452.24 670.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..2 origin=[8.65 1470.24] advance=13.35 n=2 seq=7012399a
+block 30 paragraph bounds=[30.00 1452.24 670.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..62 origin=[30.00 1470.24] advance=443.82 n=62 seq=4a775da8
+block 31 list-item bounds=[30.00 1477.84 670.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..3 origin=[-0.50 1495.84] advance=22.50 n=3 seq=235673a3
+block 32 paragraph bounds=[30.00 1477.84 670.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..87 origin=[30.00 1495.84] advance=641.93 n=86 seq=352a8694
+block 33 list-item bounds=[30.00 1503.44 670.00 51.20] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..3 origin=[-0.50 1521.44] advance=22.50 n=3 seq=6adb013d
+block 34 paragraph bounds=[30.00 1503.44 670.00 51.20] items=2
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..85 origin=[30.00 1521.44] advance=620.90 n=84 seq=b366a31f
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=85..96 origin=[30.00 1547.44] advance=71.38 n=11 seq=03e43fe7
+block 35 list-item bounds=[30.00 1554.64 670.00 51.20] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..3 origin=[-0.50 1572.64] advance=22.50 n=3 seq=65d2f7bf
+block 36 paragraph bounds=[30.00 1554.64 670.00 51.20] items=2
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..83 origin=[30.00 1572.64] advance=628.59 n=82 seq=6da68025
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=83..96 origin=[30.00 1598.64] advance=99.83 n=12 seq=538e18c5
+block 37 task-list bounds=[0.00 1613.84 700.00 76.80] items=0
+block 38 task-list-item bounds=[30.00 1613.84 670.00 25.60] items=4
+  rect [5.00 1617.64 18.00 18.00] fill=#21b56fff radius=9.00
+  rect [7.00 1619.64 14.00 14.00] fill=#21b56fff radius=7.00
+  rect [10.05 1624.35 2.00 6.00] fill=#ffffffff rot=-45.00
+  rect [10.29 1624.93 10.00 2.00] fill=#ffffffff rot=-45.00
+block 39 paragraph bounds=[30.00 1613.84 670.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..10 origin=[30.00 1631.84] advance=106.99 n=10 seq=34c52cdc
+block 40 task-list-item bounds=[30.00 1639.44 670.00 25.60] items=4
+  rect [5.00 1643.24 18.00 18.00] fill=#21b56fff radius=9.00
+  rect [7.00 1645.24 14.00 14.00] fill=#21b56fff radius=7.00
+  rect [10.05 1649.95 2.00 6.00] fill=#ffffffff rot=-45.00
+  rect [10.29 1650.53 10.00 2.00] fill=#ffffffff rot=-45.00
+block 41 paragraph bounds=[30.00 1639.44 670.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..3 origin=[30.00 1657.44] advance=34.28 n=3 seq=f525444b
+block 42 task-list-item bounds=[30.00 1665.04 670.00 25.60] items=2
+  rect [5.00 1668.84 18.00 18.00] fill=#808080ff radius=9.00
+  rect [7.00 1670.84 14.00 14.00] fill=#ffffffff radius=7.00
+block 43 paragraph bounds=[30.00 1665.04 670.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..21 origin=[30.00 1683.04] advance=153.45 n=21 seq=93fd9536
+block 44 table bounds=[0.00 1698.64 700.00 182.40] items=0
+block 45 table.row bounds=[0.00 1714.64 273.42 37.60] items=0
+block 46 table.cell bounds=[0.00 1714.64 109.22 37.60] items=5
+  rect [0.00 1714.64 110.22 1.00] fill=#e5e5e5ff
+  rect [0.00 1752.24 110.22 1.00] fill=#e5e5e5ff
+  rect [0.00 1715.64 1.00 36.60] fill=#e5e5e5ff
+  rect [109.22 1715.64 1.00 36.60] fill=#e5e5e5ff
+  glyphs font=OpenSans-Bold size=16.00 rtl=0 text=0..6 origin=[13.00 1738.64] advance=51.86 n=6 seq=f89c5efb
+block 47 table.cell bounds=[109.22 1714.64 80.04 37.60] items=5
+  rect [109.22 1714.64 81.04 1.00] fill=#e5e5e5ff
+  rect [109.22 1752.24 81.04 1.00] fill=#e5e5e5ff
+  rect [109.22 1715.64 1.00 36.60] fill=#e5e5e5ff
+  rect [189.26 1715.64 1.00 36.60] fill=#e5e5e5ff
+  glyphs font=OpenSans-Bold size=16.00 rtl=0 text=0..6 origin=[124.62 1738.64] advance=51.63 n=6 seq=18961e53
+block 48 table.cell bounds=[189.26 1714.64 84.16 37.60] items=5
+  rect [189.26 1714.64 85.16 1.00] fill=#e5e5e5ff
+  rect [189.26 1752.24 85.16 1.00] fill=#e5e5e5ff
+  rect [189.26 1715.64 1.00 36.60] fill=#e5e5e5ff
+  rect [273.42 1715.64 1.00 36.60] fill=#e5e5e5ff
+  glyphs font=OpenSans-Bold size=16.00 rtl=0 text=0..7 origin=[202.26 1738.64] advance=58.16 n=7 seq=f8cb9b5a
+block 49 table.row bounds=[0.00 1752.24 273.42 37.60] items=0
+block 50 table.cell bounds=[0.00 1752.24 109.22 37.60] items=5
+  rect [0.00 1752.24 110.22 1.00] fill=#e5e5e5ff
+  rect [0.00 1789.84 110.22 1.00] fill=#e5e5e5ff
+  rect [0.00 1753.24 1.00 36.60] fill=#e5e5e5ff
+  rect [109.22 1753.24 1.00 36.60] fill=#e5e5e5ff
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..10 origin=[13.00 1776.24] advance=72.15 n=10 seq=ca4e8b92
+block 51 table.cell bounds=[109.22 1752.24 80.04 37.60] items=5
+  rect [109.22 1752.24 81.04 1.00] fill=#e5e5e5ff
+  rect [109.22 1789.84 81.04 1.00] fill=#e5e5e5ff
+  rect [109.22 1753.24 1.00 36.60] fill=#e5e5e5ff
+  rect [189.26 1753.24 1.00 36.60] fill=#e5e5e5ff
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..6 origin=[122.22 1776.24] advance=54.04 n=6 seq=97d7ca71
+block 52 table.cell bounds=[189.26 1752.24 84.16 37.60] items=5
+  rect [189.26 1752.24 85.16 1.00] fill=#e5e5e5ff
+  rect [189.26 1789.84 85.16 1.00] fill=#e5e5e5ff
+  rect [189.26 1753.24 1.00 36.60] fill=#e5e5e5ff
+  rect [273.42 1753.24 1.00 36.60] fill=#e5e5e5ff
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..6 origin=[206.38 1776.24] advance=54.04 n=6 seq=612dfee2
+block 53 table.row bounds=[0.00 1789.84 273.42 37.60] items=0
+block 54 table.cell bounds=[0.00 1789.84 109.22 37.60] items=5
+  rect [0.00 1789.84 110.22 1.00] fill=#e5e5e5ff
+  rect [0.00 1827.44 110.22 1.00] fill=#e5e5e5ff
+  rect [0.00 1790.84 1.00 36.60] fill=#e5e5e5ff
+  rect [109.22 1790.84 1.00 36.60] fill=#e5e5e5ff
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..10 origin=[13.00 1813.84] advance=83.02 n=10 seq=23810dcf
+block 55 table.cell bounds=[109.22 1789.84 80.04 37.60] items=5
+  rect [109.22 1789.84 81.04 1.00] fill=#e5e5e5ff
+  rect [109.22 1827.44 81.04 1.00] fill=#e5e5e5ff
+  rect [109.22 1790.84 1.00 36.60] fill=#e5e5e5ff
+  rect [189.26 1790.84 1.00 36.60] fill=#e5e5e5ff
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..5 origin=[129.08 1813.84] advance=47.18 n=5 seq=0caae827
+block 56 table.cell bounds=[189.26 1789.84 84.16 37.60] items=5
+  rect [189.26 1789.84 85.16 1.00] fill=#e5e5e5ff
+  rect [189.26 1827.44 85.16 1.00] fill=#e5e5e5ff
+  rect [189.26 1790.84 1.00 36.60] fill=#e5e5e5ff
+  rect [273.42 1790.84 1.00 36.60] fill=#e5e5e5ff
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..5 origin=[213.24 1813.84] advance=47.18 n=5 seq=7f9e0fae
+block 57 table.row bounds=[0.00 1827.44 273.42 37.60] items=0
+block 58 table.cell bounds=[0.00 1827.44 109.22 37.60] items=5
+  rect [0.00 1827.44 110.22 1.00] fill=#e5e5e5ff
+  rect [0.00 1865.04 110.22 1.00] fill=#e5e5e5ff
+  rect [0.00 1828.44 1.00 36.60] fill=#e5e5e5ff
+  rect [109.22 1828.44 1.00 36.60] fill=#e5e5e5ff
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..9 origin=[13.00 1851.44] advance=83.22 n=9 seq=7fcd79b3
+block 59 table.cell bounds=[109.22 1827.44 80.04 37.60] items=5
+  rect [109.22 1827.44 81.04 1.00] fill=#e5e5e5ff
+  rect [109.22 1865.04 81.04 1.00] fill=#e5e5e5ff
+  rect [109.22 1828.44 1.00 36.60] fill=#e5e5e5ff
+  rect [189.26 1828.44 1.00 36.60] fill=#e5e5e5ff
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..6 origin=[122.22 1851.44] advance=54.04 n=6 seq=239e9e93
+block 60 table.cell bounds=[189.26 1827.44 84.16 37.60] items=5
+  rect [189.26 1827.44 85.16 1.00] fill=#e5e5e5ff
+  rect [189.26 1865.04 85.16 1.00] fill=#e5e5e5ff
+  rect [189.26 1828.44 1.00 36.60] fill=#e5e5e5ff
+  rect [273.42 1828.44 1.00 36.60] fill=#e5e5e5ff
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..6 origin=[206.38 1851.44] advance=54.04 n=6 seq=71ef005d
+block 61 paragraph bounds=[0.00 1889.04 700.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..68 origin=[0.00 1907.04] advance=498.07 n=68 seq=87fac790
+block 62 paragraph bounds=[0.00 1922.64 700.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..53 origin=[0.00 1940.64] advance=403.50 n=52 seq=53289654
+block 63 paragraph bounds=[0.00 1956.24 700.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..49 origin=[0.00 1974.24] advance=367.34 n=49 seq=b13a5c56
+block 64 paragraph bounds=[0.00 1989.84 700.00 25.60] items=1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..70 origin=[0.00 2007.84] advance=530.09 n=70 seq=f843f2c5
+block 65 thematic-break bounds=[0.00 2023.44 700.00 25.60] items=1
+  line [0.00 2035.24]-[700.00 2035.24] width=2.00 style=dashed stroke=#e6e6e6ff
+block 66 paragraph bounds=[0.00 2057.04 700.00 102.40] items=4
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..94 origin=[0.00 2075.04] advance=700.46 n=93 seq=97c001f7
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=94..188 origin=[0.00 2101.04] advance=699.93 n=93 seq=58348e1e
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=188..281 origin=[0.00 2126.04] advance=702.13 n=93 seq=1c4862c5
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=281..361 origin=[0.00 2152.04] advance=578.84 n=80 seq=3a1c7fc2
+block 67 paragraph bounds=[0.00 2167.44 700.00 128.00] items=5
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..87 origin=[0.00 2185.44] advance=671.70 n=86 seq=2bad4a0b
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=87..177 origin=[0.00 2211.44] advance=676.18 n=89 seq=cbb65c77
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=177..265 origin=[0.00 2236.44] advance=648.16 n=88 seq=a04bc12c
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=265..353 origin=[0.00 2262.44] advance=658.93 n=88 seq=90edef5c
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=353..362 origin=[0.00 2287.44] advance=62.86 n=9 seq=f83be97c
+block 68 paragraph bounds=[0.00 2303.44 700.00 76.80] items=3
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..82 origin=[0.00 2321.44] advance=649.59 n=81 seq=93696e40
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=82..174 origin=[0.00 2347.44] advance=687.11 n=90 seq=6dabd935
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=174..217 origin=[0.00 2372.44] advance=299.74 n=42 seq=de4f43c2
+block 69 paragraph bounds=[0.00 2388.24 700.00 128.00] items=5
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..85 origin=[0.00 2406.24] advance=663.30 n=84 seq=7a10d602
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=85..172 origin=[0.00 2432.24] advance=657.30 n=86 seq=a11e720e
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=172..263 origin=[0.00 2457.24] advance=663.35 n=90 seq=a9e9b19f
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=263..349 origin=[0.00 2483.24] advance=670.96 n=86 seq=affc604c
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=349..376 origin=[0.00 2508.24] advance=189.74 n=27 seq=40a68bb2
+block 70 paragraph bounds=[0.00 2524.24 700.00 128.00] items=5
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..83 origin=[0.00 2542.24] advance=677.18 n=83 seq=a899d972
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=83..175 origin=[0.00 2568.24] advance=679.92 n=92 seq=e7b385d2
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=175..258 origin=[0.00 2593.24] advance=631.72 n=82 seq=3a081be8
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=258..345 origin=[0.00 2619.24] advance=655.68 n=86 seq=3ea2d359
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=345..427 origin=[0.00 2644.24] advance=608.52 n=81 seq=7b1da726
+block 71 paragraph bounds=[0.00 2660.24 700.00 102.40] items=4
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..94 origin=[0.00 2678.24] advance=699.82 n=93 seq=6c5cd492
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=94..174 origin=[0.00 2704.24] advance=623.26 n=80 seq=ba1de1e1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=174..262 origin=[0.00 2729.24] advance=640.64 n=86 seq=2c9c1c3f
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=262..344 origin=[0.00 2755.24] advance=600.69 n=80 seq=3e619765
+block 72 paragraph bounds=[0.00 2770.64 700.00 76.80] items=3
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..90 origin=[0.00 2788.64] advance=672.23 n=88 seq=2921a05c
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=90..187 origin=[0.00 2814.64] advance=700.38 n=95 seq=826d2b69
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=187..250 origin=[0.00 2839.64] advance=468.76 n=62 seq=c2c1be66
+block 73 paragraph bounds=[0.00 2855.44 700.00 102.40] items=4
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..89 origin=[0.00 2873.44] advance=703.92 n=88 seq=8af6b455
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=89..176 origin=[0.00 2899.44] advance=640.45 n=87 seq=134b0724
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=176..260 origin=[0.00 2924.44] advance=638.85 n=84 seq=ad813b62
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=260..289 origin=[0.00 2950.44] advance=220.02 n=29 seq=10d1db37
+block 74 paragraph bounds=[0.00 2965.84 700.00 128.00] items=5
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..92 origin=[0.00 2983.84] advance=667.73 n=91 seq=f6104ded
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=92..178 origin=[0.00 3009.84] advance=664.48 n=85 seq=b5a84075
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=178..264 origin=[0.00 3034.84] advance=653.41 n=83 seq=be73fdb7
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=264..354 origin=[0.00 3060.84] advance=642.74 n=89 seq=da5b6842
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=354..407 origin=[0.00 3085.84] advance=407.96 n=53 seq=524a893b
+block 75 paragraph bounds=[0.00 3101.84 700.00 76.80] items=3
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..93 origin=[0.00 3119.84] advance=684.62 n=92 seq=a9bc0d6e
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=93..189 origin=[0.00 3145.84] advance=693.79 n=94 seq=720f842e
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=189..282 origin=[0.00 3170.84] advance=692.35 n=91 seq=0b0ea8b5
+block 76 paragraph bounds=[0.00 3186.64 700.00 153.60] items=6
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..91 origin=[0.00 3204.64] advance=680.45 n=90 seq=80d788f2
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=91..184 origin=[0.00 3230.64] advance=701.99 n=92 seq=35f95709
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=184..270 origin=[0.00 3255.64] advance=672.39 n=86 seq=9ae23cb1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=270..360 origin=[0.00 3281.64] advance=693.62 n=89 seq=52a9b841
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=360..451 origin=[0.00 3306.64] advance=695.98 n=91 seq=b949dfde
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=451..459 origin=[0.00 3332.64] advance=53.04 n=7 seq=ed1d33d6
+block 77 paragraph bounds=[0.00 3348.24 700.00 102.40] items=4
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..89 origin=[0.00 3366.24] advance=676.42 n=89 seq=fb9d1d8f
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=89..172 origin=[0.00 3392.24] advance=634.06 n=81 seq=e4c4a9eb
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=172..267 origin=[0.00 3417.24] advance=686.77 n=94 seq=2301a658
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=267..279 origin=[0.00 3443.24] advance=84.34 n=12 seq=c8c7e88f
+block 78 paragraph bounds=[0.00 3458.64 700.00 76.80] items=3
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..91 origin=[0.00 3476.64] advance=680.27 n=91 seq=de76bad4
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=91..179 origin=[0.00 3502.64] advance=639.34 n=86 seq=c262d97c
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=179..194 origin=[0.00 3527.64] advance=118.95 n=15 seq=01c6ee84
+block 79 paragraph bounds=[0.00 3543.44 700.00 76.80] items=3
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..88 origin=[0.00 3561.44] advance=655.66 n=87 seq=e30fe8e7
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=88..178 origin=[0.00 3587.44] advance=651.95 n=88 seq=69051194
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=178..228 origin=[0.00 3612.44] advance=388.29 n=49 seq=4a809f69
+block 80 paragraph bounds=[0.00 3628.24 700.00 128.00] items=5
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..95 origin=[0.00 3646.24] advance=698.03 n=94 seq=cbc1f563
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=95..190 origin=[0.00 3672.24] advance=688.24 n=93 seq=cc29af1f
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=190..268 origin=[0.00 3697.24] advance=617.68 n=77 seq=c987bf03
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=268..359 origin=[0.00 3723.24] advance=701.96 n=91 seq=cbeaa7cd
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=359..455 origin=[0.00 3748.24] advance=664.72 n=93 seq=2217ed77
+block 81 paragraph bounds=[0.00 3764.24 700.00 76.80] items=3
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..85 origin=[0.00 3782.24] advance=671.70 n=85 seq=06d16add
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=85..181 origin=[0.00 3808.24] advance=702.88 n=95 seq=e398a17a
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=181..242 origin=[0.00 3833.24] advance=462.76 n=61 seq=36f63553
+block 82 paragraph bounds=[0.00 3849.04 700.00 76.80] items=3
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..84 origin=[0.00 3867.04] advance=647.44 n=83 seq=f4cf973c
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=84..177 origin=[0.00 3893.04] advance=674.13 n=93 seq=0e457eef
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=177..184 origin=[0.00 3918.04] advance=43.73 n=7 seq=6ce1b74d
+block 83 paragraph bounds=[0.00 3933.84 700.00 153.60] items=6
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..89 origin=[0.00 3951.84] advance=656.21 n=87 seq=e3942ffa
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=89..177 origin=[0.00 3977.84] advance=658.68 n=88 seq=6dba7c88
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=177..264 origin=[0.00 4002.84] advance=661.09 n=86 seq=9ad36d61
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=264..347 origin=[0.00 4028.84] advance=639.32 n=83 seq=ad715d24
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=347..442 origin=[0.00 4053.84] advance=686.57 n=95 seq=ed0cdf57
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=442..522 origin=[0.00 4079.84] advance=589.84 n=80 seq=b8b2f441
+block 84 paragraph bounds=[0.00 4095.44 700.00 51.20] items=2
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..94 origin=[0.00 4113.44] advance=689.16 n=93 seq=dc0eaab7
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=94..163 origin=[0.00 4139.44] advance=527.60 n=68 seq=745852d0
+block 85 paragraph bounds=[0.00 4154.64 700.00 102.40] items=4
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..88 origin=[0.00 4172.64] advance=691.23 n=86 seq=1461ea3e
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=88..186 origin=[0.00 4198.64] advance=664.95 n=98 seq=916d1f8f
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=186..278 origin=[0.00 4223.64] advance=675.36 n=91 seq=97f8dbde
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=278..359 origin=[0.00 4249.64] advance=591.42 n=80 seq=d9aa665c

@@ -1,0 +1,266 @@
+layout-golden v1
+theme          dark
+theme-width    750.00
+content-width  650.00
+parley         a0752c7bdc3ad88dac19fc194d2b8e57e59bea2e
+faces          ce47b2244a2ee54b2189d04641b5381824cfa80b6872d656931c5127437f7f58 rev 1
+options        wrap-code-blocks=false line-numbers=false
+input          emoji.md
+input-bytes    1443
+form           full
+
+list           width=650.00 height=1059.20 blocks=32
+count paragraph      8
+count atx-heading    7
+count setext-heading 0
+count thematic-break 0
+count code-block     0
+count html-block     0
+count math-block     0
+count frontmatter    0
+count diagram        0
+count table.cell     12
+count block-quote    0
+count bullet-list    0
+count order-list     0
+count list-item      0
+count task-list      0
+count task-list-item 0
+count table          1
+count table.row      4
+count footnote       0
+
+block 0 atx-heading bounds=[0.00 0.00 650.00 42.00] items=1
+  glyphs font=OpenSans-Bold size=30.00 rtl=0 text=0..13 origin=[0.00 32.00] advance=209.66 n=13 seq=2754085c
+block 1 paragraph bounds=[0.00 58.00 650.00 102.40] items=4
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..78 origin=[0.00 76.00] advance=599.33 n=77 seq=da12456c
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=78..152 origin=[0.00 102.00] advance=528.18 n=71 seq=12374d01
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=152..228 origin=[0.00 127.00] advance=543.99 n=74 seq=9d60817b
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=228..280 origin=[0.00 153.00] advance=380.00 n=52 seq=382acd91
+block 2 atx-heading bounds=[0.00 176.40 650.00 33.60] items=1
+  glyphs font=OpenSans-Bold size=24.00 rtl=0 text=0..9 origin=[0.00 202.40] advance=118.04 n=9 seq=1dbc374d
+block 3 paragraph bounds=[0.00 226.00 650.00 25.60] items=39
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=0..4 origin=[0.00 244.00] advance=20.31 n=1 seq=a287b5ee
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=4..5 origin=[20.31 244.00] advance=4.16 n=1 seq=ccd4f26d
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=5..9 origin=[24.47 244.00] advance=20.31 n=1 seq=de90312d
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=9..10 origin=[44.78 244.00] advance=4.16 n=1 seq=0a8158ba
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=10..14 origin=[48.94 244.00] advance=20.31 n=1 seq=2741dba8
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=14..15 origin=[69.25 244.00] advance=4.16 n=1 seq=87651c87
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=15..19 origin=[73.41 244.00] advance=20.31 n=1 seq=95fdf8b2
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=19..20 origin=[93.72 244.00] advance=4.16 n=1 seq=8b250df6
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=20..24 origin=[97.88 244.00] advance=20.31 n=1 seq=4a423ea7
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=24..25 origin=[118.19 244.00] advance=4.16 n=1 seq=8218223a
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=25..29 origin=[122.34 244.00] advance=20.31 n=1 seq=cf0acd9f
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=29..30 origin=[142.66 244.00] advance=4.16 n=1 seq=e82252e0
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=30..34 origin=[146.81 244.00] advance=20.31 n=1 seq=e6375208
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=34..35 origin=[167.12 244.00] advance=4.16 n=1 seq=6902e7e1
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=35..39 origin=[171.28 244.00] advance=20.31 n=1 seq=536a8bf7
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=39..40 origin=[191.59 244.00] advance=4.16 n=1 seq=c70d30de
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=40..44 origin=[195.75 244.00] advance=20.31 n=1 seq=c20374b3
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=44..45 origin=[216.06 244.00] advance=4.16 n=1 seq=f0a255cc
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=45..49 origin=[220.22 244.00] advance=20.31 n=1 seq=ac59bad1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=49..50 origin=[240.53 244.00] advance=4.16 n=1 seq=8aa355b0
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=50..54 origin=[244.69 244.00] advance=20.31 n=1 seq=f7276cae
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=54..55 origin=[265.00 244.00] advance=4.16 n=1 seq=d5928fcc
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=55..59 origin=[269.16 244.00] advance=20.31 n=1 seq=385fdd00
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=59..60 origin=[289.47 244.00] advance=4.16 n=1 seq=1a746f9c
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=60..64 origin=[293.62 244.00] advance=20.31 n=1 seq=a7f6c3a9
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=64..65 origin=[313.94 244.00] advance=4.16 n=1 seq=4cf6d82a
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=65..69 origin=[318.09 244.00] advance=20.31 n=1 seq=cb0fac17
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=69..70 origin=[338.41 244.00] advance=4.16 n=1 seq=04bd7f3b
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=70..74 origin=[342.56 244.00] advance=20.31 n=1 seq=77d014e6
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=74..75 origin=[362.88 244.00] advance=4.16 n=1 seq=41d7f702
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=75..79 origin=[367.03 244.00] advance=20.31 n=1 seq=b1cdab1c
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=79..80 origin=[387.34 244.00] advance=4.16 n=1 seq=e679d341
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=80..84 origin=[391.50 244.00] advance=20.31 n=1 seq=8b13cf7d
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=84..85 origin=[411.81 244.00] advance=4.16 n=1 seq=0d076c47
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=85..89 origin=[415.97 244.00] advance=20.31 n=1 seq=d70e3582
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=89..90 origin=[436.28 244.00] advance=4.16 n=1 seq=06947cc0
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=90..96 origin=[440.44 244.00] advance=20.31 n=2 seq=5b1be303
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=96..97 origin=[460.75 244.00] advance=4.16 n=1 seq=7b8d5600
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=97..101 origin=[464.91 244.00] advance=20.31 n=1 seq=f14ab231
+block 4 atx-heading bounds=[0.00 267.60 650.00 33.60] items=1
+  glyphs font=OpenSans-Bold size=24.00 rtl=0 text=0..36 origin=[0.00 293.60] advance=472.41 n=36 seq=0c7797a6
+block 5 paragraph bounds=[0.00 317.20 650.00 25.60] items=17
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=0..25 origin=[0.00 335.20] advance=20.31 n=1 seq=a895cb57
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=25..26 origin=[20.31 335.20] advance=4.16 n=1 seq=b905bb82
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=26..44 origin=[24.47 335.20] advance=20.31 n=1 seq=4b263834
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=44..45 origin=[44.78 335.20] advance=4.16 n=1 seq=ca43663f
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=45..70 origin=[48.94 335.20] advance=20.31 n=1 seq=2adb4dca
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=70..71 origin=[69.25 335.20] advance=4.16 n=1 seq=df62f9f6
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=71..82 origin=[73.41 335.20] advance=20.31 n=1 seq=05286357
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=82..83 origin=[93.72 335.20] advance=4.16 n=1 seq=1e417acb
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=83..94 origin=[97.88 335.20] advance=20.31 n=1 seq=1dda8330
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=94..95 origin=[118.19 335.20] advance=4.16 n=1 seq=a8f851a8
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=95..106 origin=[122.34 335.20] advance=20.31 n=1 seq=65083172
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=106..107 origin=[142.66 335.20] advance=4.16 n=1 seq=48f505a3
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=107..121 origin=[146.81 335.20] advance=20.31 n=2 seq=41db859d
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=121..122 origin=[167.12 335.20] advance=4.16 n=1 seq=41700c5e
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=122..135 origin=[171.28 335.20] advance=20.31 n=2 seq=220cd2eb
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=135..136 origin=[191.59 335.20] advance=4.16 n=1 seq=59ac7167
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=136..153 origin=[195.75 335.20] advance=20.31 n=3 seq=b62af80c
+block 6 atx-heading bounds=[0.00 358.80 650.00 33.60] items=1
+  glyphs font=OpenSans-Bold size=24.00 rtl=0 text=0..22 origin=[0.00 384.80] advance=272.18 n=21 seq=1836c05b
+block 7 paragraph bounds=[0.00 408.40 650.00 25.60] items=15
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=0..8 origin=[0.00 426.40] advance=20.31 n=1 seq=42e7d674
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=8..9 origin=[20.31 426.40] advance=4.16 n=1 seq=5de8d80f
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=9..17 origin=[24.47 426.40] advance=20.31 n=1 seq=aca89b65
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=17..18 origin=[44.78 426.40] advance=4.16 n=1 seq=b6c5669a
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=18..26 origin=[48.94 426.40] advance=20.31 n=1 seq=1e840b91
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=26..27 origin=[69.25 426.40] advance=4.16 n=1 seq=f90419c3
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=27..35 origin=[73.41 426.40] advance=20.31 n=1 seq=573b60ee
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=35..36 origin=[93.72 426.40] advance=4.16 n=1 seq=6f63b398
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=36..44 origin=[97.88 426.40] advance=20.31 n=1 seq=c49e3646
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=44..45 origin=[118.19 426.40] advance=4.16 n=1 seq=263b423d
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=45..53 origin=[122.34 426.40] advance=20.31 n=1 seq=9125bace
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=53..54 origin=[142.66 426.40] advance=4.16 n=1 seq=4b4b7d50
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=54..69 origin=[146.81 426.40] advance=20.31 n=1 seq=fa8f9cc4
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=69..70 origin=[167.12 426.40] advance=4.16 n=1 seq=e4089344
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=70..85 origin=[171.28 426.40] advance=20.31 n=1 seq=19a2cb8d
+block 8 atx-heading bounds=[0.00 450.00 650.00 33.60] items=1
+  glyphs font=OpenSans-Bold size=24.00 rtl=0 text=0..27 origin=[0.00 476.00] advance=319.77 n=26 seq=654587dd
+block 9 paragraph bounds=[0.00 499.60 650.00 25.60] items=25
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=0..8 origin=[0.00 517.60] advance=20.31 n=1 seq=04668654
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=8..9 origin=[20.31 517.60] advance=4.16 n=1 seq=8f2739d9
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=9..17 origin=[24.47 517.60] advance=20.31 n=1 seq=55aff195
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=17..18 origin=[44.78 517.60] advance=4.16 n=1 seq=37518aae
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=18..26 origin=[48.94 517.60] advance=20.31 n=1 seq=bdcd16e6
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=26..27 origin=[69.25 517.60] advance=4.16 n=1 seq=9323f90b
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=27..35 origin=[73.41 517.60] advance=20.31 n=1 seq=90371a31
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=35..36 origin=[93.72 517.60] advance=4.16 n=1 seq=2753b458
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=36..44 origin=[97.88 517.60] advance=20.31 n=1 seq=e55d1061
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=44..45 origin=[118.19 517.60] advance=4.16 n=1 seq=96abf117
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=45..53 origin=[122.34 517.60] advance=20.31 n=1 seq=6dc17cd3
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=53..54 origin=[142.66 517.60] advance=4.16 n=1 seq=3a693096
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=54..62 origin=[146.81 517.60] advance=20.31 n=1 seq=c2276959
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=62..63 origin=[167.12 517.60] advance=4.16 n=1 seq=a74aa637
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=63..71 origin=[171.28 517.60] advance=20.31 n=1 seq=d6d94543
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=71..72 origin=[191.59 517.60] advance=4.16 n=1 seq=b22544c5
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=72..80 origin=[195.75 517.60] advance=20.31 n=1 seq=66174a1e
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=80..81 origin=[216.06 517.60] advance=4.16 n=1 seq=ff1c0478
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=81..89 origin=[220.22 517.60] advance=20.31 n=1 seq=508b88fc
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=89..90 origin=[240.53 517.60] advance=4.16 n=1 seq=61f936d0
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=90..98 origin=[244.69 517.60] advance=20.31 n=1 seq=2171b0fd
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=98..99 origin=[265.00 517.60] advance=4.16 n=1 seq=580f3751
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=99..107 origin=[269.16 517.60] advance=20.31 n=1 seq=3dd1598b
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=107..108 origin=[289.47 517.60] advance=4.16 n=1 seq=47406ceb
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=108..116 origin=[293.62 517.60] advance=20.31 n=1 seq=185ea164
+block 10 atx-heading bounds=[0.00 541.20 650.00 33.60] items=1
+  glyphs font=OpenSans-Bold size=24.00 rtl=0 text=0..34 origin=[0.00 567.20] advance=406.03 n=34 seq=2ade2de9
+block 11 paragraph bounds=[0.00 590.80 650.00 25.60] items=17
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..2 origin=[0.00 608.80] advance=17.62 n=2 seq=8c1e1f78
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=2..6 origin=[17.62 608.80] advance=20.31 n=1 seq=ac5f7834
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=6..10 origin=[37.94 608.80] advance=33.24 n=4 seq=33bf6d0a
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=10..14 origin=[71.18 608.80] advance=20.31 n=1 seq=6bca7a8c
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=14..22 origin=[91.49 608.80] advance=63.24 n=8 seq=d4b0d254
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=22..26 origin=[154.73 608.80] advance=20.31 n=1 seq=d0750d79
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=26..32 origin=[175.05 608.80] advance=34.38 n=6 seq=682d6967
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=32..36 origin=[209.42 608.80] advance=20.31 n=1 seq=3a0f41f1
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=36..43 origin=[229.73 608.80] advance=50.05 n=7 seq=da2edcae
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=43..47 origin=[279.79 608.80] advance=20.31 n=1 seq=73ec366d
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=47..51 origin=[300.10 608.80] advance=36.06 n=4 seq=d0df6add
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=51..55 origin=[336.16 608.80] advance=20.31 n=1 seq=8724a7ca
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=55..62 origin=[356.48 608.80] advance=46.48 n=7 seq=5cb4fd97
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=62..66 origin=[402.95 608.80] advance=20.31 n=1 seq=80ebe3b5
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=66..70 origin=[423.27 608.80] advance=26.30 n=4 seq=04d7dac0
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=70..74 origin=[449.56 608.80] advance=20.31 n=1 seq=47b3e0dd
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=74..97 origin=[469.88 608.80] advance=173.62 n=23 seq=1021ec7a
+block 12 paragraph bounds=[0.00 624.40 650.00 51.20] items=2
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..76 origin=[0.00 642.40] advance=541.70 n=73 seq=0271bab6
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=76..157 origin=[0.00 668.40] advance=642.30 n=81 seq=2cc46722
+block 13 atx-heading bounds=[0.00 691.60 650.00 33.60] items=1
+  glyphs font=OpenSans-Bold size=24.00 rtl=0 text=0..27 origin=[0.00 717.60] advance=329.36 n=27 seq=5b5a7f9b
+block 14 paragraph bounds=[0.00 741.20 650.00 27.60] items=16
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..6 origin=[0.00 760.20] advance=42.64 n=6 seq=474ed33e
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=6..10 origin=[42.64 760.20] advance=20.31 n=1 seq=6dbcbcf8
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=10..11 origin=[62.95 760.20] advance=4.16 n=1 seq=f16570e3
+  glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 rtl=0 text=11..17 origin=[67.11 760.20] advance=32.00 n=2 seq=12f5b8fd
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=17..18 origin=[99.11 760.20] advance=4.16 n=1 seq=76f37052
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=18..22 origin=[103.27 760.20] advance=20.31 n=1 seq=e8e7ee20
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=22..23 origin=[123.58 760.20] advance=4.16 n=1 seq=32865031
+  glyphs font=OpenSans-Regular size=16.00 rtl=1 text=39..47 origin=[127.73 760.20] advance=33.11 n=4 seq=0e9673d8
+  glyphs font=OpenSans-Regular size=16.00 rtl=1 text=38..39 origin=[160.84 760.20] advance=4.16 n=1 seq=49d9d454
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=1 text=34..38 origin=[165.00 760.20] advance=20.31 n=1 seq=0876a5fa
+  glyphs font=OpenSans-Regular size=16.00 rtl=1 text=33..34 origin=[185.31 760.20] advance=4.16 n=1 seq=d4e1736c
+  glyphs font=NotoSansArabic-Regular size=16.00 rtl=1 text=23..33 origin=[189.47 760.20] advance=33.66 n=6 seq=1279f8f6
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=47..48 origin=[223.13 760.20] advance=4.16 n=1 seq=7d352211
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=48..52 origin=[227.29 760.20] advance=20.31 n=1 seq=fbb27014
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=52..57 origin=[247.60 760.20] advance=24.31 n=3 seq=d152d268
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=57..92 origin=[271.91 760.20] advance=236.80 n=34 seq=b6d5e524
+block 15 table bounds=[0.00 776.80 650.00 182.40] items=0
+block 16 table.row bounds=[0.00 792.80 304.60 37.60] items=0
+block 17 table.cell bounds=[0.00 792.80 70.34 37.60] items=5
+  rect [0.00 792.80 71.34 1.00] fill=#363839ff
+  rect [0.00 830.40 71.34 1.00] fill=#363839ff
+  rect [0.00 793.80 1.00 36.60] fill=#363839ff
+  rect [70.34 793.80 1.00 36.60] fill=#363839ff
+  glyphs font=OpenSans-Bold size=16.00 rtl=0 text=0..5 origin=[13.00 816.80] advance=44.34 n=5 seq=5bbd33ea
+block 18 table.cell bounds=[70.34 792.80 118.25 37.60] items=5
+  rect [70.34 792.80 119.25 1.00] fill=#363839ff
+  rect [70.34 830.40 119.25 1.00] fill=#363839ff
+  rect [70.34 793.80 1.00 36.60] fill=#363839ff
+  rect [188.59 793.80 1.00 36.60] fill=#363839ff
+  glyphs font=OpenSans-Bold size=16.00 rtl=0 text=0..4 origin=[83.34 816.80] advance=47.84 n=4 seq=7b5eff54
+block 19 table.cell bounds=[188.59 792.80 116.01 37.60] items=5
+  rect [188.59 792.80 117.01 1.00] fill=#363839ff
+  rect [188.59 830.40 117.01 1.00] fill=#363839ff
+  rect [188.59 793.80 1.00 36.60] fill=#363839ff
+  rect [304.60 793.80 1.00 36.60] fill=#363839ff
+  glyphs font=OpenSans-Bold size=16.00 rtl=0 text=0..10 origin=[201.59 816.80] advance=90.01 n=10 seq=cec56882
+block 20 table.row bounds=[0.00 830.40 304.60 37.60] items=0
+block 21 table.cell bounds=[0.00 830.40 70.34 37.60] items=5
+  rect [0.00 830.40 71.34 1.00] fill=#363839ff
+  rect [0.00 868.00 71.34 1.00] fill=#363839ff
+  rect [0.00 831.40 1.00 36.60] fill=#363839ff
+  rect [70.34 831.40 1.00 36.60] fill=#363839ff
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=0..25 origin=[25.02 854.40] advance=20.31 n=1 seq=52ebe5e6
+block 22 table.cell bounds=[70.34 830.40 118.25 37.60] items=5
+  rect [70.34 830.40 119.25 1.00] fill=#363839ff
+  rect [70.34 868.00 119.25 1.00] fill=#363839ff
+  rect [70.34 831.40 1.00 36.60] fill=#363839ff
+  rect [188.59 831.40 1.00 36.60] fill=#363839ff
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..6 origin=[83.34 854.40] advance=45.18 n=6 seq=4f9f7cb0
+block 23 table.cell bounds=[188.59 830.40 116.01 37.60] items=5
+  rect [188.59 830.40 117.01 1.00] fill=#363839ff
+  rect [188.59 868.00 117.01 1.00] fill=#363839ff
+  rect [188.59 831.40 1.00 36.60] fill=#363839ff
+  rect [304.60 831.40 1.00 36.60] fill=#363839ff
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..1 origin=[201.59 854.40] advance=9.15 n=1 seq=9139103c
+block 24 table.row bounds=[0.00 868.00 304.60 37.60] items=0
+block 25 table.cell bounds=[0.00 868.00 70.34 37.60] items=5
+  rect [0.00 868.00 71.34 1.00] fill=#363839ff
+  rect [0.00 905.60 71.34 1.00] fill=#363839ff
+  rect [0.00 869.00 1.00 36.60] fill=#363839ff
+  rect [70.34 869.00 1.00 36.60] fill=#363839ff
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=0..14 origin=[25.02 892.00] advance=20.31 n=2 seq=d3d442e4
+block 26 table.cell bounds=[70.34 868.00 118.25 37.60] items=5
+  rect [70.34 868.00 119.25 1.00] fill=#363839ff
+  rect [70.34 905.60 119.25 1.00] fill=#363839ff
+  rect [70.34 869.00 1.00 36.60] fill=#363839ff
+  rect [188.59 869.00 1.00 36.60] fill=#363839ff
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..12 origin=[83.34 892.00] advance=92.25 n=11 seq=b2a05eff
+block 27 table.cell bounds=[188.59 868.00 116.01 37.60] items=5
+  rect [188.59 868.00 117.01 1.00] fill=#363839ff
+  rect [188.59 905.60 117.01 1.00] fill=#363839ff
+  rect [188.59 869.00 1.00 36.60] fill=#363839ff
+  rect [304.60 869.00 1.00 36.60] fill=#363839ff
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..1 origin=[201.59 892.00] advance=9.15 n=1 seq=a8020c78
+block 28 table.row bounds=[0.00 905.60 304.60 37.60] items=0
+block 29 table.cell bounds=[0.00 905.60 70.34 37.60] items=5
+  rect [0.00 905.60 71.34 1.00] fill=#363839ff
+  rect [0.00 943.20 71.34 1.00] fill=#363839ff
+  rect [0.00 906.60 1.00 36.60] fill=#363839ff
+  rect [70.34 906.60 1.00 36.60] fill=#363839ff
+  glyphs font=NotoEmoji[wght] size=16.00 rtl=0 text=0..8 origin=[25.02 929.60] advance=20.31 n=1 seq=62ff7a8c
+block 30 table.cell bounds=[70.34 905.60 118.25 37.60] items=5
+  rect [70.34 905.60 119.25 1.00] fill=#363839ff
+  rect [70.34 943.20 119.25 1.00] fill=#363839ff
+  rect [70.34 906.60 1.00 36.60] fill=#363839ff
+  rect [188.59 906.60 1.00 36.60] fill=#363839ff
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..10 origin=[83.34 929.60] advance=80.19 n=10 seq=a1114394
+block 31 table.cell bounds=[188.59 905.60 116.01 37.60] items=5
+  rect [188.59 905.60 117.01 1.00] fill=#363839ff
+  rect [188.59 943.20 117.01 1.00] fill=#363839ff
+  rect [188.59 906.60 1.00 36.60] fill=#363839ff
+  rect [304.60 906.60 1.00 36.60] fill=#363839ff
+  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..1 origin=[201.59 929.60] advance=9.15 n=1 seq=1b2395e4
