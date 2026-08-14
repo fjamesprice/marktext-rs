@@ -131,6 +131,14 @@ image_placeholder_height_px = 50.0
 image_corner_radius_px = 2.0
 image_icon_px = 20.0
 image_icon_inset_px = 15.0
+# The reference definition, which is drawn rather than hidden —
+# inlineSyntax.css:578-593. `.mu-reference-marker` and `.mu-reference-title` are
+# both `font-size: 0.9em`; `.mu-reference-label` sets no size and is `600`, a
+# MarkText number rather than the UA's 700. The `margin: 0 5px` on the label and
+# the title has no field because nothing can consume it: an inline margin is not
+# expressible as a style run.
+reference_font_size_em = 0.9
+reference_label_weight = 600
 
 [lists]
 # `padding-inline-start: 30px` — blockSyntax.css:410, 481

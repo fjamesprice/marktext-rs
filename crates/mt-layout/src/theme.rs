@@ -407,8 +407,13 @@ pub struct Inline {
     /// `inlineSyntax.css:604`. Relative to the surrounding text, like
     /// [`InlineCode::font_size_em`].
     ///
-    /// The pill's colours are [`Colors::editor_80`] and
-    /// [`Colors::code_block_bg`]; its geometry is the three fields below.
+    /// The pill's ground is [`Colors::code_block_bg`] and its **text** is
+    /// [`Colors::editor`], not [`Colors::editor_80`]: the identifier is wrapped
+    /// in an `<a>` (`footnoteIdentifier.ts:38-45`) and
+    /// `.mu-inline-footnote-identifier a { color: var(--editor-color) }`
+    /// (`inlineSyntax.css:611-614`) overrides the `--editor-color-80` on the
+    /// `<sup>`, which is left painting only the two markers this hides. Its
+    /// geometry is the three fields below.
     pub footnote_identifier_font_size_em: f32,
     /// `.mu-inline-footnote-identifier { padding: 0 0.4em }` —
     /// `inlineSyntax.css:600`. The `em` is the pill's **own** 0.7em, not the
@@ -448,6 +453,20 @@ pub struct Inline {
     /// `.mu-inline-image .mu-image-icon-fail { top: 15px; left: 15px }` —
     /// `inlineSyntax.css:396-405`. The same 15 on both axes, so one field.
     pub image_icon_inset_px: f32,
+    /// `.mu-reference-marker`, `.mu-reference-title { font-size: 0.9em }` —
+    /// `inlineSyntax.css:578-587`. Relative to the surrounding text, like
+    /// [`InlineCode::font_size_em`].
+    ///
+    /// One field for two rules because the reference gives both the same
+    /// number and `.mu-reference-label` deliberately sets none, staying at
+    /// `1em` while its neighbours shrink.
+    pub reference_font_size_em: f32,
+    /// `.mu-reference-label { font-weight: 600 }` — `inlineSyntax.css:589-593`.
+    ///
+    /// **600, not [`Inline::strong_weight`]'s 700.** This one *is* a MarkText
+    /// number rather than a UA one, which is why it does not reuse the field
+    /// beside it.
+    pub reference_label_weight: u16,
 }
 
 // ---------------------------------------------------------------------------

@@ -131,27 +131,50 @@ fn an_html_entity_substitutes_and_says_so() {
     every_offset_round_trips("a &amp; b");
 }
 
-/// A line break is the second substituting kind, and the one that is easy to
-/// mistake for a copy because one byte becomes one byte.
+/// A line break is **copied**, not turned into a space.
 ///
-/// **This is exactly why [`MapKind`] is stored and not inferred.** `\n` → `' '`
-/// has identical lengths on both sides; arithmetic cannot tell it from a copy,
-/// and a caller that assumed a copy would hand back a `\n` where the reader saw
-/// a space.
+/// **Corrected against the stylesheet at the S2 cross-check.** `.mu-content`
+/// is `white-space: pre-wrap` (`blockSyntax.css:948`) and
+/// `exportStyle.css:92-105` gives `p` the same rule *"so the exported HTML
+/// stays CommonMark-conformant … yet still shows the break (#3676)"*, so a
+/// `\n` inside a paragraph is a forced break and not a collapsible space.
+/// Substituting one merged every multi-line paragraph in `bench/corpus/` into
+/// a single wrapped run — which is what the goldens would have frozen had this
+/// been checked a phase later.
 #[test]
-fn a_line_break_substitutes_one_byte_for_one_byte_and_is_still_not_a_copy() {
+fn a_line_break_is_copied_because_the_content_element_is_pre_wrap() {
     let laid = plain("one\ntwo");
-    assert_eq!(laid.visible, "one two");
+    assert_eq!(laid.visible, "one\ntwo");
+    // One run per token, not one merged run: the map is D13's run list and
+    // the break is its own token.
     assert_eq!(
         kinds(&laid.map),
         vec![
             (MapKind::Copied, 0..3, 0..3),
-            (MapKind::Substituted, 3..4, 3..4),
+            (MapKind::Copied, 3..4, 3..4),
             (MapKind::Copied, 4..7, 4..7),
         ]
     );
-    assert_eq!(laid.map.runs()[1].kind, MapKind::Substituted);
     every_offset_round_trips("one\ntwo");
+}
+
+/// The same for a hard break, whose two trailing spaces `pre-wrap` also
+/// preserves. The `↩` of `.mu-hard-line-break-space::after`
+/// (`inlineSyntax.css:150-156`) is `content:` chrome at `opacity: 0.5` and is
+/// deliberately not drawn.
+#[test]
+fn a_hard_line_break_keeps_its_spaces_and_its_newline() {
+    let laid = plain("one  \ntwo");
+    assert_eq!(laid.visible, "one  \ntwo");
+    assert_eq!(
+        kinds(&laid.map),
+        vec![
+            (MapKind::Copied, 0..3, 0..3),
+            (MapKind::Copied, 3..6, 3..6),
+            (MapKind::Copied, 6..9, 6..9),
+        ]
+    );
+    every_offset_round_trips("one  \ntwo");
 }
 
 /// **Nested emphasis.** The inner run is both, which is the whole reason
@@ -243,15 +266,21 @@ fn an_image_is_hidden_whole_including_its_alt_text() {
 }
 
 /// **`mt-inline` has no emoji shortcode table**, so the shortcode is copied
-/// whole rather than substituted for a glyph that would have to be invented.
+/// whole rather than substituted for a glyph that would have to be invented —
+/// and it is copied into the state the reference itself uses when *its* table
+/// misses.
 ///
-/// Colons included, deliberately: hiding them the way every other marker is
-/// hidden would render the bare word `smile`, which reads as something the
-/// author typed. This is the one place the walk declines to hide a marker, and
-/// the test exists so that adding a table later is a visible change to an
-/// assertion rather than a silent one.
+/// `emoji.ts:15-16` reads `validEmoji(token.content)` against
+/// `config/emojis.ts` and, on a miss, substitutes `.mu-warn` **for** the hide
+/// class rather than composing with it: markers and word are both drawn, the
+/// word at `--delete-color` (`inlineSyntax.css:106-109`) and the colons at the
+/// surrounding colour, because no rule in the sheet matches
+/// `.mu-warn.mu-emoji-marker`. An engine with no table is in that state for
+/// every shortcode, so the three runs below are transcription and not
+/// invention — and the middle one is what makes the missing table visible in a
+/// golden instead of silent.
 #[test]
-fn an_emoji_shortcode_is_copied_whole_because_there_is_no_table_to_substitute_from() {
+fn an_emoji_shortcode_takes_the_reference_state_for_a_shortcode_it_cannot_resolve() {
     let laid = plain("hi :smile: there");
     assert_eq!(laid.visible, "hi :smile: there");
     assert!(
@@ -260,6 +289,13 @@ fn an_emoji_shortcode_is_copied_whole_because_there_is_no_table_to_substitute_fr
             .iter()
             .all(|r| r.kind == MapKind::Copied || r.kind == MapKind::Hidden)
     );
+    let warn: Vec<_> = laid
+        .runs
+        .iter()
+        .filter(|r| r.style.emoji_unresolved)
+        .map(|r| r.range.clone())
+        .collect();
+    assert_eq!(warn, vec![4..9], "the word alone, not the colons");
     every_offset_round_trips("hi :smile: there");
 }
 
@@ -281,6 +317,78 @@ fn a_thematic_break_hides_completely() {
     // Total in the other direction even with nothing to map: offset 0 of an
     // empty visible string is the end of the block text.
     assert_eq!(laid.map.to_block(0), 3);
+}
+
+/// **A reference definition is drawn, not hidden**, and this is the S2
+/// cross-check's second correction.
+///
+/// The whole line used to be one hidden marker, which made `10kb.md`'s two
+/// definitions blocks with **no items at all** — invisible text, which
+/// `ShapedText::emit` says in as many words is the failure mode this seam
+/// exists to prevent. `referenceDefinition.ts` gives its six spans five
+/// classes and not one of them is a hide class: `.mu-reference-marker`
+/// (`inlineSyntax.css:578-581`), `.mu-reference-label` (`:589-593`),
+/// `.mu-reference-title` (`:583-587`) and `.mu-gray` for the backslash run.
+#[test]
+fn a_reference_definition_is_drawn_in_four_styles_rather_than_hidden() {
+    let text = "[plan]: https://example.com/plan \"The build plan\"";
+    let laid = plain(text);
+    assert_eq!(laid.visible, text, "every byte of it reaches the reader");
+    let styled: Vec<_> = laid
+        .runs
+        .iter()
+        .map(|r| {
+            (
+                r.range.clone(),
+                r.style.reference_marker,
+                r.style.reference_label,
+                r.style.reference_title,
+            )
+        })
+        .collect();
+    assert_eq!(
+        styled,
+        vec![
+            (0..1, true, false, false),   // `[`
+            (1..5, false, true, false),   // `plan`
+            (5..34, true, false, false),  // `]: https://example.com/plan "`
+            (34..48, false, false, true), // `The build plan`
+            (48..49, true, false, false), // the closing quote
+        ]
+    );
+    every_offset_round_trips(text);
+}
+
+/// The same line with no title: the optional captures are **absent** rather
+/// than empty, so the tail arithmetic has to survive them missing.
+#[test]
+fn a_reference_definition_without_a_title_still_tiles() {
+    let text = "[plan]: https://example.com/plan";
+    let laid = plain(text);
+    assert_eq!(laid.visible, text);
+    assert!(laid.runs.iter().all(|r| !r.style.reference_title));
+    every_offset_round_trips(text);
+}
+
+/// Inline math takes `.mu-math`'s own family and colour rather than the
+/// paragraph's — `inlineSyntax.css:165-173`, which is on the element that
+/// wraps the KaTeX render and so is in force with or without one.
+#[test]
+fn inline_math_is_marked_so_it_can_take_the_monospace_stack() {
+    let laid = plain(r"the value $x_{0} = \alpha$ inline");
+    assert_eq!(laid.visible, r"the value x_{0} = \alpha inline");
+    let math: Vec<_> = laid
+        .runs
+        .iter()
+        .filter(|r| r.style.math)
+        .map(|r| r.range.clone())
+        .collect();
+    assert_eq!(
+        math,
+        vec![10..24],
+        "the source between the `$`s, and no more"
+    );
+    every_offset_round_trips(r"the value $x_{0} = \alpha$ inline");
 }
 
 #[test]

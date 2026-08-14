@@ -930,8 +930,23 @@ impl LayoutTree {
                 font_size *= theme.inline_code.font_size_em;
                 families = &theme.fonts.inline_code;
             }
+            if s.math {
+                // `.mu-math { font-family: monospace }` — `inlineSyntax.css:171`.
+                // The element that wraps the KaTeX render carries it, so the
+                // family is in force whether or not there is a render inside;
+                // with no TeX engine at M3 what it dresses is the source.
+                // `fonts.code` is this theme's monospace stack, which is what
+                // the CSS generic resolves to.
+                families = &theme.fonts.code;
+            }
             if s.footnote {
                 font_size *= theme.inline.footnote_identifier_font_size_em;
+            }
+            if s.reference_marker || s.reference_title {
+                // `.mu-reference-marker`, `.mu-reference-title { font-size:
+                // 0.9em }` — `inlineSyntax.css:578-587`. The label between them
+                // sets none and stays at 1em.
+                font_size *= theme.inline.reference_font_size_em;
             }
             let mut brush = style.brush;
             if s.link {
@@ -943,10 +958,26 @@ impl LayoutTree {
             if s.em {
                 brush = inline_brush(theme.colors.em, brush, opacity);
             }
-            if s.code {
-                // `color: var(--editor-color)` — and note it is the editor's
-                // colour and not the inherited one, so inline code inside a
-                // blockquote does **not** take `blockquote_text`.
+            if s.gray {
+                // `.mu-gray { color: var(--editor-color-30) }` — `:1-4`.
+                brush = inline_brush(theme.colors.editor_30, brush, opacity);
+            }
+            if s.reference_marker {
+                // `.mu-reference-marker { color: var(--editor-color-50) }` — `:578-581`.
+                brush = inline_brush(theme.colors.editor_50, brush, opacity);
+            }
+            if s.emoji_unresolved {
+                // `.mu-warn.mu-emoji-marked-text { color: var(--delete-color) }`
+                // — `:106-109`, the branch `emoji.ts` takes when its own
+                // shortcode table misses, which is every shortcode here.
+                brush = inline_brush(theme.colors.delete, brush, opacity);
+            }
+            if s.code || s.math || s.footnote || s.html_escape {
+                // `color: var(--editor-color)` — `:64` for code, `:170` for
+                // math, `:611-614` for the footnote identifier's own `<a>`,
+                // `:139-143` for an entity's `::before`. In all four it is the
+                // editor's colour and **not** the inherited one, so any of them
+                // inside a blockquote does not take `blockquote_text`.
                 brush = inline_brush(theme.colors.editor, brush, opacity);
             }
             let resolved = StyleRun {
@@ -955,6 +986,11 @@ impl LayoutTree {
                 font_size,
                 weight: if s.strong {
                     theme.inline.strong_weight
+                } else if s.reference_label {
+                    // `.mu-reference-label { font-weight: 600 }` — `:589-593`,
+                    // and 600 rather than `strong_weight`'s 700 because this
+                    // one is a MarkText number and that one is the UA's.
+                    theme.inline.reference_label_weight
                 } else {
                     style.weight
                 },
@@ -1421,11 +1457,16 @@ impl LayoutTree {
             b.opacity,
         );
         // The icon is a font glyph in the reference and this repository has no
-        // icon set, so what is drawn is its box. `--icon-color` has no theme
-        // field either; `editor_50` is the neutral chrome colour the same
-        // stylesheet uses for every other unemphasised mark.
+        // icon set, so what is drawn is its box — at the colour the reference
+        // gives it. `.mu-inline-image i.icon { color: var(--icon-color) }`
+        // (`inlineSyntax.css:412-421`) and the inner `<i>`'s
+        // `drop-shadow(20px 0 currentcolor)` (`:423-432`) paint the glyph in
+        // `--icon-color`, which **is** a theme field —
+        // [`Colors::icon`](crate::theme::Colors::icon), `#6b737b` here and
+        // `#ffffff8f` in `dark`. It was `editor_50` until the cross-check
+        // against the stylesheet, which is a different colour in both themes.
         let icon = dim(
-            Brush::resolve(self.theme.colors.editor_50, Brush::default()),
+            Brush::resolve(self.theme.colors.icon, Brush::default()),
             b.opacity,
         );
         let mut chrome = Vec::new();

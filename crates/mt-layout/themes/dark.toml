@@ -116,6 +116,9 @@ image_placeholder_height_px = 50.0
 image_corner_radius_px = 2.0
 image_icon_px = 20.0
 image_icon_inset_px = 15.0
+# Unchanged: `dark` overrides colours and no inline geometry.
+reference_font_size_em = 0.9
+reference_label_weight = 600
 
 [lists]
 indent_px = 30.0

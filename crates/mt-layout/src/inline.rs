@@ -26,7 +26,7 @@
 //!
 //! C6 assumes markers are *deleted*, so that the visible string is a
 //! subsequence of the block text and the map is a list of surviving subranges.
-//! **Three kinds substitute rather than delete** — see [`MapKind::Substituted`]
+//! **Some kinds substitute rather than delete** — see [`MapKind::Substituted`]
 //! — so a subrange list cannot express the result and a map that treats a
 //! substitution as a deletion puts a caret inside a character. Hence a run list
 //! whose runs carry a stored [`MapKind`] rather than one inferred from the two
@@ -70,22 +70,30 @@ pub enum MapKind {
     /// run maps across by simple addition.
     Copied,
     /// The visible bytes are **different bytes** from the block bytes, and
-    /// neither length constrains the other. Three kinds do this:
+    /// neither length constrains the other. One kind does this:
     ///
     /// - `html_escape` — `&amp;` becomes one `&`
-    ///   (muya draws it as `content: attr(data-character)`);
-    /// - a soft or hard line break becomes one space;
+    ///   (muya draws it as `content: attr(data-character)`).
+    ///
+    /// Two more were expected here and are not:
+    ///
+    /// - a **line break** does not become a space. `.mu-content` is
+    ///   `white-space: pre-wrap` (`blockSyntax.css:948`), so the `\n` is a
+    ///   break rather than a collapsible space, and `exportStyle.css:92-105`
+    ///   says so in as many words — *"render soft line breaks the way the
+    ///   editor does (`.mu-content` is pre-wrap) … yet still shows the break
+    ///   (#3676)"*. It is [`Copied`](Self::Copied);
     /// - `emoji` **would** become one emoji glyph, and does not here, because
     ///   `mt-inline` ships no shortcode table and `mt-layout` will not invent
     ///   one. A shortcode is [`Copied`](Self::Copied) whole, colons included —
     ///   see the `Emoji` arm of the walk. **If a table ever arrives, this is
-    ///   the variant that gains a third member**, and the run list is already
+    ///   the variant that gains a second member**, and the run list is already
     ///   shaped for it.
     ///
     /// An offset *inside* such a run has no meaningful partner on the other
     /// side, so both directions answer with the run's start.
     ///
-    /// A fourth producer arrived with D12 and is not a rendering of anything:
+    /// A second producer arrived with D12 and is not a rendering of anything:
     /// an image that leads a right-to-left paragraph substitutes its bytes for
     /// one [`RTL_MARK`], so that M3-R1's workaround costs no new variant and
     /// the run list keeps tiling both sides.
@@ -262,6 +270,43 @@ pub struct InlineStyle {
     pub link: bool,
     /// A footnote identifier's own text, which is drawn smaller.
     pub footnote: bool,
+    /// The source between a pair of `$`s. M3 has no TeX renderer, so what is
+    /// drawn is the source — and `.mu-math` gives it `font-family: monospace`
+    /// and `color: var(--editor-color)` of its own
+    /// (`inlineSyntax.css:165-173`), which is *not* the surrounding text's
+    /// family or colour.
+    pub math: bool,
+    /// The word between the colons of a shortcode `mt-inline` has no table for.
+    ///
+    /// The reference's own state for a shortcode it cannot resolve:
+    /// `emoji.ts:15-16` picks `.mu-warn` over the hide class, and
+    /// `.mu-warn.mu-emoji-marked-text` is `color: var(--delete-color)`
+    /// (`inlineSyntax.css:106-109`). The colons themselves are
+    /// `span.mu-warn.mu-emoji-marker`, which no rule in the sheet matches, so
+    /// they stay the surrounding colour — hence the flag is on the content and
+    /// not on the whole token.
+    pub emoji_unresolved: bool,
+    /// The character an entity decoded to. `.mu-html-escape::before` sets
+    /// `color: var(--editor-color)` (`inlineSyntax.css:139-143`), so an entity
+    /// inside a blockquote is the editor's colour and not the quote's — the
+    /// same rule inline code follows.
+    pub html_escape: bool,
+    /// A reference definition's punctuation — `[`, `]: href "`, the closing
+    /// quote. `.mu-reference-marker`: `--editor-color-50` at `0.9em`
+    /// (`inlineSyntax.css:578-581`).
+    pub reference_marker: bool,
+    /// A reference definition's label. `.mu-reference-label`: `font-weight:
+    /// 600`, and no font-size, so it stays at `1em`
+    /// (`inlineSyntax.css:589-593`).
+    pub reference_label: bool,
+    /// A reference definition's title. `.mu-reference-title`: `0.9em`
+    /// (`inlineSyntax.css:583-587`).
+    pub reference_title: bool,
+    /// `.mu-gray` — `--editor-color-30` (`inlineSyntax.css:1-4`). A marker the
+    /// caret has revealed, and the backslash run inside a reference
+    /// definition, which `referenceDefinition.ts:70` gives this class
+    /// unconditionally.
+    pub gray: bool,
 }
 
 /// One run of uniformly styled **visible** text.
@@ -516,10 +561,19 @@ impl Walk<'_> {
     fn marker(&mut self, span: Span, token: Span, state: MarkerState, style: InlineStyle) {
         match state {
             MarkerState::Hidden => self.hide(span, token),
-            // Unreachable with `cursor: None`. The revealed marker's own colour
-            // (`.mu-gray`, `--editor-color-30`) is a run this does not yet
-            // distinguish; M4 owns it along with the caret that reaches it.
-            MarkerState::Revealed => self.copy(span, token, style),
+            // Unreachable with `cursor: None`, and styled anyway: a revealed
+            // marker is `.mu-gray` — `--editor-color-30`,
+            // `inlineSyntax.css:1-4` — in every renderer that reveals one, so
+            // the arm that M4 will reach carries the reference's colour rather
+            // than the surrounding text's.
+            MarkerState::Revealed => self.copy(
+                span,
+                token,
+                InlineStyle {
+                    gray: true,
+                    ..style
+                },
+            ),
         }
     }
 
@@ -640,8 +694,19 @@ impl Walk<'_> {
             ),
             // No TeX renderer at M3 (D11 is the block-level half of the same
             // answer), so the source between the `$`s is the content and the
-            // `$`s are markers like any other.
-            TokenKind::InlineMath(c) => self.wrapped(token, c.content, style),
+            // `$`s are markers like any other. The style is `.mu-math`'s own
+            // and not the surrounding paragraph's: `font-family: monospace;
+            // color: var(--editor-color)` (`inlineSyntax.css:165-173`) is on
+            // the element that *wraps* the KaTeX render, so it is in force
+            // whether or not there is a render inside it.
+            TokenKind::InlineMath(c) => self.wrapped(
+                token,
+                c.content,
+                InlineStyle {
+                    math: true,
+                    ..style
+                },
+            ),
             TokenKind::SuperSubScript { content, .. } => self.wrapped(token, *content, style),
             TokenKind::FootnoteIdentifier { content, .. } => self.wrapped(
                 token,
@@ -652,21 +717,49 @@ impl Walk<'_> {
                 },
             ),
 
-            // --- the emoji shortcode, which does NOT substitute ------------
+            // --- the emoji shortcode, and the reference has a state for it --
             //
             // The reference draws `:smile:` as one glyph through
-            // `content: attr(data-emoji)` (`inlineSyntax.css:90-100`), which
-            // makes it D13's third substituting kind. **`mt-inline` has no
-            // shortcode table** — no name-to-codepoint map exists anywhere in
-            // the crate — and inventing one here would be inventing data, so
-            // the shortcode is copied whole, colons included.
+            // `content: attr(data-emoji)` (`inlineSyntax.css:91-100`), and
+            // **`mt-inline` has no shortcode table** — no name-to-codepoint
+            // map exists anywhere in the crate — so that branch is out of
+            // reach and inventing the table here would be inventing data.
             //
-            // Colons *included* is the deliberate half: hiding the two `:`
-            // markers the way every other marker is hidden would render the
-            // bare word `smile`, which reads as text the author wrote rather
-            // than as an unrendered shortcode. A visible `:smile:` is at least
-            // honest about what it is.
-            TokenKind::Emoji(_) => self.copy(token.raw, token.range, style),
+            // What is *not* out of reach is the branch muya takes when its own
+            // lookup misses. `emoji.ts:15-16` reads
+            // `validEmoji(token.content)` and, on a miss, uses `.mu-warn`
+            // **in place of** the hide class — so the markers and the word are
+            // both drawn, the word at `--delete-color`
+            // (`inlineSyntax.css:106-109`) and the colons at whatever colour
+            // surrounds them, because no rule in the sheet matches
+            // `.mu-warn.mu-emoji-marker`. A layout engine with no table is in
+            // exactly that state for every shortcode, so this is the
+            // reference's own rendering of "cannot resolve this" rather than a
+            // behaviour invented for the port — and it is visible in a golden,
+            // which a silently body-coloured `:smile:` was not.
+            TokenKind::Emoji(c) => {
+                // `.mu-warn` overrides the hide class rather than composing
+                // with it, so the markers are drawn whatever the caret is
+                // doing — which is why these are `copy` and not `marker`.
+                self.copy(
+                    Span::new(token.range.start, c.content.start),
+                    token.range,
+                    style,
+                );
+                self.copy(
+                    c.content,
+                    token.range,
+                    InlineStyle {
+                        emoji_unresolved: true,
+                        ..style
+                    },
+                );
+                self.copy(
+                    Span::new(c.content.end, token.range.end),
+                    token.range,
+                    style,
+                );
+            }
 
             // --- links: the anchor is content, the href is a marker --------
             TokenKind::Link(l) => self.container(
@@ -747,13 +840,41 @@ impl Walk<'_> {
             TokenKind::HtmlEscape {
                 escape_character: e,
             } => match escape_character(e.of(self.src)) {
-                Some(decoded) => self.substitute(decoded, token.range, token.range, style),
+                Some(decoded) => self.substitute(
+                    decoded,
+                    token.range,
+                    token.range,
+                    InlineStyle {
+                        html_escape: true,
+                        ..style
+                    },
+                ),
+                // No `data-character` means no `::before`, so what is drawn is
+                // the literal marker text at the surrounding colour rather
+                // than a glyph at `--editor-color`.
                 None => self.copy(token.raw, token.range, style),
             },
 
-            // --- line breaks become one space ------------------------------
+            // --- line breaks are line breaks, not spaces -------------------
+            //
+            // **Corrected against the stylesheet.** `.mu-content` — the
+            // element every leaf's text lives in — is `white-space: pre-wrap`
+            // (`blockSyntax.css:948`), so a `\n` inside a paragraph is a
+            // forced break and the trailing spaces of a hard break are
+            // preserved. `exportStyle.css:92-105` states the intent outright:
+            // the exporter gives `p` the same `pre-wrap` *"so the exported
+            // HTML stays CommonMark-conformant … yet still shows the break
+            // (#3676)"*. Collapsing either to one space merged every
+            // multi-line paragraph in the corpus into a single wrapped run.
+            //
+            // Copied whole, so parley sees the `\n` and breaks on it. The
+            // `↩` that `.mu-hard-line-break-space::after` adds
+            // (`inlineSyntax.css:150-156`) is **not** drawn: it is
+            // `content:` chrome at `opacity: 0.5`, marking a construct rather
+            // than being part of it, and `exportStyle.css` carries no rule for
+            // it at all.
             TokenKind::SoftLineBreak { .. } | TokenKind::HardLineBreak { .. } => {
-                self.substitute(" ", token.range, token.range, style);
+                self.copy(token.raw, token.range, style);
             }
 
             // --- a backslash escape contributes nothing --------------------
@@ -790,7 +911,6 @@ impl Walk<'_> {
             TokenKind::Hr(_)
             | TokenKind::CodeFence(_)
             | TokenKind::MultipleMath(_)
-            | TokenKind::ReferenceDefinition(_)
             | TokenKind::TailHeader { .. } => {
                 self.marker(
                     token.range,
@@ -798,6 +918,70 @@ impl Walk<'_> {
                     marker_state(token, self.cursor),
                     style,
                 );
+            }
+
+            // --- a reference definition is drawn, not hidden ---------------
+            //
+            // **Corrected against the stylesheet.** Hiding the whole line
+            // produced a paragraph with no items at all — `10kb.md`'s two
+            // definitions were blank blocks — and `referenceDefinition.ts`
+            // gives every one of its six spans a class with a rule attached
+            // and **not one of them a hide class**: the marker parts are
+            // `.mu-reference-marker` (`--editor-color-50` at `0.9em`,
+            // `inlineSyntax.css:578-581`), the label is
+            // `.mu-reference-label` (`font-weight: 600`, `:589-593`), the
+            // title is `.mu-reference-title` (`0.9em`, `:583-587`), and the
+            // backslash run is `.mu-gray` (`:70` of the renderer).
+            //
+            // The `margin: 0 5px` those last two rules also carry is **not**
+            // applied: an inline margin is a shift of everything after it,
+            // and neither this crate nor parley has a primitive for one. It
+            // is recorded rather than approximated, because a 5px fudge
+            // baked into an advance would be indistinguishable from a
+            // shaping change the next time a golden moved.
+            TokenKind::ReferenceDefinition(r) => {
+                let marker = InlineStyle {
+                    reference_marker: true,
+                    ..style
+                };
+                // The tail is measured from the end exactly as the renderer
+                // measures it, because the optional captures are absent
+                // rather than empty when there is no title.
+                let title_marker_len = r.title_marker.map_or(0, |s| s.len());
+                let title_len = r.title.map_or(0, |s| s.len());
+                let tail = token.range.end - r.right_title_space.len() - title_marker_len;
+                let title_start = tail - title_len;
+                self.copy(r.left_bracket, token.range, marker);
+                self.copy(
+                    r.label,
+                    token.range,
+                    InlineStyle {
+                        reference_label: true,
+                        ..style
+                    },
+                );
+                self.copy(
+                    r.backlash,
+                    token.range,
+                    InlineStyle {
+                        gray: true,
+                        ..style
+                    },
+                );
+                self.copy(
+                    Span::new(r.label.end + r.backlash.len(), title_start),
+                    token.range,
+                    marker,
+                );
+                self.copy(
+                    Span::new(title_start, tail),
+                    token.range,
+                    InlineStyle {
+                        reference_title: true,
+                        ..style
+                    },
+                );
+                self.copy(Span::new(tail, token.range.end), token.range, marker);
             }
         }
     }
