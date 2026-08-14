@@ -309,7 +309,8 @@ fn tables(n: usize) -> String {
     out
 }
 
-/// The five block kinds no other corpus file contains.
+/// The five block kinds — and, since S2, the one inline construct — no other
+/// corpus file contains.
 ///
 /// **Added at M3 S1, and the reason is D11.** `cargo xtask layout`'s goldens
 /// are M3-R6's instrument — *"the first golden for each block kind is read by
@@ -339,6 +340,35 @@ fn tables(n: usize) -> String {
 /// says so in the golden's `parse` header line. Every other harness reads this
 /// file at `MUYA_DEFAULT` like all the others, so the `[^why]:` line is a
 /// paragraph to them — exactly what this README says reference definitions are.
+///
+/// # The html-entity section, added at M3 S2 for S1's reason
+///
+/// D13's visible↔block offset map has exactly one surviving substituting kind
+/// — `MapKind::Substituted`, produced by `mt_inline`'s `html_escape` token —
+/// and **`bench/corpus/` contained no `&` at all**, in any of twelve files. So
+/// the map's only length-changing case was asserted *absent* by the gate's own
+/// property test rather than exercised by it, which is the position five block
+/// kinds were in when this file was created. Same move, same reason.
+///
+/// Three things about the content are deliberate:
+///
+/// - **The entities are outside code spans.** `InlineCode` has no children, so
+///   an entity inside backticks is never tokenized and would add nothing.
+/// - **Every substitution decodes to a character this directory already
+///   contains** (`&` `<` `>`). `assert_corpus_fully_covered` unions the
+///   codepoints of the *input files*, so a substitution is the one way a
+///   codepoint reaches the shaper without passing that gate — an entity
+///   decoding to U+00A0 would be a well-formed golden with an unchecked glyph
+///   in it. This is the trap S2's emoji decision named and declined.
+/// - **The numeric reference is here to show that it is not a token.** muya
+///   builds the rule as `new RegExp(`^(${escapeCharacters.join('|')})`, 'i')`
+///   over `config/escapeCharacter.ts`'s 269 *named* entries (`rules.ts:45`), so
+///   `&#60;` is ordinary text in the reference and copied text here. It is the
+///   control that keeps "entities substitute" from being read as a rule about
+///   ampersands.
+///
+/// The section is appended rather than inserted so that every block index in
+/// the S1 review record still names the block it named.
 fn block_kinds() -> String {
     // Deliberately a literal rather than a generated document: the point of
     // this input is that a reviewer can read it beside the golden it produces,
@@ -411,6 +441,20 @@ corpus file the layout goldens parse with the extension on, and the golden's
 `parse` header line says which options produced it.
 
 [^why]: `Options::MUYA_DEFAULT` sets `footnote: false`, matching muya's config.
+
+## HTML entities
+
+A named reference is the visible-text map's one substituting kind, and this is
+the only place in the corpus one occurs: &amp; is five block bytes and one
+visible byte, and &lt; and &gt; are four and one. All three decode to a
+character this directory already contains, which is deliberate, because the
+coverage gate unions the codepoints of the input and a substitution is how a
+new one would reach the shaper without being checked.
+
+A numeric reference is not a token at all. The rule is an alternation over the
+269 named entries of the reference's escapeCharacter table, so &#60; stays
+literal source and lays out as five copied columns beside the one column its
+named twin becomes.
 "#,
     )
 }
@@ -620,6 +664,10 @@ mod tests {
     /// carry the five block kinds `block_kinds` exists to supply. If someone
     /// edits the literal and drops the front matter, `--check` stays green and
     /// only the layout golden notices — one harness later than it should.
+    ///
+    /// The html-entity assertions are the same rule applied to the construct
+    /// S2 added: `&amp;` is the corpus's only `MapKind::Substituted` producer
+    /// and `&#60;` is the control that proves a numeric reference is not one.
     #[test]
     fn block_kinds_carries_the_five_constructs_no_other_corpus_file_has() {
         let by_name: std::collections::HashMap<&str, String> = files().into_iter().collect();
@@ -631,6 +679,16 @@ mod tests {
         assert!(src.contains("\n[^why]: "), "footnote definition");
         for kind in ["mermaid", "plantuml", "vega-lite", "flowchart", "sequence"] {
             assert!(src.contains(&format!("\n```{kind}\n")), "{kind} diagram");
+        }
+        for entity in ["&amp;", "&lt;", "&gt;"] {
+            assert!(src.contains(entity), "named entity {entity}");
+        }
+        assert!(src.contains("&#60;"), "numeric reference, the control case");
+        // Every entity here must decode to a character the input itself
+        // contains, or the substituted glyph reaches the shaper without
+        // `assert_corpus_fully_covered` ever seeing it. See `block_kinds`.
+        for decoded in ['&', '<', '>'] {
+            assert!(src.contains(decoded), "the decode of an entity, {decoded}");
         }
         // The CJK face is a pyftsubset of this directory; a non-ASCII byte here
         // is a coverage regression waiting to happen. See `block_kinds`.

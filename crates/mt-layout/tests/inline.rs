@@ -14,9 +14,13 @@
 //! | Ligatures | that `fi`/`fl`/`ff` are one glyph over two graphemes, and that the Arabic lam-alef is formed in both faces | cluster boundaries for the Latin pairs; for Arabic, the font's **own encoded presentation form** U+FEFB, which is the ligature by definition |
 //! | The map | D13's five invariants over 2 210 leaves of the corpus | the token ranges the walk carried, which is the point of `MapRun::token` |
 //!
-//! One of those answers is a finding rather than a confirmation and is stated
-//! where it is measured: `MapKind::Substituted` is unreachable from the corpus
-//! at an LTR base.
+//! One of those answers was a finding rather than a confirmation:
+//! `MapKind::Substituted` was unreachable from the corpus at an LTR base,
+//! because twelve corpus files contained no html entity. The regeneration
+//! phase closed it in the generator rather than recording it, so the map's one
+//! length-changing kind is now exercised by corpus input — three named
+//! references, and one numeric reference that is deliberately not a token.
+//! See [`the_map_property_exercises_every_branch_the_corpus_can_reach`].
 //!
 //! # Why this directory
 //!
@@ -1380,15 +1384,31 @@ fn the_property_checker_fails_when_the_map_does_not_describe_the_text() {
     assert_map_invariants("**ab**", &laid, "deliberately mismatched");
 }
 
-/// The property is non-vacuous: the corpus reaches every branch of the checker
-/// that it can reach, and the one it cannot is named rather than left unstated.
+/// The property is non-vacuous: the corpus reaches **every** branch of the
+/// checker, including the one that changes length.
 ///
-/// `MapKind::Substituted` is **not** reachable from the corpus at an LTR base —
-/// the only two producers are an html entity, of which `bench/corpus/` contains
-/// none, and M3-R1's mark, which needs an RTL base. It is covered by
-/// [`the_rtl_workaround_leaves_the_map_tiling_both_sides`] instead, and this
-/// test asserts the absence so that the day an entity lands in the corpus this
-/// reads as a change rather than as noise.
+/// This test asserted `substituted == 0` when it was written, with a note
+/// saying the branch was unreachable at an LTR base because `bench/corpus/`
+/// contained no html entity — twelve files and not one `&`. That was a finding
+/// about the corpus rather than about the map, and the regeneration phase
+/// closed it the way S1 closed five block kinds with no golden: by adding the
+/// construct to the generator. `bench/corpus/block-kinds.md` now carries
+/// `&amp;`, `&lt;` and `&gt;` in one paragraph, so the map's only
+/// length-changing kind is exercised by real corpus input at an LTR base,
+/// where it is checked by the same five invariants as everything else —
+/// [`assert_map_invariants`]'s `Substituted` arm rebuilds the visible string
+/// from the *substituted* text rather than the block text, which no other kind
+/// does.
+///
+/// The count is exact rather than `> 0`. Three is every named reference in the
+/// corpus, and the fourth entity in that file — the numeric `&#60;` — is
+/// deliberately **not** one: muya's rule is an alternation over
+/// `config/escapeCharacter.ts`'s 269 named entries, so a numeric reference is
+/// ordinary text in the reference and copied text here. An exact count is what
+/// makes that control observable; `> 0` would pass either way.
+///
+/// M3-R1's mark is the second producer and needs an RTL base, so it stays with
+/// [`the_rtl_workaround_leaves_the_map_tiling_both_sides`].
 #[test]
 fn the_map_property_exercises_every_branch_the_corpus_can_reach() {
     let mut copied = 0usize;
@@ -1413,9 +1433,11 @@ fn the_map_property_exercises_every_branch_the_corpus_can_reach() {
     }
     assert!(copied > 0 && hidden > 0, "copied {copied}, hidden {hidden}");
     assert_eq!(
-        substituted, 0,
-        "an html entity has landed in the corpus — the substituted branch is now \
-         reachable at an LTR base and this test's note is stale"
+        substituted, 3,
+        "the corpus's named references are `&amp;`, `&lt;` and `&gt;`, all in \
+         one paragraph of block-kinds.md; `&#60;` is numeric and must stay \
+         copied. A different count means an entity was added, removed, or \
+         started tokenizing differently"
     );
     // The token containment check is only a real check where the token is
     // *wider* than the run; where they coincide it is trivially true.

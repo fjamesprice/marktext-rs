@@ -65,3 +65,17 @@ corpus file the layout goldens parse with the extension on, and the golden's
 `parse` header line says which options produced it.
 
 [^why]: `Options::MUYA_DEFAULT` sets `footnote: false`, matching muya's config.
+
+## HTML entities
+
+A named reference is the visible-text map's one substituting kind, and this is
+the only place in the corpus one occurs: &amp; is five block bytes and one
+visible byte, and &lt; and &gt; are four and one. All three decode to a
+character this directory already contains, which is deliberate, because the
+coverage gate unions the codepoints of the input and a substitution is how a
+new one would reach the shaper without being checked.
+
+A numeric reference is not a token at all. The rule is an alternation over the
+269 named entries of the reference's escapeCharacter table, so &#60; stays
+literal source and lays out as five copied columns beside the one column its
+named twin becomes.
