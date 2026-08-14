@@ -610,7 +610,7 @@ pub(crate) static ESCAPE_CHARACTERS_MAP: [(&str, &str); 252] = [
 /// So the fallback is not a defensive `??`. It is the branch 96% of the
 /// reachable inputs take, and a port that treated a miss as impossible would be
 /// wrong on `&AMP;`.
-pub(crate) fn escape_character(entity: &str) -> Option<&'static str> {
+pub fn escape_character(entity: &str) -> Option<&'static str> {
     ESCAPE_CHARACTERS_MAP
         .binary_search_by(|(key, _)| (*key).cmp(entity))
         .ok()

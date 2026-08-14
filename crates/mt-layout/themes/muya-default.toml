@@ -105,6 +105,16 @@ padding_y_em = 0.2
 font_size_em = 0.8
 corner_radius_px = 3.0
 
+[inline]
+# `<strong>` and `<em>` have NO rule in muya beyond a colour: inlineSyntax.css:49-57
+# sets `color` and nothing else. The weight and the slant below are the browser's
+# UA stylesheet (`strong { font-weight: bolder }` against a 400 parent, and
+# `em { font-style: italic }`), so there is no MarkText number here to transcribe.
+strong_weight = 700
+em_italic = true
+# `font-size: 0.7em` — inlineSyntax.css:604
+footnote_identifier_font_size_em = 0.7
+
 [lists]
 # `padding-inline-start: 30px` — blockSyntax.css:410, 481
 indent_px = 30.0

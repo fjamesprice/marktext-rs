@@ -9,12 +9,14 @@
 //!
 //! # What this module is not
 //!
-//! It is **not** block flow. It lays out one run of uniformly styled text —
-//! one leaf's worth — and says how tall the result is. Stacking blocks,
+//! It is **not** block flow, and it is **not** the tokenizer. It lays out one
+//! leaf's worth of text — as one style or as N, and with holes reserved for
+//! replaced elements — and says how tall the result is. Stacking blocks,
 //! margins, list indents, table columns and the theme's rectangles belong to
-//! the block-flow phase, and the styled-run API that gives a leaf bold spans
-//! and inline code belongs to S2. What is here is the primitive both of those
-//! call, plus the walk that turns its output neutral.
+//! [`crate::flow`]; deciding *which* bytes are visible and which spans are bold
+//! belongs to [`crate::inline`], which owns no theme and produces no
+//! geometry. This module is the primitive all three call, plus the walk that
+//! turns its output neutral.
 //!
 //! # "Nearly a rename" — audited
 //!
@@ -103,11 +105,44 @@ pub struct InlineBoxSpec {
     pub baseline: Option<f32>,
 }
 
-/// One leaf's worth of uniformly styled text, and how to lay it out.
+/// One stretch of a request's text at a style of its own.
 ///
-/// Uniform on purpose: S2 replaces the single style with runs derived from
-/// `mt-inline`'s token tree, and the fields here are the ones that will become
-/// per-run then. Nothing else about the request changes.
+/// **Fully resolved rather than a delta**, and the runs a request carries are
+/// non-overlapping and in order. Nesting is therefore already flattened by the
+/// time parley sees it — bold inside italic arrives as one run that is both,
+/// rather than as two overlapping pushes composed by the style builder — which
+/// is what makes the resolved style a thing a test can name.
+///
+/// Every field is the same shape as the [`TextRequest`] field it overrides, and
+/// a run whose field equals the request's is not pushed at all. That matters
+/// for more than speed: a `push` that repeats the default still ends the
+/// previous style run, and a style-run boundary is a shaping boundary, so a
+/// needless push costs a kerning pair.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StyleRun<'a> {
+    /// Byte range in [`TextRequest::text`].
+    pub range: std::ops::Range<usize>,
+    /// The font stack for this run — the theme's inline-code stack for a code
+    /// span, and the request's own for everything else.
+    pub families: &'a [String],
+    /// Font size in px, already resolved against whatever `em` the theme
+    /// expressed it in.
+    pub font_size: f32,
+    /// CSS weight.
+    pub weight: u16,
+    /// Whether to ask for an italic face.
+    pub italic: bool,
+    /// The colour to paint this run's glyphs.
+    pub brush: Brush,
+}
+
+/// One leaf's worth of text, and how to lay it out.
+///
+/// The scalar style fields are the **defaults**: they apply to any byte no
+/// [`runs`](Self::runs) entry covers, and to the whole string when `runs` is
+/// empty. An empty `runs` is not a degenerate case but the common one — a
+/// paragraph with no inline markup, a code block, a list marker, a
+/// line-number gutter.
 #[derive(Debug, Clone)]
 pub struct TextRequest<'a> {
     /// The text to lay out. Byte offsets in the output are into **this**
@@ -143,6 +178,12 @@ pub struct TextRequest<'a> {
     /// `letter-spacing: -1px` (`blockSyntax.css:336`) is a real theme field and
     /// would otherwise have no consumer.
     pub letter_spacing: f32,
+    /// Stretches of [`text`](Self::text) that differ from the scalar defaults
+    /// above, non-overlapping and in ascending order.
+    ///
+    /// Empty means "the whole string at the defaults", which is what every
+    /// caller that is not laying out inline markdown passes.
+    pub runs: &'a [StyleRun<'a>],
     /// Holes to reserve in the line for replaced elements, in any order.
     ///
     /// Empty for every caller today: this is the plumbing half of D12, and the
@@ -193,9 +234,25 @@ impl<'a> TextRequest<'a> {
             base_direction: BaseDirection::Ltr,
             brush: Brush::default(),
             letter_spacing: 0.0,
+            runs: &[],
             inline_boxes: &[],
         }
     }
+}
+
+/// A theme's family names as parley's, with CSS generics recognised.
+///
+/// `sans-serif`, `monospace` and `emoji` become `FontFamilyName::Generic` and
+/// resolve through the collection's generic families, which is why
+/// [`Fonts::wire`](crate::fonts::Fonts::wire) is not optional.
+fn family_list(families: &[String]) -> Vec<FontFamilyName<'static>> {
+    families
+        .iter()
+        .map(|name| match GenericFamily::parse(name) {
+            Some(generic) => FontFamilyName::Generic(generic),
+            None => FontFamilyName::Named(name.clone().into()),
+        })
+        .collect()
 }
 
 /// Reusable scratch for laying text out.
@@ -230,19 +287,12 @@ impl TextShaper {
 
     /// Shape and break one request.
     pub fn shape(&mut self, fonts: &mut Fonts, request: &TextRequest<'_>) -> ShapedText {
-        let families: Vec<FontFamilyName<'static>> = request
-            .families
-            .iter()
-            .map(|name| match GenericFamily::parse(name) {
-                Some(generic) => FontFamilyName::Generic(generic),
-                None => FontFamilyName::Named(name.clone().into()),
-            })
-            .collect();
-
         let mut builder = self
             .cx
             .ranged_builder(fonts.context_mut(), request.text, 1.0, true);
-        builder.push_default(StyleProperty::FontFamily(FontFamily::List(families.into())));
+        builder.push_default(StyleProperty::FontFamily(FontFamily::List(
+            family_list(request.families).into(),
+        )));
         builder.push_default(StyleProperty::FontSize(request.font_size));
         // `FontSizeRelative` and not `MetricsRelative`: CSS's unitless
         // `line-height` multiplies the font size, and `--mu-line-height: 1.6`
@@ -264,6 +314,44 @@ impl TextShaper {
         if request.letter_spacing != 0.0 {
             builder.push_default(StyleProperty::LetterSpacing(request.letter_spacing));
         }
+        // The style runs, each pushing only what it changes. `push` after
+        // `push_default` is how parley layers a range on top of the whole
+        // string, and a property a run does not mention keeps the default.
+        for run in request.runs {
+            if run.families != request.families {
+                builder.push(
+                    StyleProperty::FontFamily(FontFamily::List(family_list(run.families).into())),
+                    run.range.clone(),
+                );
+            }
+            if run.font_size != request.font_size {
+                builder.push(StyleProperty::FontSize(run.font_size), run.range.clone());
+            }
+            if run.weight != request.weight {
+                builder.push(
+                    StyleProperty::FontWeight(FontWeight::new(f32::from(run.weight))),
+                    run.range.clone(),
+                );
+            }
+            if run.italic != request.italic {
+                builder.push(
+                    StyleProperty::FontStyle(if run.italic {
+                        FontStyle::Italic
+                    } else {
+                        FontStyle::Normal
+                    }),
+                    run.range.clone(),
+                );
+            }
+            if run.brush != request.brush {
+                builder.push(StyleProperty::Brush(run.brush), run.range.clone());
+            }
+        }
+        // Deliberately **not** pushed per run: `LineHeight`. It is
+        // `FontSizeRelative`, so parley recomputes it from each run's own font
+        // size, which is what CSS's unitless `line-height` does — a 0.8em code
+        // span inside a paragraph gets a 0.8em line box and the surrounding
+        // text keeps the line at its own height.
         builder.set_base_direction(match request.base_direction {
             BaseDirection::Auto => ParleyBaseDirection::Auto,
             BaseDirection::Ltr => ParleyBaseDirection::Ltr,

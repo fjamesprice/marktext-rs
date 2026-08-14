@@ -3,14 +3,23 @@
 //! This is S1's gate: every `mt_doc::Block` variant placed at the numbers in
 //! M3.md §2's geometry table, in either shipped theme, at any width.
 //!
-//! # What S1 lays out, and what it does not
+//! # What a leaf's text is, since S2
 //!
-//! A leaf's text is laid out as **one style run of its literal
-//! `Block::text()`**. `**bold**` is eight characters here, not four. Per-leaf
-//! tokenization through `mt-inline`, marker hiding, inline style runs,
-//! `InlineBox` placeholders for images and C6's visible-text ↔ block-text
-//! offset map are all S2's, per §6's stage table. The goldens will move when S2
-//! lands, and that movement is the plan working rather than drift.
+//! **Not `Block::text()`.** A leaf whose kind answers
+//! [`BlockKind::lays_out_inline_markdown`] is tokenized by [`crate::inline`],
+//! its markers are hidden because a read-only viewer has no caret (C6), and
+//! what reaches parley is the resulting **visible string** plus the style runs
+//! `LayoutTree::style_runs` resolves against the theme. `**bold**` is four
+//! columns here, not eight, and every [`GlyphRun::text_range`] is an offset
+//! into that shorter string — [`BlockDisplay::text_map`] is the way back.
+//!
+//! Everything else — a code block, a list marker, a line-number gutter, a
+//! footnote's `[^id]:` label — is shaped verbatim, because its text is either
+//! source or synthetic and a tokenizer has no business in either.
+//!
+//! [`BlockKind::lays_out_inline_markdown`]: crate::display::BlockKind::lays_out_inline_markdown
+//! [`GlyphRun::text_range`]: crate::display::GlyphRun::text_range
+//! [`BlockDisplay::text_map`]: crate::display::BlockDisplay::text_map
 //!
 //! # The content column is not the number in §2's table
 //!
@@ -177,9 +186,10 @@ use mt_doc::{Align, Block, Document, NodeId, OrderDelim};
 
 use crate::display::{BlockDisplay, BlockKind, Brush, DisplayItem, DisplayList, FilledRect, Rect};
 use crate::fonts::{FontError, Fonts};
+use crate::inline::{self, InlineRun, InlineSyntax, VisibleTextMap};
 use crate::paint;
-use crate::text::{ShapedText, TextRequest, TextShaper};
-use crate::theme::{CheckboxTop, CodeBlock, ListMarker, OrderedMarker, TextAlign, Theme};
+use crate::text::{ShapedText, StyleRun, TextRequest, TextShaper};
+use crate::theme::{CheckboxTop, CodeBlock, Color, ListMarker, OrderedMarker, TextAlign, Theme};
 use crate::units::Units;
 
 // ---------------------------------------------------------------------------
@@ -214,6 +224,15 @@ pub struct LayoutOptions {
     /// box are **not** numbered: muya only ever puts the gutter inside
     /// `.mu-code-block`.
     pub code_block_line_numbers: bool,
+    /// The two `mt_md::Options` flags that change what a leaf's text
+    /// *tokenizes to* rather than how it is drawn.
+    ///
+    /// They are here rather than read from the document because `mt-layout`
+    /// may not depend on `mt-md` — D5 forbids the edge and S7 asserts its
+    /// absence — so a caller that parsed with something other than
+    /// `Options::MUYA_DEFAULT` has to say so. The default matches
+    /// `MUYA_DEFAULT`: both **off**.
+    pub inline_syntax: InlineSyntax,
 }
 
 /// Lay a document out at a width, in a theme.
@@ -449,6 +468,10 @@ struct Planned {
     /// separately so that a table's column sizing does not depend on whether
     /// the cell has been re-broken since.
     intrinsic_width: f32,
+    /// D13's map, filled in by [`LayoutTree::build`] and handed to the display
+    /// list. `None` for a container, and the identity for a leaf whose text is
+    /// not inline markdown.
+    map: Option<VisibleTextMap>,
     /// Synthetic text that is not the block's own: an ordered list marker, or a
     /// code block's line numbers. Never both — no block kind needs two.
     aux_text: String,
@@ -673,15 +696,24 @@ impl LayoutTree {
                 .and_then(|n| n.block())
                 .and_then(|b| b.text())
                 .map_or(std::borrow::Cow::Borrowed(""), |t| t.to_str());
-            let shaped = self.shape(
-                &style,
-                &text,
-                self.blocks[index].content_width,
-                fonts,
-                shaper,
-            );
+            let content_width = self.blocks[index].content_width;
+            let opacity = self.blocks[index].opacity;
+            // The two halves of C6. A leaf whose text is inline markdown is
+            // tokenized and shaped as its *visible* text; every other leaf's
+            // text is already what a reader sees, so it is shaped verbatim and
+            // gets the identity map rather than no map at all.
+            let (shaped, map) = if self.blocks[index].kind.lays_out_inline_markdown() {
+                let laid = inline::lay_out(&text, self.options.inline_syntax, None);
+                let runs = self.style_runs(&style, &laid.runs, opacity);
+                let shaped = self.shape(&style, &laid.visible, &runs, content_width, fonts, shaper);
+                (shaped, laid.map)
+            } else {
+                let shaped = self.shape(&style, &text, &[], content_width, fonts, shaper);
+                (shaped, VisibleTextMap::identity(text.len()))
+            };
             self.blocks[index].intrinsic_width = shaped.width();
             self.blocks[index].text = ShapeState::Built(Box::new(shaped));
+            self.blocks[index].map = Some(map);
 
             // The gutter's text is a function of where this block's own lines
             // fell, so it can only be generated now — and it is generated as
@@ -697,7 +729,10 @@ impl LayoutTree {
         if let Some(aux_style) = self.blocks[index].aux_style.clone() {
             let aux_text = std::mem::take(&mut self.blocks[index].aux_text);
             let width = self.blocks[index].aux_width;
-            let shaped = self.shape(&aux_style, &aux_text, width, fonts, shaper);
+            // Synthetic text — a list marker, a line-number gutter, a
+            // footnote's `[^id]:` label. It is not in any document, so there is
+            // nothing to tokenize and no map to build.
+            let shaped = self.shape(&aux_style, &aux_text, &[], width, fonts, shaper);
             self.blocks[index].aux_text = aux_text;
             self.blocks[index].aux = ShapeState::Built(Box::new(shaped));
         }
@@ -758,29 +793,122 @@ impl LayoutTree {
 
     // --- shaping -----------------------------------------------------------
 
+    fn families(&self, stack: FontStack) -> &[String] {
+        match stack {
+            FontStack::Body => &self.theme.fonts.body,
+            FontStack::Code => &self.theme.fonts.code,
+            FontStack::FootnoteLabel => &self.theme.footnote.label_fonts,
+        }
+    }
+
     fn shape(
         &self,
         style: &TextStyle,
         text: &str,
+        runs: &[StyleRun<'_>],
         content_width: f32,
         fonts: &mut Fonts,
         shaper: &mut TextShaper,
     ) -> ShapedText {
-        let families = match style.stack {
-            FontStack::Body => &self.theme.fonts.body,
-            FontStack::Code => &self.theme.fonts.code,
-            FontStack::FootnoteLabel => &self.theme.footnote.label_fonts,
-        };
-        let mut request = TextRequest::new(text, families, style.font_size, style.line_height);
+        let mut request = TextRequest::new(
+            text,
+            self.families(style.stack),
+            style.font_size,
+            style.line_height,
+        );
         request.weight = style.weight;
         request.align = style.align;
         request.brush = style.brush;
         request.letter_spacing = style.letter_spacing;
+        request.runs = runs;
         request.max_width = match style.wrap {
             Wrap::AtContentWidth => Some(content_width.max(0.0)),
             Wrap::Never => None,
         };
         shaper.shape(fonts, &request)
+    }
+
+    /// Resolve `mt-inline`'s semantic runs against the theme and the block's
+    /// own style.
+    ///
+    /// The split is deliberate: [`crate::inline`] owns no theme and says only
+    /// *"this stretch is strong"*, and this is the one place that says what a
+    /// strong run's weight is. Adjacent runs whose resolved style is identical
+    /// are merged, and any run that ends up identical to the block's own style
+    /// is dropped — because a style-run boundary is a shaping boundary, so a
+    /// needless push costs a kerning pair and a paragraph with no markup must
+    /// shape exactly as it did before any of this existed. Two of `mt-inline`'s
+    /// distinctions vanish here by design: `del` and a revealed marker are
+    /// semantic today and drawn later, so neither changes a glyph.
+    fn style_runs(&self, style: &TextStyle, runs: &[InlineRun], opacity: f32) -> Vec<StyleRun<'_>> {
+        let theme = &self.theme;
+        let base = self.families(style.stack);
+        let mut out: Vec<StyleRun<'_>> = Vec::new();
+        for run in runs {
+            let s = run.style;
+            let mut font_size = style.font_size;
+            let mut families = base;
+            if s.code {
+                // `font-size: 0.8em` against the **surrounding** text, so
+                // inline code in an h1 is 24px — `inlineSyntax.css:65`. The
+                // stack is the theme's own literal list rather than the code
+                // block's, which is the point of `fonts.inline_code` being a
+                // separate field.
+                font_size *= theme.inline_code.font_size_em;
+                families = &theme.fonts.inline_code;
+            }
+            if s.footnote {
+                font_size *= theme.inline.footnote_identifier_font_size_em;
+            }
+            let resolved = StyleRun {
+                range: run.range.clone(),
+                families,
+                font_size,
+                weight: if s.strong {
+                    theme.inline.strong_weight
+                } else {
+                    style.weight
+                },
+                italic: s.em && theme.inline.em_italic,
+                brush: if s.code {
+                    // `color: var(--editor-color)` — and note it is the
+                    // editor's colour and not the inherited one, so inline code
+                    // inside a blockquote does **not** take `blockquote_text`.
+                    inline_brush(theme.colors.editor, style.brush, opacity)
+                } else if s.link {
+                    inline_brush(theme.colors.link, style.brush, opacity)
+                } else {
+                    style.brush
+                },
+            };
+            match out.last_mut() {
+                Some(last)
+                    if last.range.end == resolved.range.start
+                        && last.families == resolved.families
+                        && last.font_size == resolved.font_size
+                        && last.weight == resolved.weight
+                        && last.italic == resolved.italic
+                        && last.brush == resolved.brush =>
+                {
+                    last.range.end = resolved.range.end;
+                }
+                _ => out.push(resolved),
+            }
+        }
+        // A run that changes nothing is no run at all. Dropped **after**
+        // merging rather than never emitted, because two adjacent runs that
+        // each differ from the default may be identical to each other, and
+        // dropping first would leave the merge unable to see that. This is what
+        // makes a paragraph with no markup produce an empty list, and a
+        // paragraph with one link produce exactly one entry.
+        out.retain(|r| {
+            r.families != base
+                || r.font_size != style.font_size
+                || r.weight != style.weight
+                || r.italic
+                || r.brush != style.brush
+        });
+        out
     }
 
     fn text_height(&self, index: usize) -> f32 {
@@ -1059,6 +1187,7 @@ impl LayoutTree {
             language: b.language.clone(),
             overflow_x: b.overflow_x(),
             items,
+            text_map: b.map.clone(),
         })
     }
 
@@ -1452,6 +1581,7 @@ impl LayoutTree {
             style,
             text: ShapeState::Unbuilt,
             intrinsic_width: 0.0,
+            map: None,
             aux_text,
             aux_style,
             aux: ShapeState::Unbuilt,
@@ -1600,6 +1730,16 @@ impl LayoutTree {
 /// **Recorded as a divergence** rather than hidden: if M6's PDF export needs
 /// exact group semantics, this is the function to replace and
 /// `BlockDisplay` is where the group would have to be declared.
+/// An inline run's colour: `inherit` takes the surrounding brush, which the
+/// block's opacity has already dimmed, and anything else is an absolute colour
+/// that has not been and must be.
+fn inline_brush(color: Color, inherited: Brush, opacity: f32) -> Brush {
+    match color {
+        Color::Inherit => inherited,
+        _ => dim(Brush::resolve(color, inherited), opacity),
+    }
+}
+
 fn dim(brush: Brush, opacity: f32) -> Brush {
     if opacity >= 1.0 {
         return brush;

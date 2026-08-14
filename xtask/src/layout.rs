@@ -178,6 +178,26 @@ fn parse_options(input: &str) -> (mt_md::Options, String) {
     (options, label)
 }
 
+/// The layout options for one input.
+///
+/// `mt-layout` may not depend on `mt-md`, so the two `mt_md::Options` flags
+/// that change what a leaf's text *tokenizes to* — footnotes and sup/sub —
+/// have to be handed across explicitly. This is the one place in the harness
+/// that knows both sides, and it is the same override that decided the parse.
+///
+/// The header does not grow a field for them: the `parse` line already records
+/// `footnote=` and `super-sub=`, and recording the same bit twice invites the
+/// two copies to disagree.
+fn layout_options(parse: &mt_md::Options) -> LayoutOptions {
+    LayoutOptions {
+        inline_syntax: mt_layout::InlineSyntax {
+            footnote: parse.footnote,
+            super_sub_script: parse.super_sub_script,
+        },
+        ..LayoutOptions::default()
+    }
+}
+
 /// The full parse-option set, spelled out for the header.
 ///
 /// Every field of `mt_md::Options`, not just the overridden one: the whole
@@ -351,7 +371,6 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
         return measure(&mut fonts, &mut shaper, &provenance, &documents);
     }
 
-    let options = LayoutOptions::default();
     let themes = themes();
     let mut written = 0usize;
     let mut drifted: Vec<String> = Vec::new();
@@ -365,6 +384,7 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
     for (name, text) in &documents {
         let (parse_opts, parse_label) = parse_options(name);
         let parsed = mt_md::parse(text, parse_opts);
+        let options = layout_options(&parse_opts);
         for theme in &themes {
             let list = layout_with(
                 &parsed.document,
@@ -1224,7 +1244,6 @@ fn measure(
     provenance: &Provenance,
     documents: &[(String, String)],
 ) -> Result<i32, String> {
-    let options = LayoutOptions::default();
     let themes = themes();
     println!(
         "\n{:<20} {:>10} {:>9} {:>9} {:>13} {:>13}",
@@ -1233,6 +1252,7 @@ fn measure(
     for (name, text) in documents {
         let (parse_opts, parse_label) = parse_options(name);
         let parsed = mt_md::parse(text, parse_opts);
+        let options = layout_options(&parse_opts);
         let mut sizes = Vec::new();
         let mut blocks = 0usize;
         let mut items = 0usize;

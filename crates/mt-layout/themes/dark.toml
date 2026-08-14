@@ -99,6 +99,13 @@ padding_y_em = 0.2
 font_size_em = 0.8
 corner_radius_px = 3.0
 
+[inline]
+# Unchanged. `dark` overrides `--strong-color` and `--em-color` but neither the
+# weight nor the slant, because muya has no rule for either — see muya-default.
+strong_weight = 700
+em_italic = true
+footnote_identifier_font_size_em = 0.7
+
 [lists]
 indent_px = 30.0
 task_indent_px = 30.0

@@ -96,11 +96,19 @@
 //!
 //! ## Status
 //!
-//! **M3 S1.** Block flow, the theme model (D4), the face list (D7), the
-//! display list (D8) and the golden format (D10) are in. Inline layout —
-//! per-leaf tokenization into style runs, `InlineBox` placeholders, and C6's
-//! visible-text ↔ block-text offset map — is **S2's**, so a leaf currently
-//! lays out as a single style run and `**bold**` occupies eight columns.
+//! **M3 S2, in progress.** Block flow, the theme model (D4), the face list
+//! (D7), the display list (D8) and the golden format (D10) landed at S1.
+//! S2 adds per-leaf tokenization into style runs with the markers hidden
+//! ([`inline`]), D13's [`VisibleTextMap`] on the display list, and the
+//! [`InlineBoxSpec`] plumbing that lets a caller reserve a hole in a line.
+//! `**bold**` is four columns now, not eight.
+//!
+//! What S2 still owes: a producer for those holes (an image with a size, D12),
+//! the drawn half of inline decoration — inline code's background, `del`'s
+//! strikethrough, a footnote identifier's pill — and the deliberate
+//! line-by-line cross-check of the emitted geometry against
+//! `inlineSyntax.css`, which §6 puts *before* the goldens are regenerated
+//! because a golden written first freezes whatever it was shown.
 //!
 //! Geometry is guarded two ways: `theme::tests` asserts §2's table as
 //! constants, and `cargo xtask layout` compares the display list for every
@@ -112,6 +120,7 @@
 pub mod display;
 pub mod flow;
 pub mod fonts;
+pub mod inline;
 // Private: every item in it is `pub(crate)`. D8's public surface is the
 // display list, not the recipe that fills it.
 mod paint;
@@ -128,6 +137,9 @@ pub use fonts::{
     Axis, BUNDLED_FACES_TOML, Face, FaceList, FaceListMeta, FaceRole, FaceStyle, FontError, FontId,
     Fonts,
 };
-pub use text::{BaseDirection, InlineBoxSpec, ShapedText, TextRequest, TextShaper};
+pub use inline::{
+    InlineRun, InlineStyle, InlineSyntax, InlineText, MapKind, MapRun, VisibleTextMap,
+};
+pub use text::{BaseDirection, InlineBoxSpec, ShapedText, StyleRun, TextRequest, TextShaper};
 pub use theme::{Theme, ThemeError};
 pub use units::Units;

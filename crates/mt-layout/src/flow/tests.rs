@@ -1555,3 +1555,183 @@ fn code_blocks_do_not_wrap_by_default_and_do_when_the_option_is_on() {
     );
     assert!(!LayoutOptions::default().wrap_code_blocks, "muya's default");
 }
+
+// ---------------------------------------------------------------------------
+// Inline style runs — S2
+// ---------------------------------------------------------------------------
+
+/// The resolved runs for one paragraph's text, in the theme's terms.
+///
+/// This reaches through `LayoutTree`'s private half on purpose: the runs are
+/// consumed by `shape` and never reach the display list, so a test that only
+/// looked at the public output could not tell a bold run from a bold *face*,
+/// and with no registered faces there is no face to look at.
+fn runs_for(text: &str, theme: &Theme) -> Vec<crate::text::StyleRun<'static>> {
+    let mut doc = Doc::new();
+    let root = doc.root();
+    doc.para(root, text);
+    let tree = LayoutTree::plan(&doc.doc, theme, f32::INFINITY, &LayoutOptions::default());
+    let style = tree.blocks[0]
+        .style
+        .clone()
+        .expect("a paragraph is a leaf with a style");
+    let laid = inline::lay_out(text, InlineSyntax::default(), None);
+    // The theme is borrowed from `tree`, which outlives nothing here, so the
+    // runs are copied into an owned form the caller can hold. The families
+    // slice is the only borrow and it points into the theme's own vectors,
+    // which `Theme::muya_default()` leaks nothing of — hence the clone.
+    tree.style_runs(&style, &laid.runs, 1.0)
+        .into_iter()
+        .map(|r| crate::text::StyleRun {
+            range: r.range,
+            families: Box::leak(r.families.to_vec().into_boxed_slice()),
+            font_size: r.font_size,
+            weight: r.weight,
+            italic: r.italic,
+            brush: r.brush,
+        })
+        .collect()
+}
+
+/// A paragraph with no markup produces **no** style runs at all, not one run
+/// that repeats the defaults.
+///
+/// This is the case that must stay free. A style-run boundary is a shaping
+/// boundary, so a redundant push would cost a kerning pair on every paragraph
+/// in every document — and the goldens for a marker-free line must not move at
+/// all when S2 lands.
+#[test]
+fn a_paragraph_with_no_markup_pushes_no_style_runs() {
+    assert!(runs_for("just some prose", &Theme::muya_default()).is_empty());
+}
+
+/// Bold inside italic reaches parley as **one** run that is both, because the
+/// walk resolves the nesting rather than leaving parley to compose two
+/// overlapping pushes.
+#[test]
+fn bold_inside_italic_resolves_to_one_run_that_is_both() {
+    let theme = Theme::muya_default();
+    let runs = runs_for("*a **b** c*", &theme);
+    assert_eq!(runs.len(), 3, "{runs:#?}");
+    assert_eq!(runs[0].range, 0..2);
+    assert!(runs[0].italic && runs[0].weight == 400);
+    assert_eq!(runs[1].range, 2..3);
+    assert!(
+        runs[1].italic && runs[1].weight == theme.inline.strong_weight,
+        "the inner run is italic *and* 700"
+    );
+    assert_eq!(runs[2].range, 3..5);
+    assert!(runs[2].italic && runs[2].weight == 400);
+}
+
+/// Inline code takes three things at once — the theme's own family stack, its
+/// `0.8em` **against the surrounding text**, and `--editor-color` rather than
+/// the colour it would inherit.
+#[test]
+fn inline_code_takes_the_code_stack_the_smaller_size_and_the_editor_colour() {
+    let theme = Theme::muya_default();
+    let runs = runs_for("a `b` c", &theme);
+    let code = runs
+        .iter()
+        .find(|r| r.range == (2..3))
+        .unwrap_or_else(|| panic!("no run over the code span: {runs:#?}"));
+    assert_eq!(code.families, theme.fonts.inline_code.as_slice());
+    assert_eq!(
+        code.font_size,
+        theme.metrics.font_size_px * theme.inline_code.font_size_em
+    );
+    assert_eq!(
+        code.brush,
+        Brush::resolve(theme.colors.editor, Brush::default())
+    );
+}
+
+/// `0.8em` is against the **surrounding** text, so the same code span is
+/// 0.8 × 30 inside an h1 and 0.8 × 16 inside a paragraph.
+#[test]
+fn inline_codes_em_is_relative_to_whatever_it_sits_in() {
+    let theme = Theme::muya_default();
+    let mut doc = Doc::new();
+    let root = doc.root();
+    doc.push(
+        root,
+        Block::AtxHeading {
+            level: 1,
+            text: Text::from("# a `b` c"),
+        },
+    );
+    let tree = LayoutTree::plan(&doc.doc, &theme, f32::INFINITY, &LayoutOptions::default());
+    let style = tree.blocks[0].style.clone().expect("a heading is a leaf");
+    let laid = inline::lay_out("# a `b` c", InlineSyntax::default(), None);
+    let runs = tree.style_runs(&style, &laid.runs, 1.0);
+    let code = runs
+        .iter()
+        .find(|r| r.families == theme.fonts.inline_code.as_slice())
+        .unwrap_or_else(|| panic!("no code run: {runs:#?}"));
+    let h1 = theme.metrics.font_size_px * theme.headings.scale_em[0];
+    assert_eq!(code.font_size, h1 * theme.inline_code.font_size_em);
+    assert!(code.font_size > theme.metrics.font_size_px * theme.inline_code.font_size_em);
+}
+
+/// A link's anchor is painted `--link-color` and its href is not painted at
+/// all, because the href is a marker.
+#[test]
+fn a_links_anchor_takes_the_link_colour() {
+    let theme = Theme::muya_default();
+    let runs = runs_for("see [it](https://example.com)", &theme);
+    assert_eq!(runs.len(), 1, "only the anchor differs: {runs:#?}");
+    assert_eq!(runs[0].range, 4..6);
+    assert_eq!(
+        runs[0].brush,
+        Brush::resolve(theme.colors.link, Brush::default())
+    );
+}
+
+/// A leaf that is not inline markdown keeps its source, and still gets a map —
+/// the identity one, so no caller has to distinguish "no map" from "no
+/// markers".
+#[test]
+fn a_code_block_is_not_tokenized_and_gets_the_identity_map() {
+    let mut doc = Doc::new();
+    let root = doc.root();
+    let source = "let x = **not bold**;";
+    doc.push(
+        root,
+        Block::CodeBlock {
+            kind: CodeKind::Fenced,
+            info: "rust".into(),
+            fence_len: Some(3),
+            text: Text::from(source),
+        },
+    );
+    let list = emitted(&doc, &Theme::muya_default());
+    let map = find(&list, BlockKind::CodeBlock)
+        .text_map
+        .as_ref()
+        .expect("a leaf always has a map");
+    assert_eq!(map.block_len(), source.len());
+    assert_eq!(map.visible_len(), source.len());
+    assert_eq!(map.to_block(9), 9, "the asterisks are still there");
+}
+
+/// The map reaches the display list beside the leaf that produced it, which is
+/// D13's "reachable from the public API without re-tokenizing".
+#[test]
+fn every_leaf_in_the_display_list_carries_its_map_and_containers_do_not() {
+    let mut doc = Doc::new();
+    let root = doc.root();
+    let quote = doc.push(root, Block::BlockQuote { children: vec![] });
+    doc.para(quote, "**bold** in a quote");
+    let list = emitted(&doc, &Theme::muya_default());
+
+    let para = find(&list, BlockKind::Paragraph);
+    let map = para.text_map.as_ref().expect("a paragraph is a leaf");
+    assert_eq!(map.block_len(), 19);
+    assert_eq!(map.visible_len(), 15, "four marker bytes gone");
+    assert_eq!(map.to_block(0), 2);
+
+    assert!(
+        find(&list, BlockKind::BlockQuote).text_map.is_none(),
+        "a container holds no text and so has no map"
+    );
+}

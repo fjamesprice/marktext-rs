@@ -49,6 +49,7 @@ use std::ops::Range;
 use mt_doc::{Block, NodeId};
 
 use crate::fonts::FontId;
+use crate::inline::VisibleTextMap;
 use crate::theme::{Color, LineStyle};
 
 // ---------------------------------------------------------------------------
@@ -265,6 +266,22 @@ pub struct BlockDisplay {
     /// an inconsistency: a renderer needs one, incremental relayout needs the
     /// other, and the two happen to be different questions.
     pub items: Vec<DisplayItem>,
+    /// **D13.** Where this block's visible text came from in its own block
+    /// text, or `None` for a container that holds no text.
+    ///
+    /// It is here — beside the leaf that produced it, on the public display
+    /// list — rather than inside the layout tree, because §10 owes the map
+    /// forward to M4's caret and M5's search and neither can afford to
+    /// re-tokenize to get it. Every [`GlyphRun::text_range`] in
+    /// [`items`](Self::items) is an offset into the *visible* string, and this
+    /// is the only thing that turns one back into a block-text offset.
+    ///
+    /// For a block whose text is not inline markdown — a code block, an HTML
+    /// block, frontmatter — it is
+    /// [`VisibleTextMap::identity`](crate::inline::VisibleTextMap::identity),
+    /// so a caller never has to decide whether an absent map means "no text" or
+    /// "no markers".
+    pub text_map: Option<VisibleTextMap>,
 }
 
 /// One thing to draw.
@@ -415,6 +432,31 @@ impl BlockKind {
                 | BlockKind::Diagram
         )
     }
+
+    /// Whether this kind's text is **inline markdown** — tokenized, its markers
+    /// hidden, and laid out as C6's visible text rather than verbatim.
+    ///
+    /// The five that answer yes are the five leaf kinds carrying prose. The
+    /// code-block box's five carry source, which is exactly the thing a
+    /// tokenizer must not touch; the containers carry no text at all.
+    ///
+    /// `ThematicBreak` is in the set and it is the one worth stating: its whole
+    /// text is `---`, which tokenizes to a single `hr` begin-rule token and
+    /// therefore hides completely. That is the right answer — muya draws the
+    /// rule and gives the source `opacity: 0`
+    /// (`blockSyntax.css:189-191`) — and it costs nothing, because an empty
+    /// string still gets one line box of the theme's line height, which is the
+    /// height the block already had.
+    pub fn lays_out_inline_markdown(self) -> bool {
+        matches!(
+            self,
+            BlockKind::Paragraph
+                | BlockKind::AtxHeading
+                | BlockKind::SetextHeading
+                | BlockKind::ThematicBreak
+                | BlockKind::TableCell
+        )
+    }
 }
 
 impl From<&Block> for BlockKind {
@@ -463,10 +505,15 @@ pub struct GlyphRun {
     /// the glyph positions; this is here for the renderer's underline
     /// direction and for M4's caret affinity.
     pub is_rtl: bool,
-    /// Byte range in the **block's own text**, not the document's.
+    /// Byte range in the **visible text** — C6's third offset space, not the
+    /// block's own text and not the document's.
     ///
-    /// S2 owes the map from these offsets to visible-text offsets (C6); this
-    /// range is the block-text side of it.
+    /// **Corrected at S2.** Until markers were hidden the two were the same
+    /// string and this said "the block's own text"; they are not the same
+    /// string any more. `**bold**` is eight bytes of block text and four of
+    /// visible text, so a range here is into the shorter one.
+    /// [`BlockDisplay::text_map`] is the conversion, and it is on the display
+    /// list precisely so that this range is usable without re-tokenizing.
     ///
     /// # Two runs in the list are not into any block's text
     ///

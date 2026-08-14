@@ -221,6 +221,7 @@ mod token;
 
 use std::collections::BTreeMap;
 
+pub use escape::escape_character;
 pub use generator::{generator, generator_rebuilding_wrappers};
 pub use highlight::union;
 pub use marker::{Cursor, MarkerState, marker_state, marker_state_of_range};

@@ -101,6 +101,8 @@ pub struct Theme {
     pub code_block: CodeBlock,
     /// `` `code` `` inside a paragraph.
     pub inline_code: InlineCode,
+    /// The rest of inline text styling: emphasis, and the footnote identifier.
+    pub inline: Inline,
     /// Bullet, ordered and task lists.
     pub lists: Lists,
     /// The task-list checkbox, the single construct the three geometry
@@ -376,6 +378,40 @@ pub struct InlineCode {
     pub font_size_em: f32,
     /// `border-radius: 3px`.
     pub corner_radius_px: f32,
+}
+
+/// Inline text styling that is not [`InlineCode`]'s.
+///
+/// # Two of these three have no MarkText source, and the comment says so
+///
+/// `grep`ping muya's stylesheets for a weight or a slant on `<strong>` or
+/// `<em>` finds nothing: `inlineSyntax.css:49-57` is the only rule for either
+/// element and it sets **colour alone**, defaulting to `inherit`. So the bold
+/// and the italic are the browser's UA stylesheet — Chromium's
+/// `strong { font-weight: bolder }` resolving to 700 against a 400 parent, and
+/// `em { font-style: italic }` — and there is no reference number here to be
+/// faithful to. They are theme fields rather than constants because a theme
+/// that wanted semibold emphasis has nowhere else to say so, and because D4's
+/// argument against implicit contracts applies to a hard-coded 700 as much as
+/// to a `serde` default.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Inline {
+    /// `<strong>`'s weight. **The browser UA sheet, not muya** — see the type's
+    /// own note.
+    pub strong_weight: u16,
+    /// Whether `<em>` asks for an italic face. **The browser UA sheet, not
+    /// muya** — see the type's own note.
+    pub em_italic: bool,
+    /// `.mu-inline-footnote-identifier { font-size: 0.7em }` —
+    /// `inlineSyntax.css:604`. Relative to the surrounding text, like
+    /// [`InlineCode::font_size_em`].
+    ///
+    /// Only the size. The pill behind it — `padding: 0 0.4em`,
+    /// `background: var(--code-block-bg-color)`, `border-radius: 3px`
+    /// (`inlineSyntax.css:600-607`) — is drawn chrome and its fields arrive
+    /// with the drawing.
+    pub footnote_identifier_font_size_em: f32,
 }
 
 // ---------------------------------------------------------------------------

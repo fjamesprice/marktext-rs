@@ -953,3 +953,189 @@ fn an_inline_box_is_aligned_to_the_text_baseline_and_not_to_the_line_top() {
         shaped.width()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Inline layout against the real font set — S2
+// ---------------------------------------------------------------------------
+
+fn glyph_run_list(block: &mt_layout::display::BlockDisplay) -> Vec<&mt_layout::display::GlyphRun> {
+    block
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            DisplayItem::Glyphs(g) => Some(g),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The whole of C6 in one measurement: `**bold**` is narrower than `bold` was
+/// wide plus four asterisks, because the asterisks are not there.
+///
+/// Measured rather than asserted structurally, because "the markers are hidden"
+/// is a claim about pixels and the only way to be wrong about it quietly is to
+/// check the string instead of the glyphs.
+#[test]
+fn a_hidden_marker_costs_no_glyphs_and_no_width() {
+    let theme = Theme::muya_default();
+    let mut marked = Doc::new();
+    let root = marked.root();
+    marked.para(root, "**bold**");
+    let mut plain = Doc::new();
+    let root = plain.root();
+    plain.para(root, "bold");
+
+    let a = lay_out(&marked, &theme);
+    let b = lay_out(&plain, &theme);
+    let ga = glyph_run_list(&a.blocks[0]);
+    let gb = glyph_run_list(&b.blocks[0]);
+    let count = |runs: &[&mt_layout::display::GlyphRun]| -> usize {
+        runs.iter().map(|r| r.glyphs.len()).sum()
+    };
+    assert_eq!(count(&ga), 4, "four letters, no asterisks");
+    assert_eq!(count(&gb), 4);
+    // Bold is wider than regular at the same size, so this is not an equality —
+    // what must hold is that the marked-up line is nowhere near four asterisks
+    // wider, and that its glyph ranges index the *visible* string.
+    let advance =
+        |runs: &[&mt_layout::display::GlyphRun]| -> f32 { runs.iter().map(|r| r.advance).sum() };
+    assert!(
+        advance(&ga) < advance(&gb) * 1.5,
+        "{} vs {}",
+        advance(&ga),
+        advance(&gb)
+    );
+    assert!(ga.iter().all(|r| r.text_range.end <= 4), "{ga:#?}");
+
+    // …and the map is the way back to the eight-byte original.
+    let map = a.blocks[0]
+        .text_map
+        .as_ref()
+        .expect("a paragraph is a leaf");
+    assert_eq!(map.block_len(), 8);
+    assert_eq!(map.visible_len(), 4);
+    assert_eq!(map.to_block(0), 2);
+    assert_eq!(map.to_visible(0), None);
+}
+
+/// A style run really does change the face parley picks: the bold span
+/// resolves to a different `FontId` than the text around it.
+///
+/// This is the assertion that a `push` over a range did anything at all. With
+/// one style run the whole paragraph would be one `FontId`; the count of
+/// distinct faces is the smallest observable that cannot be faked.
+#[test]
+fn a_strong_span_resolves_to_a_different_face_than_the_text_around_it() {
+    let theme = Theme::muya_default();
+    let mut doc = Doc::new();
+    let root = doc.root();
+    doc.para(root, "regular **bold** regular");
+    let list = lay_out(&doc, &theme);
+    let runs = glyph_run_list(&list.blocks[0]);
+    let faces: Vec<_> = runs.iter().map(|r| r.font).collect();
+    let distinct: std::collections::BTreeSet<_> = faces.iter().collect();
+    assert_eq!(
+        distinct.len(),
+        2,
+        "one regular face and one bold one: {faces:?}"
+    );
+    // The middle run is the bold one, and it covers exactly `bold` in the
+    // visible string — which is bytes 8..12 of "regular bold regular".
+    let bold = runs
+        .iter()
+        .find(|r| r.text_range == (8..12))
+        .unwrap_or_else(|| panic!("no run over the bold span: {runs:#?}"));
+    assert_ne!(bold.font, runs[0].font);
+}
+
+/// Inline code changes size, family **and** colour in one run, and the line box
+/// does not shrink to the code span's own smaller line height.
+#[test]
+fn an_inline_code_span_is_smaller_and_in_the_code_face_without_shrinking_the_line() {
+    let theme = Theme::muya_default();
+    let mut doc = Doc::new();
+    let root = doc.root();
+    doc.para(root, "call `fn` now");
+    let list = lay_out(&doc, &theme);
+    let block = &list.blocks[0];
+    let runs = glyph_run_list(block);
+    let code = runs
+        .iter()
+        .find(|r| r.text_range == (5..7))
+        .unwrap_or_else(|| panic!("no run over `fn`: {runs:#?}"));
+    assert_eq!(code.font_size, 16.0 * theme.inline_code.font_size_em);
+    assert_ne!(
+        code.font, runs[0].font,
+        "a monospace face, not the body one"
+    );
+    assert_eq!(
+        code.brush,
+        mt_layout::Brush::resolve(theme.colors.editor, mt_layout::Brush::default())
+    );
+    // The surrounding 16px text still sets the line, so the paragraph is the
+    // theme's own line box and not `1.6 × 12.8`.
+    assert!(
+        (block.bounds.height - 25.6).abs() < 1e-3,
+        "got {}",
+        block.bounds.height
+    );
+}
+
+/// An ATX heading's `# ` is a marker like any other, so a heading's glyphs are
+/// its title and the heading's own box is unchanged.
+#[test]
+fn an_atx_headings_hash_is_hidden_and_its_box_is_not() {
+    let theme = Theme::muya_default();
+    let mut doc = Doc::new();
+    let root = doc.root();
+    doc.push(
+        root,
+        Block::AtxHeading {
+            level: 1,
+            text: Text::from("# Title"),
+        },
+    );
+    let list = lay_out(&doc, &theme);
+    let block = &list.blocks[0];
+    let glyphs: usize = glyph_run_list(block).iter().map(|r| r.glyphs.len()).sum();
+    assert_eq!(glyphs, 5, "`Title`, not `# Title`");
+    assert!((block.bounds.height - 42.0).abs() < 1e-3, "1.4 × 30");
+    let map = block.text_map.as_ref().expect("a heading is a leaf");
+    assert_eq!((map.block_len(), map.visible_len()), (7, 5));
+}
+
+/// Every leaf in a mixed document maps every visible offset back to a
+/// block-text offset inside the token that produced it — the gate's property
+/// test, over real shaped output rather than over the walk alone.
+#[test]
+fn every_visible_offset_in_a_laid_out_document_maps_back_inside_its_token() {
+    let theme = Theme::muya_default();
+    let mut doc = Doc::new();
+    let root = doc.root();
+    for line in [
+        "plain text with no markup at all",
+        "**bold** and *italic* and `code` and ~~gone~~",
+        "a [link](https://example.com/x) and an ![image](./i.png)",
+        "an &amp; entity and a soft\nbreak",
+        "中文**粗体**紧邻中文字符，没有空格",
+    ] {
+        doc.para(root, line);
+    }
+    let list = lay_out(&doc, &theme);
+    for block in &list.blocks {
+        let Some(map) = &block.text_map else { continue };
+        for run in glyph_run_list(block) {
+            assert!(
+                run.text_range.end <= map.visible_len(),
+                "a glyph run indexes past the visible string: {run:?}"
+            );
+            for v in [run.text_range.start, run.text_range.end] {
+                let b = map.to_block(v);
+                assert!(b <= map.block_len());
+            }
+        }
+        for run in map.runs() {
+            assert!(run.token.start <= run.block.start && run.block.end <= run.token.end);
+        }
+    }
+}
