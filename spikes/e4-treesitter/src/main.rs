@@ -13,7 +13,7 @@
 //! ```
 use std::time::Instant;
 
-use tree_sitter_highlight::{Highlighter, HighlightConfiguration};
+use tree_sitter_highlight::{HighlightConfiguration, Highlighter};
 
 /// The capture names `tree-sitter-highlight` recognizes internally
 /// (`STANDARD_CAPTURE_NAMES` in its own `src/highlight.rs`) — that constant is
@@ -22,17 +22,58 @@ use tree_sitter_highlight::{Highlighter, HighlightConfiguration};
 /// `@function`, `@keyword`, `@string`, `@number` that only fire if the name
 /// (or its dotted prefix) is on this list.
 const RECOGNIZED_CAPTURES: &[&str] = &[
-    "attribute", "boolean", "carriage-return", "comment", "comment.documentation",
-    "constant", "constant.builtin", "constructor", "constructor.builtin", "embedded",
-    "error", "escape", "function", "function.builtin", "keyword", "markup",
-    "markup.bold", "markup.heading", "markup.italic", "markup.link", "markup.link.url",
-    "markup.list", "markup.list.checked", "markup.list.numbered", "markup.list.unchecked",
-    "markup.list.unnumbered", "markup.quote", "markup.raw", "markup.raw.block",
-    "markup.raw.inline", "markup.strikethrough", "module", "number", "operator",
-    "property", "property.builtin", "punctuation", "punctuation.bracket",
-    "punctuation.delimiter", "punctuation.special", "string", "string.escape",
-    "string.regexp", "string.special", "string.special.symbol", "tag", "type",
-    "type.builtin", "variable", "variable.builtin", "variable.member", "variable.parameter",
+    "attribute",
+    "boolean",
+    "carriage-return",
+    "comment",
+    "comment.documentation",
+    "constant",
+    "constant.builtin",
+    "constructor",
+    "constructor.builtin",
+    "embedded",
+    "error",
+    "escape",
+    "function",
+    "function.builtin",
+    "keyword",
+    "markup",
+    "markup.bold",
+    "markup.heading",
+    "markup.italic",
+    "markup.link",
+    "markup.link.url",
+    "markup.list",
+    "markup.list.checked",
+    "markup.list.numbered",
+    "markup.list.unchecked",
+    "markup.list.unnumbered",
+    "markup.quote",
+    "markup.raw",
+    "markup.raw.block",
+    "markup.raw.inline",
+    "markup.strikethrough",
+    "module",
+    "number",
+    "operator",
+    "property",
+    "property.builtin",
+    "punctuation",
+    "punctuation.bracket",
+    "punctuation.delimiter",
+    "punctuation.special",
+    "string",
+    "string.escape",
+    "string.regexp",
+    "string.special",
+    "string.special.symbol",
+    "tag",
+    "type",
+    "type.builtin",
+    "variable",
+    "variable.builtin",
+    "variable.member",
+    "variable.parameter",
 ];
 
 /// Build exactly one `HighlightConfiguration`, for the lazy-load case: a real
@@ -183,7 +224,10 @@ fn mode_cold(file: &str, eager: bool) {
     let t_setup = Instant::now();
     let (config, config_count) = if eager {
         let configs = build_configs();
-        let found = configs.into_iter().find(|(name, _)| *name == lang).map(|(_, c)| c);
+        let found = configs
+            .into_iter()
+            .find(|(name, _)| *name == lang)
+            .map(|(_, c)| c);
         (found, 14)
     } else {
         (build_config_for(lang), 1)

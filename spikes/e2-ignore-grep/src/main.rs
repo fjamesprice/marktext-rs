@@ -19,11 +19,9 @@ fn main() {
     // `ignore`: walk this crate's own directory, honouring .gitignore rules.
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut file_count = 0usize;
-    for entry in WalkBuilder::new(dir).build() {
-        if let Ok(entry) = entry {
-            if entry.file_type().is_some_and(|t| t.is_file()) {
-                file_count += 1;
-            }
+    for entry in WalkBuilder::new(dir).build().flatten() {
+        if entry.file_type().is_some_and(|t| t.is_file()) {
+            file_count += 1;
         }
     }
 

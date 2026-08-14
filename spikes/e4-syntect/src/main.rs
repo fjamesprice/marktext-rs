@@ -17,7 +17,7 @@ use std::time::Instant;
 
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{
-    Highlighter, HighlightState, RangedHighlightIterator, Style, ThemeSet,
+    HighlightState, Highlighter, RangedHighlightIterator, Style, ThemeSet,
 };
 use syntect::parsing::{ParseState, ScopeStack, SyntaxSet};
 use syntect::util::LinesWithEndings;
@@ -45,7 +45,10 @@ fn main() {
 /// Resolve a fence's language to a syntax, falling back to plain text the way
 /// a highlighter must for a language it does not ship — recorded as a miss,
 /// not a panic.
-fn resolve<'a>(ps: &'a SyntaxSet, lang: Option<&str>) -> (&'a syntect::parsing::SyntaxReference, bool) {
+fn resolve<'a>(
+    ps: &'a SyntaxSet,
+    lang: Option<&str>,
+) -> (&'a syntect::parsing::SyntaxReference, bool) {
     match lang.and_then(|l| ps.find_syntax_by_token(l)) {
         Some(s) => (s, true),
         None => (ps.find_syntax_plain_text(), false),
@@ -276,7 +279,10 @@ fn mode_coverage() {
         .collect();
     exts.sort_unstable();
     exts.dedup();
-    println!("[syntect coverage] distinct file extensions/tokens={}", exts.len());
+    println!(
+        "[syntect coverage] distinct file extensions/tokens={}",
+        exts.len()
+    );
     for e in exts {
         println!("  .{e}");
     }

@@ -48,7 +48,11 @@ fn main() {
         ("tree-sitter-yaml", "0.7.2", tree_sitter_yaml::LANGUAGE),
         ("tree-sitter-bash", "0.25.1", tree_sitter_bash::LANGUAGE),
         ("tree-sitter-md", "0.5.3", tree_sitter_md::LANGUAGE),
-        ("tree-sitter-toml-ng", "0.7.0", tree_sitter_toml_ng::LANGUAGE),
+        (
+            "tree-sitter-toml-ng",
+            "0.7.0",
+            tree_sitter_toml_ng::LANGUAGE,
+        ),
         (
             "tree-sitter-c-sharp",
             "0.23.5",
@@ -62,7 +66,10 @@ fn main() {
         ("tree-sitter-scala", "0.26.2", tree_sitter_scala::LANGUAGE),
     ];
 
-    println!("[tree-sitter] grammars={} against the same generic snippet", grammars.len());
+    println!(
+        "[tree-sitter] grammars={} against the same generic snippet",
+        grammars.len()
+    );
     let mut total_nodes = 0usize;
     let mut combined_hash: u64 = 0xcbf29ce484222325;
     for (name, version, lang_fn) in grammars {

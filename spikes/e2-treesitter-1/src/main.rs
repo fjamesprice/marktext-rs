@@ -22,7 +22,9 @@ fn main() {
     parser
         .set_language(&tree_sitter_rust::LANGUAGE.into())
         .expect("load tree-sitter-rust grammar");
-    let tree = parser.parse(RUST_SNIPPET, None).expect("parse rust snippet");
+    let tree = parser
+        .parse(RUST_SNIPPET, None)
+        .expect("parse rust snippet");
     let root = tree.root_node();
     let sexp = root.to_sexp();
     let hash = e2_common::fnv1a(sexp.as_bytes());

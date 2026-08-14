@@ -11,8 +11,7 @@ use parley::{
 };
 
 const FONT_DIR: &str = r"C:\Dev\marktext\packages\muya\src\assets\styles\fonts";
-const SAMPLE_TEXT: &str =
-    "The quick brown fox jumps over the lazy dog 0123456789 — E2 binary-size harness, build parley-main";
+const SAMPLE_TEXT: &str = "The quick brown fox jumps over the lazy dog 0123456789 — E2 binary-size harness, build parley-main";
 
 fn main() {
     let mut font_cx = FontContext {
