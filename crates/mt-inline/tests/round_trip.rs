@@ -520,6 +520,12 @@ fn every_marktext_round_trip_fixture_tiles_and_round_trips() {
 /// exactly backwards: a file nobody runs on every commit is the one whose
 /// disappearance would go unnoticed longest. The count is also the correction
 /// to S7's gate row, which said 22; see this file's header.
+///
+/// **Twelve from M3 S1**, when `block-kinds.md` was added so that M3 §5 D10's
+/// layout goldens carry an instance of every `mt_doc::Block` variant. It is
+/// 1.6 KB, so it runs on every commit like the other small files rather than
+/// under `--ignored`, and `xtask/src/tokens.rs` sweeps it whole for the same
+/// reason.
 #[test]
 fn the_corpus_still_contains_the_files_this_gate_names() {
     let names: Vec<String> = corpus_files().into_iter().map(|(name, _)| name).collect();
@@ -535,6 +541,7 @@ fn the_corpus_still_contains_the_files_this_gate_names() {
         "250kb.md",
         "1mb.md",
         "5mb.md",
+        "block-kinds.md",
     ];
     for name in expected {
         assert!(
@@ -545,7 +552,7 @@ fn the_corpus_still_contains_the_files_this_gate_names() {
     assert_eq!(
         names.len(),
         expected.len(),
-        "bench/corpus/ holds eleven .md files plus a README; found {names:?}. A new one is \
+        "bench/corpus/ holds twelve .md files plus a README; found {names:?}. A new one is \
          welcome — add it here, and check whether the sweep in xtask/src/tokens.rs should \
          treat it like the two large prose files."
     );

@@ -2043,7 +2043,7 @@ fn every_input() -> Vec<Input> {
 #[test]
 fn the_deepest_input_this_repository_owns_is_an_order_of_magnitude_below_the_limit() {
     let inputs = every_input();
-    assert_eq!(inputs.len(), 1346, "the same denominator as the gates");
+    assert_eq!(inputs.len(), 1347, "the same denominator as the gates");
 
     let (deepest, name) = inputs
         .iter()
@@ -2073,8 +2073,12 @@ fn the_deepest_input_this_repository_owns_is_an_order_of_magnitude_below_the_lim
 ///
 /// | Claim | Measured |
 /// |---|---|
-/// | `m1 == m2` | **1334 of 1346** — [`SECOND_PASS_MOVERS`] is the other twelve |
-/// | `m2 == m3` | **1346 of 1346**, no exceptions at any denominator here |
+/// | `m1 == m2` | **1335 of 1347** — [`SECOND_PASS_MOVERS`] is the other twelve |
+/// | `m2 == m3` | **1347 of 1347**, no exceptions at any denominator here |
+///
+/// **1346 → 1347 at M3 S1**: `bench/corpus/block-kinds.md`, added for D10's
+/// layout goldens. It converges on the first pass and is not a second-pass
+/// mover.
 ///
 /// The second row is what makes the generated property above assertable without
 /// a list. The first is worth having anyway: *"one round trip is enough"* is a
@@ -2084,8 +2088,8 @@ fn the_round_trip_converges_over_every_input() {
     let inputs = every_input();
     assert_eq!(
         inputs.len(),
-        1346,
-        "11 corpus files + 11 round-trip fixtures + 1324 spec examples"
+        1347,
+        "12 corpus files + 11 round-trip fixtures + 1324 spec examples"
     );
 
     let mut still_moving = Vec::new();

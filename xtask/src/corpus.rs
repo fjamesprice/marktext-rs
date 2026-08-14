@@ -309,6 +309,112 @@ fn tables(n: usize) -> String {
     out
 }
 
+/// The five block kinds no other corpus file contains.
+///
+/// **Added at M3 S1, and the reason is D11.** `cargo xtask layout`'s goldens
+/// are M3-R6's instrument — *"the first golden for each block kind is read by
+/// eye once"* — and until this file existed, five of `mt_doc::Block`'s nineteen
+/// variants appeared in no golden at all: `setext-heading`, `html-block`,
+/// `frontmatter`, `diagram` and `footnote`. Three of those five are D11's own
+/// arms, so S1 would have shipped the decision implemented and never once
+/// exercised by the artifact that is supposed to verify it.
+///
+/// Three constraints shaped the content, and all three are load-bearing:
+///
+/// 1. **ASCII only.** `assets/fonts/NotoSansCJKsc-Regular-corpus-subset.otf` is
+///    a `pyftsubset` derived from this directory, so a codepoint outside the
+///    subset silently stops being covered. `assert_corpus_fully_covered` in
+///    `cargo xtask layout` fails loudly if that ever happens; the answer is to
+///    fix the corpus file, not to re-subset the font.
+/// 2. **Front matter must be the first bytes of the file** — `mt_md::block`
+///    only looks for it at offset 0 — so this file opens with it rather than
+///    with a heading.
+/// 3. **Small enough to read.** ~1.6 KB. The golden it produces is the one a
+///    human opens to review five block kinds at once, so a wall of generated
+///    prose would defeat its purpose.
+///
+/// A `Footnote` block additionally needs `Options::footnote`, which
+/// `Options::MUYA_DEFAULT` sets to `false` because muya does. `xtask layout`
+/// therefore parses **this file and only this file** with the extension on, and
+/// says so in the golden's `parse` header line. Every other harness reads this
+/// file at `MUYA_DEFAULT` like all the others, so the `[^why]:` line is a
+/// paragraph to them — exactly what this README says reference definitions are.
+fn block_kinds() -> String {
+    // Deliberately a literal rather than a generated document: the point of
+    // this input is that a reviewer can read it beside the golden it produces,
+    // and the PRNG above would make that harder rather than easier.
+    String::from(
+        r#"---
+title: Block kinds
+lang: en
+tags: [layout, goldens]
+---
+
+Setext heading, level one
+=========================
+
+Every block kind below appears in no other corpus file. This file exists so the
+layout goldens carry one readable instance of every `mt_doc::Block` variant, and
+so the four kinds that share the code-block box are exercised by an artifact
+rather than only by a unit test.
+
+Setext heading, level two
+-------------------------
+
+## Raw HTML
+
+<div class="callout">
+  <strong>Raw HTML</strong> lays out as its own source in the code-block style,
+  because there is no HTML engine here and the honest presentation of a
+  permanent failure state is the source with its language named.
+</div>
+
+A paragraph after the block, so the golden shows the HTML in flow rather than in
+isolation.
+
+## Diagrams
+
+All five of the diagram kinds, so that both diagram languages occur: `vega-lite`
+carries JSON and the other four carry YAML.
+
+```mermaid
+graph TD
+  A[parse] --> B[layout]
+  B --> C[render]
+```
+
+```plantuml
+@startuml
+Parser -> Layout: Document
+@enduml
+```
+
+```vega-lite
+{"mark": "bar", "data": {"values": [{"a": 1}, {"a": 3}, {"a": 2}]}}
+```
+
+```flowchart
+st=>start: Open file
+e=>end: Draw
+st->e
+```
+
+```sequence
+Alice->Bob: a display list
+Bob-->Alice: pixels
+```
+
+## Footnotes
+
+Footnotes are off in muya's own default options[^why], so this is the only
+corpus file the layout goldens parse with the extension on, and the golden's
+`parse` header line says which options produced it.
+
+[^why]: `Options::MUYA_DEFAULT` sets `footnote: false`, matching muya's config.
+"#,
+    )
+}
+
 fn rtl() -> String {
     let mut out = String::new();
     out.push_str("# RTL and mixed bidirectional text\n\n");
@@ -402,6 +508,7 @@ pub fn files() -> Vec<(&'static str, String)> {
         ("50-code-fences.md", code_fences(50)),
         ("100-inline-math.md", inline_math(100)),
         ("20-tables.md", tables(20)),
+        ("block-kinds.md", block_kinds()),
         ("rtl.md", rtl()),
         ("cjk.md", cjk()),
         ("emoji.md", emoji()),
@@ -481,7 +588,35 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing corpus file {expected}");
         }
-        assert_eq!(names.len(), 11);
+        // §14 step 4's eleven, plus `block-kinds.md` — added at M3 S1 and not
+        // in the plan's list, because the plan's list predates the layout
+        // goldens that need it. See `block_kinds`.
+        assert!(names.contains(&"block-kinds.md"));
+        assert_eq!(names.len(), 12);
+    }
+
+    /// The one file whose whole purpose is *which constructs it contains*.
+    ///
+    /// A generated corpus is verified by `--check` against its generator, which
+    /// proves the bytes did not drift but says nothing about whether they still
+    /// carry the five block kinds `block_kinds` exists to supply. If someone
+    /// edits the literal and drops the front matter, `--check` stays green and
+    /// only the layout golden notices — one harness later than it should.
+    #[test]
+    fn block_kinds_carries_the_five_constructs_no_other_corpus_file_has() {
+        let by_name: std::collections::HashMap<&str, String> = files().into_iter().collect();
+        let src = &by_name["block-kinds.md"];
+        assert!(src.starts_with("---\n"), "front matter must be at offset 0");
+        assert!(src.contains("\n=========================\n"), "setext h1");
+        assert!(src.contains("\n-------------------------\n"), "setext h2");
+        assert!(src.contains("\n<div class=\"callout\">\n"), "html block");
+        assert!(src.contains("\n[^why]: "), "footnote definition");
+        for kind in ["mermaid", "plantuml", "vega-lite", "flowchart", "sequence"] {
+            assert!(src.contains(&format!("\n```{kind}\n")), "{kind} diagram");
+        }
+        // The CJK face is a pyftsubset of this directory; a non-ASCII byte here
+        // is a coverage regression waiting to happen. See `block_kinds`.
+        assert!(src.is_ascii(), "block-kinds.md must be pure ASCII");
     }
 
     #[test]

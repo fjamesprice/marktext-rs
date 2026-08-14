@@ -192,7 +192,7 @@ fn spec_inputs(file: &str) -> Vec<Input> {
         .collect()
 }
 
-/// All 1346, in the order the gate names them.
+/// All 1347, in the order the gate names them.
 fn every_input() -> Vec<Input> {
     let mut inputs = corpus_inputs();
     inputs.extend(fixture_inputs());
@@ -217,7 +217,7 @@ fn every_input() -> Vec<Input> {
 /// padded — and this is what says the canonicalisation does not *lose*
 /// anything.
 ///
-/// **It holds over all 22 whole documents**, which is §9's exit gate in its own
+/// **It holds over all 23 whole documents**, which is §9's exit gate in its own
 /// words (*"round-trip is a fixed point on corpus + fixtures"*), and fails on
 /// **eleven single spec examples**, each appearing twice because CommonMark and
 /// GFM ship the same example. Those are [`FIXED_POINT_EXCEPTIONS`], and the
@@ -229,8 +229,8 @@ fn the_round_trip_is_a_fixed_point_over_every_input() {
     let inputs = every_input();
     assert_eq!(
         inputs.len(),
-        1346,
-        "11 corpus files + 11 round-trip fixtures + 1324 spec examples"
+        1347,
+        "12 corpus files + 11 round-trip fixtures + 1324 spec examples. The twelfth corpus          file is `block-kinds.md`, added at M3 S1 for D10's layout goldens; it is a fixed          point on the first run, like the other eleven."
     );
 
     let mut regressions = Vec::new();

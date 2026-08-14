@@ -61,13 +61,14 @@ the house style, for the reason `xtask/src/deps.rs:14-17` gives.
 Every file has the same three parts, separated by blank lines:
 
 ```text
-layout-golden v1                       <- format version
+layout-golden v2                       <- format version
 theme          muya-default            ┐
 theme-width    800.00                  │
 content-width  700.00                  │
-parley         a0752c7b…               ├ provenance: ten fields, one per line
-faces          ce47b224… rev 1         │
+parley         a0752c7b…               │
+faces          ce47b224… rev 1         ├ provenance: ten fields, one per line
 options        wrap-code-blocks=false line-numbers=false
+parse          muya-default  footnote=false math=true super-sub=false …
 input          rtl.md                  │
 input-bytes    1103                    │
 form           full                    ┘
@@ -91,13 +92,14 @@ both-themes-must-differ check cuts there, and so should your eye.
 
 | Field | What it pins |
 |---|---|
-| `layout-golden v1` | the format. Bumped when the serialization changes shape, so a file written by an older tool is identifiable from the artifact |
+| `layout-golden v2` | the format. Bumped when the serialization changes shape, so a file written by an older tool is identifiable from the artifact. **v2** added `parse` |
 | `theme` | which of the two shipped themes |
 | `theme-width` | `[metrics] content_width_px` — the CSS `max-width`, **800 or 750** |
 | `content-width` | that less `2 × container_padding_x_px` — **700 or 650**, the column text actually wraps in |
 | `parley` | **the commit `Cargo.lock` resolved parley to**, not the one `Cargo.toml` asked for. D2 pinned it and says a pin move is a reviewable event; this line is what makes that an artifact rather than an instruction |
 | `faces` | SHA-256 of `assets/fonts/faces.toml`, and its `[meta] revision` |
 | `options` | `LayoutOptions`, both at muya's own defaults. A golden generated with either flag on is a **different artifact** |
+| `parse` | `mt_md::Options`: a preset label, then every field spelled out. `muya-default` everywhere except `block-kinds.md`, which is `muya-default+footnote` — see below |
 | `input` / `input-bytes` | which corpus file, CRLF-normalised |
 | `form` | `full` or `digest` — see below |
 
@@ -111,13 +113,43 @@ every fallback run in the corpus moves; `faces.toml` says so itself —
 > pin (D2) — review it as one.
 
 Without this field that sentence has no artifact behind it. With it, a face
-swap is a one-line diff at the top of all twenty-two files, exactly as a pin
+swap is a one-line diff at the top of all twenty-four files, exactly as a pin
 move is.
 
 `cargo xtask layout` additionally **fails** if `Cargo.lock`'s parley revision
 and `faces.toml`'s `[meta] parley_rev` disagree: a face list measured against
 one shaper and used with another is a coverage claim about a program that is
 not running.
+
+### One input is parsed with a non-default option, and the header says so
+
+`Block::Footnote` **cannot occur in a default document.**
+`Options::MUYA_DEFAULT` sets `footnote: false` because
+`packages/muya/src/config` does, so `[^id]: …` parses as a paragraph — which is
+exactly what `bench/corpus/README.md` already says happens to reference
+definitions. The choice was therefore between never exercising the `footnote`
+block kind in a golden and turning the extension on for something.
+
+Turning it on **corpus-wide** was rejected twice over: it would rewrite every
+golden here, and it would make the whole set describe a configuration MarkText
+does not ship. So `cargo xtask layout` parses `bench/corpus/block-kinds.md` —
+and only that file — with `footnote: true`, and both of its goldens open with
+
+```text
+parse          muya-default+footnote  footnote=true math=true …
+```
+
+while the other twenty-two say `muya-default  footnote=false …`. **The label is
+in the artifact rather than only in the source** so that nobody reads that one
+golden as the default configuration. Every other harness in `xtask` — `blocks`,
+`diff`, `divergences`, `fuzz-seed` — reads the file at `MUYA_DEFAULT` like all
+the others, so to them the `[^why]:` line is a paragraph.
+
+The mechanism is a table (`PARSE_OVERRIDES` in `xtask/src/layout.rs`), not a
+special case: one entry today, and every field of `mt_md::Options` is spelled
+out on the line so a change to any of muya's defaults shows up as a one-line
+diff in all twenty-four files rather than silently shifting the geometry
+underneath them.
 
 ### Floats are two decimals, fixed
 
@@ -196,12 +228,12 @@ prints this table, so the cut can be re-checked rather than believed:
 
 | Input | Blocks | Items | Full golden, `muya-default` | Full golden, `dark` | Committed |
 |---|---:|---:|---:|---:|---:|
-| `250kb.md` | 2,686 | 6,483 | **801,984 B** | **804,314 B** | 968 / 960 B |
-| `1mb.md` | 10,744 | 26,173 | **3,241,917 B** | **3,265,804 B** | 976 / 968 B |
-| `5mb.md` | 54,896 | 133,498 | **16,658,369 B** | **16,763,187 B** | 984 / 976 B |
+| `250kb.md` | 2,686 | 6,483 | **802,129 B** | **804,459 B** | 1,113 / 1,105 B |
+| `1mb.md` | 10,744 | 26,173 | **3,242,062 B** | **3,265,949 B** | 1,121 / 1,113 B |
+| `5mb.md` | 54,896 | 133,498 | **16,658,514 B** | **16,763,332 B** | 1,129 / 1,121 B |
 
 Full goldens for those three would be **41.5 MB** across both themes, against
-**5.8 KB** as digests, and `5mb.md`'s would be a single 16 MB, 190,000-line
+**6.7 KB** as digests, and `5mb.md`'s would be a single 16 MB, 190,000-line
 file. **A golden a human cannot open is M3-R6's failure mode with extra
 steps**, so the three get a digest instead:
 
@@ -222,7 +254,7 @@ whole-file figures in the table above, which include the header and the census.
 equality** — a one-pixel drift anywhere in 54,896 blocks still fails the build.
 It just fails with a changed hash instead of a 16 MB diff.
 
-`250kb.md` at 800 KB is the marginal case, and the measurement that decided it
+`250kb.md` at 802 KB is the marginal case, and the measurement that decided it
 is not the byte count but the census: `250kb.md`, `1mb.md` and `5mb.md` all
 come from the same `prose()` generator in `xtask/src/corpus.rs` and exercise
 the same six block kinds — heading, paragraph, bullet list, code fence, block
@@ -245,6 +277,15 @@ the generator — and its `README.md` is hand-written documentation *about* that
 corpus. Laying it out would couple prose edits to golden churn: fixing a typo
 in the provenance table would rewrite two goldens and put a layout diff in a
 documentation commit, which erodes exactly the review ritual above.
+
+`bench/corpus/block-kinds.md` was **added at M3 S1 for this directory's sake**
+and is generated like everything else. Until it existed, five of the nineteen
+`mt_doc::Block` variants appeared in no golden at all — `setext-heading`,
+`html-block`, `frontmatter`, `diagram` and `footnote` — three of them being
+exactly the kinds D11 decides, so the decision was implemented and never once
+exercised by the artifact meant to verify it. See `corpus::block_kinds` for the
+three constraints that shaped the file (ASCII only, front matter first, small
+enough to read).
 
 `empty.md` is 0 bytes and is kept, because it is the edge case:
 `mt_md::parse("")` returns a document with **one empty paragraph**, so the
@@ -279,7 +320,43 @@ it produces is well-formed. Without the gate, a corpus edit quietly rewrites
 the goldens full of `.notdef` boxes and the diff reads as geometry.
 `assets/fonts/README.md` §6 has the contract and the regeneration command.
 
-Today: **346 distinct codepoints across 11 inputs, 0 tofu.**
+Today: **349 distinct codepoints across 12 inputs, 0 tofu.**
+
+---
+
+## M3-R6's by-eye review — which file to open, per block kind
+
+> **First goldens per block kind reviewed explicitly at S1 and the review
+> recorded.** — M3-R6
+
+All nineteen kinds have somewhere to look. References are to the
+`muya-default` file; the `dark` twin differs only in column width and palette,
+so read one and diff the other.
+
+| Block kind | Open | At |
+|---|---|---|
+| `paragraph` | `rtl.muya-default.txt` | `block 1` — four wrapped lines, one run each |
+| `atx-heading` | `rtl.muya-default.txt` | `block 0` (h1: 30px in a 42.00px line box), `block 2` (h2: 24px) |
+| `setext-heading` | `block-kinds.muya-default.txt` | `block 1` (h1) and `block 3` (h2) — same geometry as the ATX forms, which is the thing to check |
+| `thematic-break` | `10kb.muya-default.txt` | `block 65` — the only `line` item in the corpus. `style=dashed`, at the box centre **minus 1.00** |
+| `code-block` | `50-code-fences.muya-default.txt` | `block 3` (`lang=rust`), `block 35` (bare fence, **no** `lang=`) |
+| `html-block` | `block-kinds.muya-default.txt` | `block 5` — `lang=html`, and the only `overflow=` in the directory (15.69px: an 80-column line in a 669.2px code column that scrolls rather than wraps) |
+| `math-block` | `100-inline-math.muya-default.txt` | `block 2` — `lang=latex`, DejaVu Sans Mono at 14.40px |
+| `frontmatter` | `block-kinds.muya-default.txt` | `block 0` — `lang=yaml`, at the very top of the document |
+| `diagram` | `block-kinds.muya-default.txt` | `block 9`–`block 13` — all five kinds in order: `mermaid`, `plantuml`, `vega-lite`, `flowchart`, `sequence` |
+| `table` / `table.row` / `table.cell` | `20-tables.muya-default.txt` | `block 3` / `4` / `5`; `cjk.muya-default.txt` `block 21` for narrow max-content columns |
+| `block-quote` | `rtl.muya-default.txt` | `block 13` — the 2px bar at inset 15, starting at the child paragraph's top edge (margin collapse-through, visible) |
+| `bullet-list` / `list-item` | `rtl.muya-default.txt` | `block 4`–`block 9` — 5.60px disc at `radius=2.80` |
+| `order-list` | `10kb.muya-default.txt` | `block 12`–`block 13` — the marker run at `origin=[8.65 …]`, placed by its **trailing** edge |
+| `task-list` / `task-list-item` | `10kb.muya-default.txt` | `block 37`–`block 42` — ring 18px `radius=9.00`, box 14px `radius=7.00`, two `rot=-45.00` rects for the tick. `block 42` is the unchecked one |
+| `footnote` | `block-kinds.muya-default.txt` | `block 16` — tint at `#f7f7f7cc` (alpha 204 = the theme's 0.8 opacity), the `[^why]` label in DejaVu Sans Mono **Bold** at 14px absolute, and `block 17`'s nested paragraph at **12.80px** where the 0.8em compounds |
+
+The four D11 kinds that share the code-block box — `code-block`, `html-block`,
+`math-block`, `frontmatter`, plus `diagram` — are worth reading together: all
+five carry the same five rects at `muya-default` (a tint and four 1px border
+edges) and **one** rect at `dark`, which is the C1 finding that thirty of the
+thirty-two shipped themes zero the code-block border. It moves the glyph
+origin too, 15.40 → 14.40.
 
 ---
 
@@ -294,38 +371,36 @@ Stated here so a green run is not read as more than it is.
   text-bearing golden will move at S2, and that is the plan working.**
 - **No syntax highlighting.** `lang=` is populated; the code palette is unread.
   S3.
-- **Five of the nineteen block kinds appear in no golden**, because the corpus
-  contains none of them: `setext-heading`, `html-block`, `frontmatter`,
-  `diagram`, `footnote`. `cargo xtask layout` prints this on every run and
-  `the_kinds_no_golden_exercises_are_exactly_the_five_the_corpus_lacks` fails
-  in both directions, so a kind that gains its first golden gets read by eye
-  before the list is edited. Note that `footnote` is absent because
-  `Options::MUYA_DEFAULT` sets `footnote: false` — muya's own default — so
-  `10kb.md`'s `[^why]:` line parses as a paragraph.
-- **`overflow_x` is never non-zero** in any committed golden. The only corpus
-  file with a block wide enough to overflow its column is `bench/corpus/README.md`,
-  which is not an input.
-- **Five of the twelve committed faces never appear**: both Open Sans italics
-  and the three non-regular DejaVu Sans Mono faces. Nothing asks for italic or
-  bold monospace until S2 gives inline runs their own styles.
+- **Four of the twelve committed faces never appear**: both Open Sans italics
+  and the two DejaVu Sans Mono obliques. Nothing asks for italic text or
+  oblique monospace until S2 gives inline runs their own styles.
+  (`DejaVuSansMono-Bold` appears exactly twice — it is the footnote label,
+  which the theme sets to weight 600 in the bare `monospace` generic.)
+
+All nineteen block kinds **are** exercised, and
+`every_block_kind_is_exercised_by_at_least_one_golden` keeps them that way. The
+assertion is two-way: a kind that stops being exercised is a corpus regression,
+and a kind that starts being exercised is a golden nobody has read yet. Either
+way, open the golden before editing the list.
 
 ---
 
 ## Files
 
-Twenty-two goldens, **669,160 bytes**, all LF (`.gitattributes` is
+Twenty-four goldens, **687,653 bytes**, all LF (`.gitattributes` is
 `* text=auto eol=lf` for the whole repository).
 
 | Input | `muya-default` | `dark` | Form |
 |---|---:|---:|---|
-| `100-inline-math.md` | 18,181 | 16,225 | full |
-| `10kb.md` | 28,526 | 29,619 | full |
-| `1mb.md` | 976 | 968 | digest |
-| `20-tables.md` | 198,058 | 198,050 | full |
-| `250kb.md` | 968 | 960 | digest |
-| `50-code-fences.md` | 34,445 | 25,253 | full |
-| `5mb.md` | 984 | 976 | digest |
-| `cjk.md` | 20,876 | 21,001 | full |
-| `emoji.md` | 22,495 | 22,487 | full |
-| `empty.md` | 897 | 889 | full |
-| `rtl.md` | 13,167 | 13,159 | full |
+| `100-inline-math.md` | 18,326 | 16,370 | full |
+| `10kb.md` | 28,671 | 29,764 | full |
+| `1mb.md` | 1,121 | 1,113 | digest |
+| `20-tables.md` | 198,203 | 198,195 | full |
+| `250kb.md` | 1,113 | 1,105 | digest |
+| `50-code-fences.md` | 34,590 | 25,398 | full |
+| `5mb.md` | 1,129 | 1,121 | digest |
+| `block-kinds.md` | 8,330 | 6,973 | full |
+| `cjk.md` | 21,021 | 21,146 | full |
+| `emoji.md` | 22,640 | 22,632 | full |
+| `empty.md` | 1,042 | 1,034 | full |
+| `rtl.md` | 13,312 | 13,304 | full |

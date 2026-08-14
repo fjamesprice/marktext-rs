@@ -8,14 +8,14 @@
 //!
 //! # What this is, and what it is not
 //!
-//! [`diff.rs`](crate::diff) is RUST-REWRITE-PLAN.md §11.2's harness: 22 whole
+//! [`diff.rs`](crate::diff) is RUST-REWRITE-PLAN.md §11.2's harness: 23 whole
 //! **documents**, driven through `mt-cli --dump-state`, gated on
 //! `mt_md::parse` returning `Ok` and therefore skipped until S3.
 //! [`tokens.rs`](crate::tokens) is M1's, one layer *down*, and compares the
 //! token stream of one leaf block.
 //!
 //! This one is between them. It compares the **block tree** — names and `meta`
-//! at S1, names, `meta` and leaf text at S2 — over §4 C1's 1344 inputs, and it
+//! at S1, names, `meta` and leaf text at S2 — over §4 C1's 1345 inputs, and it
 //! exists because S1 and S2 need a gate before `parse` is allowed to answer.
 //! D6 stages the three ratchets by entry point and the first of them wakes at
 //! S3; a stage with no gate until then would be two stages of unmeasured work.
@@ -41,7 +41,7 @@
 //!
 //! - `xtask` already depends on `mt-md` and on `mt-inline`, and `tokens.rs`
 //!   already compares in-process for the same reason — a second process per
-//!   input is 1344 process spawns to answer a question that needs none.
+//!   input is 1345 process spawns to answer a question that needs none.
 //! - An `mt-cli` flag would be a **surface to delete at S3**, and D6's whole
 //!   point is that S3 is the commit where the entry points change. A function
 //!   `parse` will call is not.
@@ -109,14 +109,21 @@ pub struct Input {
     pub label: String,
 }
 
-/// §4 C1's comparison set: 1344 inputs from four sources.
+/// §4 C1's comparison set: 1345 inputs from four sources.
 ///
 /// | Source | Options | Count |
 /// |---|---|---:|
 /// | CommonMark 0.31 fixtures | `SPEC` | 652 |
 /// | GFM 0.29-gfm fixtures | `SPEC` | 672 |
 /// | `spec/fixtures/marktext-round-trip/` | `MUYA_DEFAULT` | 11 |
-/// | `bench/corpus/`, the files ≤ 300 KB | `MUYA_DEFAULT` | 9 |
+/// | `bench/corpus/`, the files ≤ 300 KB | `MUYA_DEFAULT` | 10 |
+///
+/// **C1 measured 1344, not 1345.** The tenth corpus file, `block-kinds.md`, was
+/// added at M3 S1 so that D10's layout goldens carry an instance of every
+/// `mt_doc::Block` variant (see `corpus::block_kinds`). It went through this
+/// harness before the goldens were generated and agreed with `MarkdownToState`
+/// on names, `meta` **and** leaf text on the first run, which is why the floors
+/// below moved up by one input and seventeen leaves rather than being widened.
 ///
 /// The two large generated corpus files are excluded by size and **said so**
 /// rather than dropped: `1mb.md` and `5mb.md` are 1 MB and 5 MB of generated
@@ -337,7 +344,7 @@ fn strip_text(value: &mut Value) {
 /// Counted on the **TypeScript** side and reported on every run, including
 /// runs where the text is inside the comparison: it is the denominator, and a
 /// runner that quietly stopped comparing would otherwise print the same
-/// `1344/1344 agree` line as one that did.
+/// `1345/1345 agree` line as one that did.
 fn leaf_text_gap(ts: &Value, rs: &Value) -> (usize, usize) {
     fn walk(ts: &Value, rs: &Value, leaves: &mut usize, differing: &mut usize) {
         match (ts, rs) {
@@ -648,8 +655,8 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
         texts_disagreeing.len(),
         threw.len()
     );
-    // A run of 1344 agreements over 1344 empty trees would print the same line
-    // as a run over 1344 real ones, so the size of what was compared is
+    // A run of 1345 agreements over 1345 empty trees would print the same line
+    // as a run over 1345 real ones, so the size of what was compared is
     // printed beside it. `leaves` is counted on the **TypeScript** side, which
     // makes it a statement about the reference engine's output rather than
     // about the port's — the cheapest form of the negative control M1 S6 asks
@@ -671,26 +678,32 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
     // the floor becomes what it measured, or the margin between the two can be
     // eaten without anything firing.
     const C1_NAMES: usize = 1167;
-    const NAMES_FLOOR: usize = 1344;
+    const NAMES_FLOOR: usize = 1345;
     // The denominator. Nothing else in this runner notices a comparison that
-    // silently stops comparing: 1344 inputs whose leaves were all projected
-    // away would print the same `1344/1344 agree` line as a real run. S1
+    // silently stops comparing: 1345 inputs whose leaves were all projected
+    // away would print the same `1345/1345 agree` line as a real run. S1
     // printed this number; S2 enforces it, because leaf text is now inside the
     // gate rather than beside it.
-    const LEAVES_FLOOR: usize = 4985;
+    //
+    // **4985 → 5002 at M3 S1**, when `bench/corpus/block-kinds.md` added
+    // seventeen leaves. The floor moves with a *measured* addition and never
+    // with a failure; a drop is still the failure this const exists to catch.
+    const LEAVES_FLOOR: usize = 5002;
     let mut below_floor = false;
-    if inputs.len() == 1344 {
+    if inputs.len() == NAMES_FLOOR {
         let names_agreeing = inputs.len() - names_disagreeing.len();
         println!(
-            "  names: {names_agreeing}/1344 — §4 C1 measured {C1_NAMES}/1344 before any mapping"
+            "  names: {names_agreeing}/{NAMES_FLOOR} — §4 C1 measured {C1_NAMES}/1344 before \
+             any mapping"
         );
         if names_agreeing < NAMES_FLOOR {
             below_floor = true;
             println!(
-                "  FAIL  below S2's floor of {NAMES_FLOOR}/1344 on names. §4 C1 measured\n\
-                 \x20       {C1_NAMES} for an *unmapped* pulldown-cmark; S1 and S2 both\n\
-                 \x20       measured 1344, so anything less is the mapping layer breaking\n\
-                 \x20       something it was not supposed to touch."
+                "  FAIL  below S2's floor of {NAMES_FLOOR} on names. §4 C1 measured\n\
+                 \x20       {C1_NAMES}/1344 for an *unmapped* pulldown-cmark; S1 and S2 both\n\
+                 \x20       measured 1344/1344 and M3 S1 measured {NAMES_FLOOR}/{NAMES_FLOOR},\n\
+                 \x20       so anything less is the mapping layer breaking something it was\n\
+                 \x20       not supposed to touch."
             );
         }
         if leaves < LEAVES_FLOOR {
@@ -730,19 +743,32 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// §4 C1's input set, at the size C1 measured. If a fixture is added or a
-    /// corpus file crosses the size limit, the gate stops being comparable
-    /// with the 1167/1344 this stage is measured against.
+    /// §4 C1's input set, at the size C1 measured plus what has been added
+    /// since. If a fixture is added or a corpus file crosses the size limit,
+    /// the gate stops being comparable with the 1167/1344 this stage is
+    /// measured against — so the number moves only with a note beside it.
+    ///
+    /// **1344 → 1345 at M3 S1**: `bench/corpus/block-kinds.md`, added so that
+    /// D10's layout goldens exercise every `mt_doc::Block` variant. It agreed
+    /// with `MarkdownToState` on the first run.
     #[test]
-    fn the_input_set_is_c1s_1344() {
+    fn the_input_set_is_c1s_1344_plus_block_kinds() {
         let inputs = collect_inputs(&crate::repo_root()).expect("collect");
-        assert_eq!(inputs.len(), 1344, "§4 C1's comparison set is 1344 inputs");
+        assert_eq!(inputs.len(), 1345, "§4 C1's 1344 plus block-kinds.md");
         let spec = inputs
             .iter()
             .filter(|i| i.options == OptionSet::Spec)
             .count();
         assert_eq!(spec, 1324, "652 CommonMark + 672 GFM at SPEC");
-        assert_eq!(inputs.len() - spec, 20, "11 round-trip fixtures + 9 corpus");
+        assert_eq!(
+            inputs.len() - spec,
+            21,
+            "11 round-trip fixtures + 10 corpus"
+        );
+        assert!(
+            inputs.iter().any(|i| i.label.ends_with("block-kinds.md")),
+            "block-kinds.md must go through the differential, not around it"
+        );
     }
 
     /// The two generated megabyte corpus files are the ones excluded, and no

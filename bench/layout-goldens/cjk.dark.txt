@@ -1,10 +1,11 @@
-layout-golden v1
+layout-golden v2
 theme          dark
 theme-width    750.00
 content-width  650.00
 parley         a0752c7bdc3ad88dac19fc194d2b8e57e59bea2e
 faces          ce47b2244a2ee54b2189d04641b5381824cfa80b6872d656931c5127437f7f58 rev 1
 options        wrap-code-blocks=false line-numbers=false
+parse          muya-default  footnote=false math=true super-sub=false gitlab=true front-matter=true trim-code-blanks=false list-indent=Spaces(1)
 input          cjk.md
 input-bytes    1266
 form           full
