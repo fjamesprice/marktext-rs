@@ -60,3 +60,7 @@
 //! Stub. `mt-layout` is M3 (§9). §13 R2 asks for the awkward parley cases —
 //! inline-widget baseline alignment, nested bidi interacting with inline
 //! boxes — to be exercised in **M3 week 1, not month 5**.
+
+pub mod theme;
+
+pub use theme::{Theme, ThemeError};

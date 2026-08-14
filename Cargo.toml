@@ -116,13 +116,43 @@ opt-level = "s"
 #
 # It satisfies §1's purity constraint for `mt-md`: no windowing, no GPU, no
 # I/O. `cargo xtask deps` still reports 14 workspace crates.
+#
+# `serde` and `toml` are the seventh and eighth third-party crates and the
+# sixth and seventh scheduled ones. `serde` is named in §12.2's size budget and
+# in the "not until the milestone that needs it" spirit of the policy above;
+# M3 S1 is the milestone, and M3.md §5 D4 is the decision that needs it — the
+# theme model is "a typed `Theme` struct whose fields are all required,
+# deserialized from TOML".
+#
+# **Why TOML rather than Rust literals**, given that M2's ratchets are consts
+# for exactly the reason that they have a single consumer: this one does not.
+# D4 puts an import path on M5 that reads a MarkText installation's 32
+# stylesheets and emits themes, and its output has to be *writable*. **A const
+# is not an export target.** The same argument rules out `include_str!`-ing
+# CSS and parsing it at runtime, which D4 rejects separately: the CSS that
+# would have to be parsed is not the flat variable block but the three themes
+# that redefine pseudo-elements outright, and a parser faithful to that is a
+# cascade engine — the thing M3 exists in order not to have.
+#
+# Feature sets are cut to what deserialization needs. `serde` keeps only `std`
+# and `derive`. `toml` drops `display` (and with it the whole `toml_writer`
+# subtree): S1 only ever reads a theme, and the writer belongs to whichever
+# stage builds M5's exporter. What is left under `toml` is `toml_parser`,
+# `winnow`, `toml_datetime`, `serde_spanned` and `serde_core` — all pure.
+#
+# Both satisfy §1's purity constraint for `mt-layout`: no I/O, no windowing,
+# no GPU. The two shipped themes reach the binary through `include_str!`,
+# which is a compile-time read, so `cargo xtask deps`' source scan for
+# filesystem calls in the four headless crates stays clean.
 [workspace.dependencies]
 ammonia = "4"
 fancy-regex = "0.19"
 proptest = "1"
 pulldown-cmark = { version = "0.13", default-features = false }
 ropey = "1"
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
 serde_json = "1"
+toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
 
 mt-app = { path = "crates/mt-app", version = "0.1.0" }
 mt-cli = { path = "crates/mt-cli", version = "0.1.0" }

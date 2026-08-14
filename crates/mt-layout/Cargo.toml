@@ -10,3 +10,10 @@ repository.workspace = true
 [dependencies]
 mt-doc.workspace = true
 mt-inline.workspace = true
+
+# The theme model (M3.md §5 D4): a typed `Theme` whose fields are all required,
+# deserialized from TOML. See the workspace manifest for why TOML rather than
+# Rust consts, and for the feature cuts. Both crates are pure — no I/O, no
+# windowing, no GPU — so `mt-layout` stays on `cargo xtask deps`' headless list.
+serde.workspace = true
+toml.workspace = true
