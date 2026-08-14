@@ -19,6 +19,11 @@ pure-RTL text hides exactly the bugs that matter.
 
 > ציטוט בעברית שמכיל 42 ומספרים נוספים 3.14159.
 
+## An image at byte zero
+
+![diagram](./diagram.png) صورة في بداية فقرة عربية، وهذا هو الموضع الذي
+يضع فيه محرك النص الصندوق في الطرف الخطأ من السطر.
+
 ## Mixed in one paragraph
 
 An English sentence, then مرحبا بالعالم, then back to English, then שלום עולם,

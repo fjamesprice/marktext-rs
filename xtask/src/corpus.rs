@@ -430,6 +430,24 @@ fn rtl() -> String {
     out.push_str("## עברית\n\n");
     out.push_str("שורה בעברית עם *הדגשה* ומילה באנגלית parley באמצע המשפט.\n\n");
     out.push_str("> ציטוט בעברית שמכיל 42 ומספרים נוספים 3.14159.\n\n");
+    // M3.md §8 M3-R1's surviving residual, given an input. parley assigns an
+    // inline box the bidi level of the run *before* it and level 0 when there
+    // is none (`parley/src/shape/mod.rs:204-208`, under upstream's own TODO
+    // saying the box should be analysed as a U+FFFC instead), so a box at byte
+    // 0 of a paragraph at base level 1 lands at the wrong end of the line.
+    // There were exactly two inline images in twelve corpus files — cjk.md:16
+    // and 10kb.md:53 — and neither was in an RTL paragraph, so the one piece of
+    // known-wrong geometry in M3 had nothing to run against and the RLM
+    // workaround was indistinguishable from a workaround that does not work.
+    //
+    // The markup is deliberately **pure ASCII**: M3-R11's CJK face is a
+    // `pyftsubset` derived from this corpus, and `assert_corpus_fully_covered`
+    // hard-fails on a tofu glyph before `cargo xtask layout` does anything.
+    out.push_str("## An image at byte zero\n\n");
+    out.push_str(
+        "![diagram](./diagram.png) صورة في بداية فقرة عربية، وهذا هو الموضع الذي\n\
+         يضع فيه محرك النص الصندوق في الطرف الخطأ من السطر.\n\n",
+    );
     out.push_str("## Mixed in one paragraph\n\n");
     out.push_str(
         "An English sentence, then مرحبا بالعالم, then back to English, then שלום עולם,\n\
