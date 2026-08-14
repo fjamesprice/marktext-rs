@@ -217,6 +217,24 @@ pub struct BlockDisplay {
     pub kind: BlockKind,
     /// The block's border box in document coordinates.
     pub bounds: Rect,
+    /// The language this block's text is written in, for the five kinds
+    /// [`BlockKind::uses_code_block_box`] names, and `None` for everything
+    /// else.
+    ///
+    /// **This is the "with the language named" half of D11**, and it is a field
+    /// rather than drawn chrome on purpose. D11 forbids inventing placeholder
+    /// chrome, so nothing here paints a badge; what the decision needs is that
+    /// the mapping *exists*, is computed once by `mt-layout`
+    /// ([`crate::flow::code_language`]), and is visible to the two consumers
+    /// that will need it — S3's highlighter, which asks which grammar to run,
+    /// and D10's goldens, where `code-block lang=rust` beside `math-block
+    /// lang=latex` is the evidence that D11 landed rather than a claim that it
+    /// did.
+    ///
+    /// For a `CodeBlock` it is `Block::highlight_language()` — the **first
+    /// word** of the info string, never the whole string — so it is `None` for
+    /// a bare fence.
+    pub language: Option<String>,
     /// Everything to draw, **in paint order** — backgrounds before borders
     /// before glyphs.
     ///
@@ -426,6 +444,18 @@ pub struct GlyphRun {
     ///
     /// S2 owes the map from these offsets to visible-text offsets (C6); this
     /// range is the block-text side of it.
+    ///
+    /// # Two runs in the list are not into any block's text
+    ///
+    /// A list marker (`1.`, `9)`) and a code block's line numbers are text
+    /// `mt-layout` *generates*; there is nothing in the document they are a
+    /// range of, and their ranges index the generated string instead. They are
+    /// distinguishable without a flag: a marker is the only glyph run a
+    /// **container** block ever carries, and line numbers appear only when
+    /// `LayoutOptions::code_block_line_numbers` is on, which is off by default.
+    /// Recorded rather than flagged because a `bool` here would cost every run
+    /// in the list a byte for two cases, and M4 has to know the distinction
+    /// either way.
     pub text_range: Range<usize>,
     /// Baseline y, in document coordinates. Every [`Glyph::y`] is already
     /// relative to the same origin, so this is redundant for drawing and

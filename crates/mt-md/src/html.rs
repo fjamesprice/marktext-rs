@@ -846,11 +846,9 @@ fn front_matter_style(style: FrontmatterStyle) -> &'static str {
 }
 
 fn front_matter_lang(lang: FrontmatterLang) -> &'static str {
-    match lang {
-        FrontmatterLang::Yaml => "yaml",
-        FrontmatterLang::Toml => "toml",
-        FrontmatterLang::Json => "json",
-    }
+    // Delegates to `mt-doc` rather than repeating the table — see
+    // `DiagramKind::info_lang` for the argument (M3.md §5 D11).
+    lang.info_lang()
 }
 
 /// `IMathBlockMeta.mathStyle`, which is `""` for the `$$` form and `"gitlab"`
@@ -864,14 +862,13 @@ fn math_style(style: MathStyle) -> &'static str {
 
 /// The info string a diagram fence was opened with, which is the class the
 /// inert placeholder carries.
+///
+/// **Moved to `mt-doc` at M3 S1.** M3.md §5 D11 requires `mt-layout` to reuse
+/// this mapping rather than introduce a parallel one, so the table now lives on
+/// [`DiagramKind::info_lang`] and every consumer — this renderer, the
+/// serializer, the state dumper and `mt-layout` — reads the same five strings.
 fn diagram_lang(kind: DiagramKind) -> &'static str {
-    match kind {
-        DiagramKind::Mermaid => "mermaid",
-        DiagramKind::PlantUml => "plantuml",
-        DiagramKind::VegaLite => "vega-lite",
-        DiagramKind::Flowchart => "flowchart",
-        DiagramKind::Sequence => "sequence",
-    }
+    kind.info_lang()
 }
 
 #[cfg(test)]

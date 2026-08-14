@@ -689,6 +689,20 @@ pub enum FrontmatterLang {
     Json,
 }
 
+impl FrontmatterLang {
+    /// The language name this frontmatter dialect serializes to.
+    ///
+    /// Lives here for the same reason [`DiagramKind::info_lang`] does — see
+    /// that method's doc comment for the argument.
+    pub fn info_lang(self) -> &'static str {
+        match self {
+            FrontmatterLang::Yaml => "yaml",
+            FrontmatterLang::Toml => "toml",
+            FrontmatterLang::Json => "json",
+        }
+    }
+}
+
 /// `IFrontmatterMeta.style` — `"-"` | `"+"` | `";"` | `"{"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrontmatterStyle {
@@ -721,6 +735,39 @@ pub enum DiagramKind {
     VegaLite,
     Flowchart,
     Sequence,
+}
+
+impl DiagramKind {
+    /// The info-string word this diagram kind was opened with — `mermaid`,
+    /// `plantuml`, `vega-lite`, `flowchart`, `sequence`.
+    ///
+    /// # Why the table lives in `mt-doc` and not next to its callers
+    ///
+    /// M3.md §5 D11 lays math and diagram blocks out as their own source in
+    /// the code-block style *with the language named*, and says the mapping
+    /// must **reuse** the one `mt-md` already has rather than introducing a
+    /// parallel table. At the point that was written there were three
+    /// identical copies inside `mt-md` (`html.rs`, `serialize.rs`,
+    /// `state.rs`), and `mt-layout` would have made a fourth.
+    ///
+    /// [`DiagramKind`] is this crate's type, so a method on it is the one
+    /// place all four consumers can reach. It also means `mt-layout` needs no
+    /// dependency edge on `mt-md`, which keeps D5's *"`mt-layout` must not
+    /// reference `mt_md::reparse`"* true by construction rather than by
+    /// inspection.
+    ///
+    /// The **reverse** direction — info string → `DiagramKind` — deliberately
+    /// stays in `mt-md::block`: it also yields a [`DiagramLang`], it is
+    /// parser-shaped rather than data-shaped, and only one caller wants it.
+    pub fn info_lang(self) -> &'static str {
+        match self {
+            DiagramKind::Mermaid => "mermaid",
+            DiagramKind::PlantUml => "plantuml",
+            DiagramKind::VegaLite => "vega-lite",
+            DiagramKind::Flowchart => "flowchart",
+            DiagramKind::Sequence => "sequence",
+        }
+    }
 }
 
 /// `ITableCellMeta.align` — `"none"` | `"left"` | `"center"` | `"right"`.
@@ -1039,6 +1086,30 @@ mod tests {
             text: Text::Inline(String::new()),
         };
         assert_eq!(block.highlight_language(), None);
+    }
+
+    /// The single copy of the diagram-kind table, so that a sixth consumer
+    /// added later fails here rather than drifting quietly. The five strings
+    /// are the info-string words `mt-md::block`'s parser recognises.
+    #[test]
+    fn every_diagram_kind_names_the_info_string_it_was_opened_with() {
+        let all = [
+            (DiagramKind::Mermaid, "mermaid"),
+            (DiagramKind::PlantUml, "plantuml"),
+            (DiagramKind::VegaLite, "vega-lite"),
+            (DiagramKind::Flowchart, "flowchart"),
+            (DiagramKind::Sequence, "sequence"),
+        ];
+        for (kind, lang) in all {
+            assert_eq!(kind.info_lang(), lang, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn every_frontmatter_lang_names_itself() {
+        assert_eq!(FrontmatterLang::Yaml.info_lang(), "yaml");
+        assert_eq!(FrontmatterLang::Toml.info_lang(), "toml");
+        assert_eq!(FrontmatterLang::Json.info_lang(), "json");
     }
 
     #[test]

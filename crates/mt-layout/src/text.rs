@@ -89,6 +89,12 @@ pub struct TextRequest<'a> {
     pub base_direction: BaseDirection,
     /// The colour to paint the glyphs.
     pub brush: Brush,
+    /// Extra advance after every cluster, in px. CSS `letter-spacing`.
+    ///
+    /// Zero everywhere except the code block's line-number gutter, whose
+    /// `letter-spacing: -1px` (`blockSyntax.css:336`) is a real theme field and
+    /// would otherwise have no consumer.
+    pub letter_spacing: f32,
 }
 
 impl<'a> TextRequest<'a> {
@@ -106,6 +112,7 @@ impl<'a> TextRequest<'a> {
             align: TextAlign::Start,
             base_direction: BaseDirection::Auto,
             brush: Brush::default(),
+            letter_spacing: 0.0,
         }
     }
 }
@@ -173,6 +180,9 @@ impl TextShaper {
             FontStyle::Normal
         }));
         builder.push_default(StyleProperty::Brush(request.brush));
+        if request.letter_spacing != 0.0 {
+            builder.push_default(StyleProperty::LetterSpacing(request.letter_spacing));
+        }
         builder.set_base_direction(match request.base_direction {
             BaseDirection::Auto => ParleyBaseDirection::Auto,
             BaseDirection::Ltr => ParleyBaseDirection::Ltr,
@@ -390,5 +400,6 @@ mod tests {
         assert_eq!(request.align, TextAlign::Start);
         assert_eq!(request.base_direction, BaseDirection::Auto);
         assert_eq!(request.brush, Brush::default());
+        assert_eq!(request.letter_spacing, 0.0);
     }
 }

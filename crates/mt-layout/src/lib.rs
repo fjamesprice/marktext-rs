@@ -62,17 +62,24 @@
 //! boxes — to be exercised in **M3 week 1, not month 5**.
 
 pub mod display;
+pub mod flow;
 pub mod fonts;
+// Private: every item in it is `pub(crate)`. D8's public surface is the
+// display list, not the recipe that fills it.
+mod paint;
 pub mod text;
 pub mod theme;
+pub mod units;
 
 pub use display::{
     BlockDisplay, BlockKind, Brush, DisplayItem, DisplayList, FilledRect, Glyph, GlyphRun,
     InlineBoxFlow, InlineBoxItem, Rect, StrokedLine,
 };
+pub use flow::{LayoutOptions, LayoutTree, code_language, layout, layout_with};
 pub use fonts::{
     Axis, BUNDLED_FACES_TOML, Face, FaceList, FaceListMeta, FaceRole, FaceStyle, FontError, FontId,
     Fonts,
 };
 pub use text::{BaseDirection, ShapedText, TextRequest, TextShaper};
 pub use theme::{Theme, ThemeError};
+pub use units::Units;

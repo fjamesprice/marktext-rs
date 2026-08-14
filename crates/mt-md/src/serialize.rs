@@ -830,14 +830,10 @@ fn serialize_front_matter(lang: FrontmatterLang, style: FrontmatterStyle, text: 
     result
 }
 
+/// See [`DiagramKind::info_lang`]: the table moved to `mt-doc` at M3 S1 so
+/// that `mt-layout` reuses it instead of adding a fourth copy (M3.md §5 D11).
 fn diagram_type(kind: DiagramKind) -> &'static str {
-    match kind {
-        DiagramKind::Mermaid => "mermaid",
-        DiagramKind::PlantUml => "plantuml",
-        DiagramKind::VegaLite => "vega-lite",
-        DiagramKind::Flowchart => "flowchart",
-        DiagramKind::Sequence => "sequence",
-    }
+    kind.info_lang()
 }
 
 /// `function escapeText(str) { return str.replace(/(?<!\\)\|/g, '\\|') }`.

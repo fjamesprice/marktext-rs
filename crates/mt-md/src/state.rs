@@ -34,8 +34,8 @@
 //! free and the JavaScript side canonicalises explicitly.
 
 use mt_doc::{
-    Align, Block, BulletMarker, CodeKind, DiagramKind, DiagramLang, Document, FrontmatterLang,
-    FrontmatterStyle, MathStyle, NodeId, OrderDelim,
+    Align, Block, BulletMarker, CodeKind, DiagramLang, Document, FrontmatterLang, FrontmatterStyle,
+    MathStyle, NodeId, OrderDelim,
 };
 use serde_json::{Map, Value, json};
 
@@ -194,13 +194,9 @@ fn meta_of(block: &Block) -> Option<Map<String, Value>> {
             // `type` is a keyword. The JSON keeps muya's spelling.
             meta.insert(
                 "type".into(),
-                json!(match kind {
-                    DiagramKind::Mermaid => "mermaid",
-                    DiagramKind::PlantUml => "plantuml",
-                    DiagramKind::VegaLite => "vega-lite",
-                    DiagramKind::Flowchart => "flowchart",
-                    DiagramKind::Sequence => "sequence",
-                }),
+                // `DiagramKind::info_lang` — one table in `mt-doc`, four
+                // consumers; see its doc comment (M3.md §5 D11).
+                json!(kind.info_lang()),
             );
         }
         Block::TableCell { align, .. } => {
@@ -263,7 +259,9 @@ fn marker_str(marker: BulletMarker) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mt_doc::{Text, Underline};
+    // `DiagramKind` is only named by the tests now that the kind -> string
+    // table moved to `mt-doc` (M3.md §5 D11).
+    use mt_doc::{DiagramKind, Text, Underline};
 
     /// Build a document from a flat list of top-level blocks.
     ///
