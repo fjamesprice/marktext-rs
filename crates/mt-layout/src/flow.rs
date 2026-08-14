@@ -193,6 +193,18 @@ use crate::units::Units;
 /// file can set it. Its default here is muya's default — **`false`**.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LayoutOptions {
+    /// muya's `wrapCodeBlocks`, default `false`
+    /// (`packages/muya/src/config/index.ts:324`, the line immediately after
+    /// `codeBlockLineNumbers`).
+    ///
+    /// **Off, a long fence line scrolls; it does not wrap.** The base rule is
+    /// `.mu-code-block .mu-code { overflow: auto }`
+    /// (`blockSyntax.css:230-236`) over the UA's `pre { white-space: pre }`;
+    /// `white-space: pre-wrap` appears only inside
+    /// `.mu-code-wrap .mu-code-block .mu-code` (`:239-245`), the class this
+    /// option toggles. The block's box stays the column and its glyphs run
+    /// past it — see [`BlockDisplay::overflow_x`].
+    pub wrap_code_blocks: bool,
     /// muya's `codeBlockLineNumbers`, default `false`.
     ///
     /// When on, a fenced or indented code block takes an extra
@@ -305,19 +317,38 @@ pub fn code_language(block: &Block) -> Option<&str> {
 enum FontStack {
     Body,
     Code,
+    /// `font-family: monospace` on the footnote's `[^id]:` label —
+    /// `blockSyntax.css:1025`. A bare CSS generic with no named stack in front
+    /// of it, which is a different thing from [`FontStack::Code`] even though
+    /// both resolve to DejaVu Sans Mono under the committed set.
+    FootnoteLabel,
 }
 
 /// Whether a block's text wraps at its content width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Wrap {
-    /// Everything in normal flow. `pre` included: muya sets
-    /// `white-space: pre-wrap` on `.mu-code` (`blockSyntax.css:242`), so a long
-    /// code line wraps rather than overflowing.
+    /// Everything in normal flow.
     AtContentWidth,
-    /// A table cell at build time. Its column width is not known until the
-    /// other cells have been measured, so it is shaped unbroken — that *is* its
+    /// Shaped unbroken. Three callers, for three different reasons.
+    ///
+    /// A **table cell**, because its column width is not known until the other
+    /// cells have been measured: it is shaped unbroken — that *is* its
     /// max-content width — and re-broken during placement. One `Layout`, one
     /// shaping pass, one re-break; C5 measured re-breaking as the cheap half.
+    ///
+    /// A **code block**, unless `LayoutOptions::wrap_code_blocks` is on.
+    /// muya's default is `wrapCodeBlocks: false`
+    /// (`packages/muya/src/config/index.ts:324`) and the base rule is
+    /// `.mu-code-block .mu-code { overflow: auto }`
+    /// (`blockSyntax.css:230-236`) over the UA's `pre { white-space: pre }`.
+    /// The `white-space: pre-wrap` at `:242` is inside
+    /// `.mu-code-wrap .mu-code-block .mu-code`, opened at `:239` — the class
+    /// the option toggles, not the base rule. A long fence line therefore
+    /// **scrolls**, and the overflow is reported as
+    /// [`BlockDisplay::overflow_x`](crate::display::BlockDisplay::overflow_x).
+    ///
+    /// A **marker or label** — an ordered number, a footnote's `[^id]:` — which
+    /// is one short unbreakable token placed by its own edge.
     Never,
 }
 
@@ -427,6 +458,8 @@ struct Planned {
     /// gutter, which really is a fixed-width box (`width: 2.5em`); an ordered
     /// marker does not wrap at all and is placed by its trailing edge instead.
     aux_width: f32,
+    /// A footnote label's `(left, top)` against the block's padding box.
+    label_offset: (f32, f32),
     marker: Option<Marker>,
     language: Option<String>,
     /// The colour text inside this block inherits — body colour, or a
@@ -434,6 +467,9 @@ struct Planned {
     /// `inherit` (C4: muya's own default) resolves against the *item's* colour
     /// and the item is a container with no style of its own.
     color: Brush,
+    /// The cumulative CSS `opacity` in force on this block, `1.0` outside a
+    /// footnote. See [`dim`].
+    opacity: f32,
     /// True for a `CodeBlock` when the gutter option is on.
     line_numbers: bool,
     content_x: f32,
@@ -445,6 +481,17 @@ struct Planned {
 impl Planned {
     fn content_y(&self) -> f32 {
         self.bounds.y + self.edges.top()
+    }
+
+    /// How far the laid-out text runs past the content box's right edge.
+    ///
+    /// Non-zero for an unwrapped code block (`wrapCodeBlocks: false`, the muya
+    /// default) and for any block holding one unbreakable run wider than its
+    /// column. See [`BlockDisplay::overflow_x`].
+    fn overflow_x(&self) -> f32 {
+        self.text
+            .built()
+            .map_or(0.0, |t| (t.width() - self.content_width).max(0.0))
     }
 }
 
@@ -508,6 +555,9 @@ impl LayoutTree {
             list_depth: 0,
             quote_depth: 0,
             in_list_item: false,
+            in_tight_list: false,
+            opacity: 1.0,
+            tight_item_child: false,
             in_header_row: false,
         };
         let roots = document.children(document.root()).to_vec();
@@ -719,6 +769,7 @@ impl LayoutTree {
         let families = match style.stack {
             FontStack::Body => &self.theme.fonts.body,
             FontStack::Code => &self.theme.fonts.code,
+            FontStack::FootnoteLabel => &self.theme.footnote.label_fonts,
         };
         let mut request = TextRequest::new(text, families, style.font_size, style.line_height);
         request.weight = style.weight;
@@ -888,8 +939,12 @@ impl LayoutTree {
 
         // Backgrounds first, then borders, then decorations, then glyphs —
         // `BlockDisplay::items` is paint order.
+        // Every brush below is dimmed by the block's cumulative CSS opacity;
+        // `style.brush` was already dimmed at plan time.
+        let paint_brush = |c| dim(Brush::resolve(c, Brush::default()), b.opacity);
+
         if b.kind.uses_code_block_box() {
-            let bg = Brush::resolve(colors.code_block_bg, Brush::default());
+            let bg = paint_brush(colors.code_block_bg);
             if bg.is_visible() {
                 items.push(DisplayItem::Rect(FilledRect {
                     rect: b.bounds,
@@ -902,13 +957,13 @@ impl LayoutTree {
                 &mut items,
                 b.bounds,
                 self.theme.code_block.border_width_px,
-                Brush::resolve(colors.editor_10, Brush::default()),
+                paint_brush(colors.editor_10),
             );
         }
 
         match b.kind {
             BlockKind::Footnote => {
-                let bg = Brush::resolve(colors.editor_04, Brush::default());
+                let bg = paint_brush(colors.editor_04);
                 if bg.is_visible() {
                     items.push(DisplayItem::Rect(FilledRect::new(b.bounds, bg)));
                 }
@@ -917,7 +972,7 @@ impl LayoutTree {
                 items.push(DisplayItem::Rect(paint::blockquote_bar(
                     &self.theme,
                     b.bounds,
-                    Brush::resolve(colors.blockquote_border, Brush::default()),
+                    paint_brush(colors.blockquote_border),
                 )));
             }
             BlockKind::TableCell => {
@@ -938,7 +993,7 @@ impl LayoutTree {
                         b.bounds.height + w,
                     ),
                     w,
-                    Brush::resolve(colors.table_border, Brush::default()),
+                    paint_brush(colors.table_border),
                 );
             }
             BlockKind::ThematicBreak => {
@@ -950,7 +1005,7 @@ impl LayoutTree {
                         b.content_width,
                         b.bounds.height - b.edges.top() - b.edges.bottom(),
                     ),
-                    Brush::resolve(colors.hr, Brush::default()),
+                    paint_brush(colors.hr),
                 )));
             }
             _ => {}
@@ -968,6 +1023,17 @@ impl LayoutTree {
         if b.kind != BlockKind::ThematicBreak {
             if let Some(text) = b.text.built() {
                 text.emit(fonts, b.content_x, b.content_y(), &mut items)?;
+            }
+        }
+
+        if b.kind == BlockKind::Footnote {
+            if let Some(label) = b.aux.built() {
+                // `position: absolute; top: 0.2em; left: 0` against the
+                // figure's padding box, plus the label's own `padding: 0 1em`
+                // (`blockSyntax.css:1012-1019`). The figure has no border, so
+                // its padding box is its border box.
+                let (dx, dy) = b.label_offset;
+                label.emit(fonts, b.bounds.x + dx, b.bounds.y + dy, &mut items)?;
             }
         }
 
@@ -991,6 +1057,7 @@ impl LayoutTree {
             kind: b.kind,
             bounds: b.bounds,
             language: b.language.clone(),
+            overflow_x: b.overflow_x(),
             items,
         })
     }
@@ -1100,12 +1167,23 @@ struct Ctx {
     color: Brush,
     content_x: f32,
     content_width: f32,
-    /// How many lists enclose this node. Drives the disc → circle → square
-    /// cascade (`blockSyntax.css:445-456`), which counts list ancestors of
-    /// either kind rather than bullet lists only.
+    /// How many **bullet or ordered** lists enclose this node. Drives the
+    /// disc → circle → square cascade, and counts exactly what the selectors
+    /// at `blockSyntax.css:445-456` can see: every one of them requires a
+    /// `ul.mu-bullet-list` or `ol.mu-order-list` ancestor, and a task list
+    /// carries neither class (`gfm/taskList/index.ts:42`). So a task list in
+    /// the chain is **transparent** — it neither adds a level nor resets one.
     list_depth: u32,
     quote_depth: u32,
     in_list_item: bool,
+    /// This node is a list item of a list whose `loose` is false, i.e. one
+    /// muya gave `mu-tight-list` to.
+    in_tight_list: bool,
+    /// The product of every ancestor's CSS `opacity`. See [`dim`].
+    opacity: f32,
+    /// This node is a direct child of such an item — the `p` of
+    /// `.mu-tight-list > li > p` (`blockSyntax.css:401-404`).
+    tight_item_child: bool,
     in_header_row: bool,
 }
 
@@ -1146,11 +1224,24 @@ impl LayoutTree {
         let mut line_numbers = false;
         let mut aux_style: Option<TextStyle> = None;
         let mut aux_width = 0.0f32;
+        let mut child_opacity = ctx.opacity;
+        let mut label: Option<(String, TextStyle, f32, f32)> = None;
 
         match block {
             Block::Paragraph { .. } => {
-                edges.margin_top = units.em(metrics.block_margin_em);
-                edges.margin_bottom = edges.margin_top;
+                // `.mu-tight-list > li > p { margin: 0; padding: 0 }`
+                // (`blockSyntax.css:400-404`), at a specificity that beats
+                // `.mu-container p`. muya pushes `mu-tight-list` whenever a
+                // list's `meta.loose` is false — `bulletList/index.ts:46-47`,
+                // `orderList/index.ts:44-45`, `gfm/taskList/index.ts:43-44` —
+                // so `Block::{BulletList,OrderList,TaskList}::loose` is a
+                // layout input and not just round-trip metadata. Only the
+                // inter-item gaps go; the list's own outer margin is
+                // untouched.
+                if !ctx.tight_item_child {
+                    edges.margin_top = units.em(metrics.block_margin_em);
+                    edges.margin_bottom = edges.margin_top;
+                }
                 style = Some(body_style(&units, metrics.line_height, ctx.color));
             }
             Block::ThematicBreak { .. } => {
@@ -1210,6 +1301,13 @@ impl LayoutTree {
                     Brush::resolve(colors.editor_50, ctx.color),
                 );
                 s.stack = FontStack::Code;
+                // `wrapCodeBlocks: false` is muya's default, and the base rule
+                // is `overflow: auto` over the UA's `white-space: pre`. An
+                // unwrapped fence overflows its box rather than growing it;
+                // `BlockDisplay::overflow_x` is how far.
+                if !self.options.wrap_code_blocks {
+                    s.wrap = Wrap::Never;
+                }
                 style = Some(s);
             }
             Block::BlockQuote { .. } => {
@@ -1228,7 +1326,15 @@ impl LayoutTree {
             }
             Block::BulletList { .. } | Block::OrderList { .. } | Block::TaskList { .. } => {
                 let lists = &theme.lists;
-                let margin = if ctx.in_list_item {
+                // `li > ol.mu-order-list, li > ul.mu-bullet-list { margin: 0 }`
+                // — `blockSyntax.css:421-425`. **`ul.mu-task-list` is not in
+                // that selector**, and `gfm/taskList/index.ts:42` gives it only
+                // `MU_TASK_LIST`, so a task list nested in a list item keeps
+                // the shared `margin: 0.5em 0`. Unreachable from today's
+                // corpus; modelled anyway, because a corpus file that acquires
+                // the shape later would rewrite a golden with no visible cause.
+                let nested_zeroed = ctx.in_list_item && !matches!(block, Block::TaskList { .. });
+                let margin = if nested_zeroed {
                     lists.nested_margin_em
                 } else {
                     lists.margin_em
@@ -1275,7 +1381,7 @@ impl LayoutTree {
                 s.wrap = Wrap::Never;
                 style = Some(s);
             }
-            Block::Footnote { .. } => {
+            Block::Footnote { identifier, .. } => {
                 let f = &theme.footnote;
                 units = units.with_font_size(units.font_size_em(f.font_size_em));
                 edges.margin_top = units.em(f.margin_y_em);
@@ -1284,13 +1390,57 @@ impl LayoutTree {
                 edges.padding_bottom = units.em(f.padding_bottom_em);
                 edges.padding_left = units.em(f.padding_start_em);
                 edges.padding_right = units.em(f.padding_end_em);
+                // `opacity: 0.8` is on the whole figure, so it reaches every
+                // descendant — see `dim`.
+                child_opacity = ctx.opacity * f.opacity;
+                // The `[^id]:` label: an absolutely-positioned box against the
+                // figure's padding box, at an **absolute** 14px in a monospace
+                // generic, so its `top` and `padding` resolve against 14 and
+                // not against the footnote's 12.8. `::before` is `[^` and
+                // `::after` is `]:` (`blockSyntax.css:1029-1035`), which is why
+                // the brackets are here and not in `identifier`.
+                let mut s = body_style(
+                    &units.child().with_font_size(f.label_font_size_px),
+                    metrics.line_height,
+                    dim(
+                        Brush::resolve(colors.editor, Brush::default()),
+                        child_opacity,
+                    ),
+                );
+                s.stack = FontStack::FootnoteLabel;
+                s.weight = f.label_weight;
+                s.wrap = Wrap::Never;
+                label = Some((
+                    format!("[^{identifier}]:"),
+                    s,
+                    f.label_padding_x_em * f.label_font_size_px,
+                    f.label_top_em * f.label_font_size_px,
+                ));
             }
+        }
+
+        // Every brush this block will paint with is dimmed once, here, by the
+        // opacity in force on it. `child_opacity` and not `ctx.opacity`:
+        // `opacity` on an element dims the element itself as well as its
+        // subtree, so a footnote's own tint is already at 0.8.
+        if let Some(style) = &mut style {
+            style.brush = dim(style.brush, child_opacity);
         }
 
         let content_x = ctx.content_x + edges.border + edges.padding_left;
         let content_width =
             (ctx.content_width - edges.padding_left - edges.padding_right - 2.0 * edges.border)
                 .max(0.0);
+
+        // The footnote label rides in the aux slot, the same one an ordered
+        // marker uses: no block kind needs two pieces of synthetic text.
+        let mut label_offset = (0.0f32, 0.0f32);
+        let mut aux_text = String::new();
+        if let Some((text, style, dx, dy)) = label {
+            aux_text = text;
+            aux_style = Some(style);
+            label_offset = (dx, dy);
+        }
 
         let index = self.blocks.len();
         self.blocks.push(Planned {
@@ -1302,13 +1452,15 @@ impl LayoutTree {
             style,
             text: ShapeState::Unbuilt,
             intrinsic_width: 0.0,
-            aux_text: String::new(),
+            aux_text,
             aux_style,
             aux: ShapeState::Unbuilt,
             aux_width,
+            label_offset,
             marker: None,
             language: code_language(block).map(str::to_owned),
             color: child_color,
+            opacity: child_opacity,
             line_numbers,
             content_x,
             content_width,
@@ -1321,14 +1473,31 @@ impl LayoutTree {
                 block,
                 Block::BulletList { .. } | Block::OrderList { .. } | Block::TaskList { .. }
             );
+            // Only a bullet or ordered list is visible to the marker cascade;
+            // see `Ctx::list_depth`.
+            let is_marker_list =
+                matches!(block, Block::BulletList { .. } | Block::OrderList { .. });
+            let is_item = matches!(block, Block::ListItem { .. } | Block::TaskListItem { .. });
+            let tight = match block {
+                Block::BulletList { loose, .. }
+                | Block::OrderList { loose, .. }
+                | Block::TaskList { loose, .. } => !*loose,
+                _ => false,
+            };
             let child_ctx = Ctx {
                 units,
                 color: child_color,
                 content_x,
                 content_width,
-                list_depth: ctx.list_depth + u32::from(is_list),
+                list_depth: ctx.list_depth + u32::from(is_marker_list),
                 quote_depth: ctx.quote_depth + u32::from(matches!(block, Block::BlockQuote { .. })),
-                in_list_item: matches!(block, Block::ListItem { .. } | Block::TaskListItem { .. }),
+                in_list_item: is_item,
+                // A list tells its items whether it is tight; an item passes
+                // that on to its own direct children, which is exactly the
+                // reach of `.mu-tight-list > li > p`.
+                in_tight_list: if is_list { tight } else { false },
+                opacity: child_opacity,
+                tight_item_child: is_item && ctx.in_tight_list,
                 in_header_row: ctx.in_header_row,
             };
             let child_nodes = children.to_vec();
@@ -1412,6 +1581,32 @@ impl LayoutTree {
 // ---------------------------------------------------------------------------
 // Style helpers
 // ---------------------------------------------------------------------------
+
+/// Apply a CSS `opacity` to a brush.
+///
+/// # This is an approximation, and the approximation is deliberate
+///
+/// CSS `opacity` is a **group** operation: the subtree is composited first and
+/// the result is then made translucent. The display list has no layer
+/// primitive and D8's contract is that `mt-render` computes no geometry and
+/// makes no decisions, so a group opacity would mean asking every renderer to
+/// allocate an offscreen surface for one block kind.
+///
+/// Instead each primitive's own alpha is multiplied. The two differ only where
+/// two translucent things inside the group overlap — for a footnote that is
+/// glyphs over the `--editor-color-04` tint, both of which are opaque before
+/// dimming, so the visible difference is the tint showing through the text at
+/// 0.8 rather than the text sitting on an already-composited 0.8 background.
+/// **Recorded as a divergence** rather than hidden: if M6's PDF export needs
+/// exact group semantics, this is the function to replace and
+/// `BlockDisplay` is where the group would have to be declared.
+fn dim(brush: Brush, opacity: f32) -> Brush {
+    if opacity >= 1.0 {
+        return brush;
+    }
+    let a = (f32::from(brush.a) * opacity.clamp(0.0, 1.0)).round();
+    Brush::rgba(brush.r, brush.g, brush.b, a as u8)
+}
 
 fn body_style(units: &Units, line_height: f32, brush: Brush) -> TextStyle {
     TextStyle {

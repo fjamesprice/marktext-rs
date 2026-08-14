@@ -1189,6 +1189,7 @@ fn the_line_number_gutter_is_off_by_default_and_widens_the_padding_when_on() {
         f32::INFINITY,
         &LayoutOptions {
             code_block_line_numbers: true,
+            ..LayoutOptions::default()
         },
     );
     assert!(
@@ -1217,8 +1218,340 @@ fn the_gutter_never_reaches_math_diagrams_html_or_frontmatter() {
         f32::INFINITY,
         &LayoutOptions {
             code_block_line_numbers: true,
+            ..LayoutOptions::default()
         },
     );
     assert!(!tree.blocks[0].line_numbers);
     assert!((tree.blocks[0].edges.padding_left - 14.4).abs() < 1e-3);
+}
+
+// ---------------------------------------------------------------------------
+// Post-review fixes
+// ---------------------------------------------------------------------------
+
+fn list_of(doc: &mut Doc, parent: NodeId, loose: bool, items: usize) -> NodeId {
+    let list = doc.push(
+        parent,
+        Block::BulletList {
+            marker: BulletMarker::Dash,
+            loose,
+            children: vec![],
+        },
+    );
+    for i in 0..items {
+        let item = doc.push(list, Block::ListItem { children: vec![] });
+        doc.para(item, &format!("item {i}"));
+    }
+    list
+}
+
+/// **Finding 1.** `Block::{BulletList,OrderList,TaskList}::loose` is a layout
+/// input, not just round-trip metadata: muya pushes `mu-tight-list` when it is
+/// false (`bulletList/index.ts:46-47`) and
+/// `.mu-tight-list > li > p { margin: 0 }` (`blockSyntax.css:400-404`) beats
+/// `.mu-container p` on specificity. A three-item tight list is 16px shorter
+/// than the loose one beside it, and `1mb.md` holds roughly 372 of them.
+#[test]
+fn a_tight_list_drops_the_gaps_between_its_items_and_a_loose_one_keeps_them() {
+    let theme = Theme::muya_default();
+
+    let mut tight_doc = Doc::new();
+    let root = tight_doc.root();
+    list_of(&mut tight_doc, root, false, 3);
+    let tight = placed(&tight_doc, &theme);
+
+    let mut loose_doc = Doc::new();
+    let root = loose_doc.root();
+    list_of(&mut loose_doc, root, true, 3);
+    let loose = placed(&loose_doc, &theme);
+
+    // 0 list, then item/paragraph pairs at 1/2, 3/4, 5/6.
+    let paras = [2usize, 4, 6];
+    let tight_tops: Vec<f32> = paras.iter().map(|&i| tight.blocks[i].bounds.y).collect();
+    let loose_tops: Vec<f32> = paras.iter().map(|&i| loose.blocks[i].bounds.y).collect();
+    assert_eq!(
+        tight_tops,
+        vec![0.0, 0.0, 0.0],
+        "no text height, no margins"
+    );
+    assert_eq!(loose_tops, vec![0.0, 8.0, 16.0], "one 0.5em per gap");
+
+    for &i in &paras {
+        assert_eq!(tight.blocks[i].edges.margin_top, 0.0);
+        assert_eq!(tight.blocks[i].edges.margin_bottom, 0.0);
+        assert_eq!(loose.blocks[i].edges.margin_top, 8.0);
+    }
+    // The list's own outer margin is untouched by tightness.
+    assert_eq!(tight.blocks[0].edges.margin_top, 8.0);
+    assert_eq!(loose.blocks[0].edges.margin_top, 8.0);
+}
+
+/// Tightness reaches exactly `.mu-tight-list > li > p` and no further: a
+/// paragraph inside a blockquote inside a tight list item is not a direct child
+/// of the item and keeps its margin.
+#[test]
+fn tightness_does_not_reach_past_the_items_direct_children() {
+    let mut doc = Doc::new();
+    let root = doc.root();
+    let list = doc.push(
+        root,
+        Block::BulletList {
+            marker: BulletMarker::Dash,
+            loose: false,
+            children: vec![],
+        },
+    );
+    let item = doc.push(list, Block::ListItem { children: vec![] });
+    doc.para(item, "direct");
+    let quote = doc.push(item, Block::BlockQuote { children: vec![] });
+    doc.para(quote, "indirect");
+    let tree = placed(&doc, &Theme::muya_default());
+    assert_eq!(tree.kind(2), BlockKind::Paragraph);
+    assert_eq!(tree.blocks[2].edges.margin_top, 0.0, "the direct child");
+    assert_eq!(tree.kind(4), BlockKind::Paragraph);
+    assert_eq!(tree.blocks[4].edges.margin_top, 8.0, "inside the quote");
+}
+
+/// **Finding 5.** `li > ol.mu-order-list, li > ul.mu-bullet-list { margin: 0 }`
+/// (`blockSyntax.css:421-425`) does not name `ul.mu-task-list`, and
+/// `gfm/taskList/index.ts:42` gives it only `MU_TASK_LIST`. So a task list
+/// nested in a list item keeps the shared `margin: 0.5em 0` where a bullet list
+/// in the same position loses it.
+#[test]
+fn a_nested_task_list_keeps_the_margin_a_nested_bullet_list_loses() {
+    let mut doc = Doc::new();
+    let root = doc.root();
+    let outer = doc.push(
+        root,
+        Block::BulletList {
+            marker: BulletMarker::Dash,
+            loose: true,
+            children: vec![],
+        },
+    );
+    let item = doc.push(outer, Block::ListItem { children: vec![] });
+    doc.push(
+        item,
+        Block::BulletList {
+            marker: BulletMarker::Dash,
+            loose: true,
+            children: vec![],
+        },
+    );
+    doc.push(
+        item,
+        Block::TaskList {
+            marker: BulletMarker::Dash,
+            loose: true,
+            children: vec![],
+        },
+    );
+    let tree = placed(&doc, &Theme::muya_default());
+    assert_eq!(tree.kind(2), BlockKind::BulletList);
+    assert_eq!(tree.blocks[2].edges.margin_top, 0.0);
+    assert_eq!(tree.kind(3), BlockKind::TaskList);
+    assert_eq!(
+        tree.blocks[3].edges.margin_top, 8.0,
+        "no CSS selector zeroes a nested task list's margin"
+    );
+}
+
+/// **Finding 6.** Every selector in `blockSyntax.css:445-456` requires a
+/// `ul.mu-bullet-list` or `ol.mu-order-list` ancestor, and a task list carries
+/// neither class. A bullet list inside a task-list item is therefore still at
+/// level one — `disc`, not `circle`.
+#[test]
+fn a_task_list_is_transparent_to_the_bullet_cascade() {
+    let mut doc = Doc::new();
+    let root = doc.root();
+    let tasks = doc.push(
+        root,
+        Block::TaskList {
+            marker: BulletMarker::Dash,
+            loose: true,
+            children: vec![],
+        },
+    );
+    let task_item = doc.push(
+        tasks,
+        Block::TaskListItem {
+            checked: false,
+            children: vec![],
+        },
+    );
+    let bullets = doc.push(
+        task_item,
+        Block::BulletList {
+            marker: BulletMarker::Dash,
+            loose: true,
+            children: vec![],
+        },
+    );
+    doc.push(bullets, Block::ListItem { children: vec![] });
+    let tree = placed(&doc, &Theme::muya_default());
+    let item = tree
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::ListItem)
+        .expect("a bullet item");
+    assert_eq!(item.marker, Some(Marker::Bullet(ListMarker::Disc)));
+}
+
+/// …but a task list in the middle of a chain does not *reset* the cascade
+/// either: `ul.mu-bullet-list ul.mu-bullet-list` is a descendant selector, so
+/// the inner bullet list is still `circle`.
+#[test]
+fn a_task_list_in_the_middle_of_a_chain_does_not_reset_it() {
+    let mut doc = Doc::new();
+    let root = doc.root();
+    let outer = doc.push(
+        root,
+        Block::BulletList {
+            marker: BulletMarker::Dash,
+            loose: true,
+            children: vec![],
+        },
+    );
+    let outer_item = doc.push(outer, Block::ListItem { children: vec![] });
+    let tasks = doc.push(
+        outer_item,
+        Block::TaskList {
+            marker: BulletMarker::Dash,
+            loose: true,
+            children: vec![],
+        },
+    );
+    let task_item = doc.push(
+        tasks,
+        Block::TaskListItem {
+            checked: false,
+            children: vec![],
+        },
+    );
+    let inner = doc.push(
+        task_item,
+        Block::BulletList {
+            marker: BulletMarker::Dash,
+            loose: true,
+            children: vec![],
+        },
+    );
+    doc.push(inner, Block::ListItem { children: vec![] });
+    let tree = placed(&doc, &Theme::muya_default());
+    let markers: Vec<_> = tree
+        .blocks
+        .iter()
+        .filter(|b| b.kind == BlockKind::ListItem)
+        .map(|b| b.marker.clone())
+        .collect();
+    assert_eq!(
+        markers,
+        vec![
+            Some(Marker::Bullet(ListMarker::Disc)),
+            Some(Marker::Bullet(ListMarker::Circle)),
+        ]
+    );
+}
+
+/// **Finding 7, the opacity half.** `opacity: 0.8` on `figure.mu-footnote`
+/// dims the tint and every glyph under it. There is no layer primitive, so it
+/// is applied per brush — see `dim`.
+#[test]
+fn a_footnote_dims_its_tint_and_everything_inside_it() {
+    let theme = Theme::muya_default();
+    let mut doc = Doc::new();
+    let root = doc.root();
+    doc.para(root, "outside");
+    let footnote = doc.push(
+        root,
+        Block::Footnote {
+            identifier: "a".into(),
+            children: vec![],
+        },
+    );
+    doc.para(footnote, "inside");
+    let tree = placed(&doc, &theme);
+    assert_eq!(tree.blocks[0].opacity, 1.0, "a paragraph outside");
+    assert_eq!(tree.blocks[1].opacity, 0.8, "the figure");
+    assert_eq!(tree.blocks[2].opacity, 0.8, "and its child");
+
+    let outside = tree.blocks[0].style.as_ref().unwrap().brush;
+    let inside = tree.blocks[2].style.as_ref().unwrap().brush;
+    assert_eq!(outside.a, 255);
+    assert_eq!(inside.a, 204, "255 x 0.8");
+    assert_eq!(
+        (inside.r, inside.g, inside.b),
+        (outside.r, outside.g, outside.b)
+    );
+
+    let list = emitted(&doc, &theme);
+    let tint = fills(find(&list, BlockKind::Footnote))[0];
+    assert_eq!(tint.brush.a, 204);
+}
+
+/// **Finding 7, the label half.** `[^` + identifier + `]:` at an absolute 14px
+/// in a monospace generic, weight 600, positioned against the figure's padding
+/// box. The theme now carries all four, so nothing is invented at the call
+/// site — which is why Correction 5 refused to draw it before.
+#[test]
+fn the_footnote_label_is_planned_from_theme_fields_alone() {
+    let theme = Theme::muya_default();
+    let mut doc = Doc::new();
+    let root = doc.root();
+    let footnote = doc.push(
+        root,
+        Block::Footnote {
+            identifier: "note-1".into(),
+            children: vec![],
+        },
+    );
+    doc.para(footnote, "body");
+    let tree = placed(&doc, &theme);
+    let f = &tree.blocks[0];
+    assert_eq!(f.aux_text, "[^note-1]:");
+    let style = f.aux_style.as_ref().expect("a label style");
+    assert_eq!(style.font_size, 14.0, "absolute px, not the footnote's em");
+    assert_eq!(style.weight, 600);
+    assert_eq!(style.stack, FontStack::FootnoteLabel);
+    assert_eq!(style.wrap, Wrap::Never);
+    assert_eq!(style.brush.a, 204, "dimmed by the figure's opacity");
+    // `padding: 0 1em` and `top: 0.2em`, both of the label's own 14px.
+    assert_eq!(f.label_offset.0, 14.0);
+    assert!((f.label_offset.1 - 2.8).abs() < 1e-4);
+    assert_eq!(theme.footnote.label_fonts, vec!["monospace".to_string()]);
+}
+
+/// **Finding 3.** `wrapCodeBlocks: false` is muya's default
+/// (`config/index.ts:324`), and the `white-space: pre-wrap` the old comment
+/// cited is inside `.mu-code-wrap`, not the base rule.
+#[test]
+fn code_blocks_do_not_wrap_by_default_and_do_when_the_option_is_on() {
+    let mut doc = Doc::new();
+    let root = doc.root();
+    doc.push(
+        root,
+        Block::CodeBlock {
+            kind: CodeKind::Fenced,
+            info: String::new(),
+            fence_len: Some(3),
+            text: Text::from("x"),
+        },
+    );
+    let theme = Theme::muya_default();
+    let off = plan(&doc, &theme);
+    assert_eq!(off.blocks[0].style.as_ref().unwrap().wrap, Wrap::Never);
+    let on = LayoutTree::plan(
+        &doc.doc,
+        &theme,
+        f32::INFINITY,
+        &LayoutOptions {
+            wrap_code_blocks: true,
+            ..LayoutOptions::default()
+        },
+    );
+    assert_eq!(
+        on.blocks[0].style.as_ref().unwrap().wrap,
+        Wrap::AtContentWidth
+    );
+    assert!(!LayoutOptions::default().wrap_code_blocks, "muya's default");
 }

@@ -43,10 +43,18 @@ use crate::theme::TextAlign;
 /// `main` partly for `set_base_direction` (#708): a document whose base
 /// direction is RTL cannot be laid out correctly without it, and 0.11.0 has no
 /// such call.
+///
+/// The variant this crate actually uses is [`Ltr`](Self::Ltr) — see
+/// [`TextRequest::new`] for why, and for the reference evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BaseDirection {
-    /// Infer from the first strong character — the CSS `dir="auto"` rule, and
-    /// what a markdown document with no other signal should get.
+    /// Infer from the first strong character — the CSS `dir="auto"` rule.
+    ///
+    /// **Not what MarkText does.** Its editor sets an explicit `dir` from a
+    /// preference whose enum is `["ltr", "rtl"]` with no `auto` at all, so this
+    /// variant reproduces nothing the reference can produce. It is carried
+    /// because it is a real parley setting and M5 may expose it; nothing in
+    /// `mt-layout` selects it.
     #[default]
     Auto,
     /// Left to right.
@@ -100,6 +108,30 @@ pub struct TextRequest<'a> {
 impl<'a> TextRequest<'a> {
     /// A request with the theme's body defaults, which is what every caller
     /// starts from and then overrides two fields of.
+    ///
+    /// # The base direction defaults to `Ltr`, not `Auto`, and that is deliberate
+    ///
+    /// [`BaseDirection::Auto`] is the CSS `dir="auto"` rule — infer from the
+    /// first strong character — and it is *not* what the reference does. The
+    /// desktop editor sets `dir` explicitly from a user preference
+    /// (`packages/desktop/src/renderer/src/components/editorWithTabs/editor.vue:5`,
+    /// `:dir="textDirection"`), and that preference is
+    /// `{"enum": ["ltr", "rtl"], "default": "ltr"}`
+    /// (`packages/desktop/src/main/preferences/schema.json:200-204`). There is
+    /// no `auto` in the enum at all. So a default install lays **every**
+    /// paragraph out at base level 0 — a Hebrew paragraph is left-aligned in
+    /// MarkText, and `Auto` would right-align it.
+    ///
+    /// Parity is the only thing a golden can be checked against, and `Auto` is
+    /// a divergence nobody chose. **Bidi correctness is unaffected**: the UBA
+    /// still reorders runs within each line, which is what the gate's "bidi
+    /// renders correctly" clause is about; only the paragraph's *base* level
+    /// and hence its alignment change.
+    ///
+    /// The field stays on the request rather than being hard-coded because D2
+    /// pinned parley partly for `set_base_direction` (#708). That is the
+    /// mechanism by which M5 exposes the same two-valued setting the reference
+    /// has, as a document or theme property, instead of inferring one.
     pub fn new(text: &'a str, families: &'a [String], font_size: f32, line_height: f32) -> Self {
         Self {
             text,
@@ -110,7 +142,7 @@ impl<'a> TextRequest<'a> {
             italic: false,
             max_width: None,
             align: TextAlign::Start,
-            base_direction: BaseDirection::Auto,
+            base_direction: BaseDirection::Ltr,
             brush: Brush::default(),
             letter_spacing: 0.0,
         }
@@ -398,7 +430,8 @@ mod tests {
         assert!(!request.italic);
         assert_eq!(request.max_width, None);
         assert_eq!(request.align, TextAlign::Start);
-        assert_eq!(request.base_direction, BaseDirection::Auto);
+        // Ltr and not Auto — reference parity; see `TextRequest::new`.
+        assert_eq!(request.base_direction, BaseDirection::Ltr);
         assert_eq!(request.brush, Brush::default());
         assert_eq!(request.letter_spacing, 0.0);
     }

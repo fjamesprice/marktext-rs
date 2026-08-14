@@ -156,6 +156,17 @@ padding_end_em = 2.0
 padding_bottom_em = 0.05
 padding_start_em = 1.0
 font_size_em = 0.8
+# `opacity: 0.8` on the whole figure — blockSyntax.css:998. Dims the tint, the
+# label and every glyph inside it.
+opacity = 0.8
+# The `[^id]:` label — blockSyntax.css:1010-1027. `font-size: 14px` is
+# absolute, so `label_top_em` and `label_padding_x_em` resolve against 14 and
+# not against the footnote's 12.8.
+label_top_em = 0.2
+label_padding_x_em = 1.0
+label_font_size_px = 14.0
+label_weight = 600
+label_fonts = ["monospace"]
 
 # ---------------------------------------------------------------------------
 # Colour — dark.theme.css:3-137, with the camelCase alias chains resolved.

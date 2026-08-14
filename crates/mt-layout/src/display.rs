@@ -235,6 +235,29 @@ pub struct BlockDisplay {
     /// word** of the info string, never the whole string — so it is `None` for
     /// a bare fence.
     pub language: Option<String>,
+    /// How far this block's items extend **past the right edge of its content
+    /// box**, in px. `0.0` when nothing overflows.
+    ///
+    /// # Why the display list needs a word for this at all
+    ///
+    /// muya's default is `wrapCodeBlocks: false`
+    /// (`packages/muya/src/config/index.ts:324`), and the base rule is
+    /// `.mu-code-block .mu-code { overflow: auto }` over the UA's
+    /// `pre { white-space: pre }` (`blockSyntax.css:230-236`). A long fence
+    /// line therefore **scrolls; it does not wrap** — the `<pre>` stays exactly
+    /// as wide as the column and its content is wider than its box.
+    ///
+    /// [`bounds`](Self::bounds) is the box and stays the column. The
+    /// [`Glyphs`](DisplayItem::Glyphs) inside it really do have coordinates to
+    /// the right of `bounds.max_x()`, and a renderer must therefore **clip to
+    /// `bounds`** rather than assume containment. This field is how much
+    /// horizontal scroll range that clipping hides, so S4 can draw a scrollbar
+    /// without re-measuring the items.
+    ///
+    /// It is not code-block-specific: a paragraph containing one unbreakable
+    /// word longer than the column overflows in exactly the same way, and
+    /// reports it here for the same reason.
+    pub overflow_x: f32,
     /// Everything to draw, **in paint order** — backgrounds before borders
     /// before glyphs.
     ///

@@ -199,12 +199,43 @@ pub(crate) fn push_ring(
 // Theme constructs
 // ---------------------------------------------------------------------------
 
+/// The `height` of the thematic break's `::before` box, before its border —
+/// `blockSyntax.css:179`.
+///
+/// A literal in muya's own sheet with no theme variable in front of it, and
+/// `ulysses` — the only theme that reshapes the rule at all
+/// (`ulysses.theme.css:246-252`) — overrides `width`, `left`, `border-top` and
+/// `transform` but **not** `height`. So it is the same 2px in every shipped
+/// theme, which is why it is a constant here rather than a `ThematicBreak`
+/// field. See [`thematic_break_rule`] for what it costs to get wrong.
+pub(crate) const THEMATIC_BREAK_BOX_HEIGHT_PX: f32 = 2.0;
+
 /// The thematic break's rule, given the block's **content** box.
 ///
-/// `blockSyntax.css:172-186`: a `2px dashed` `border-top` on a `::before` that
-/// is `top: 50%` with `translateY(-50%)`, so the rule's *centre* — not its top
-/// edge — sits at half the line box's height. `left_fraction` and
-/// `width_fraction` are already normalised past `ulysses`'s
+/// `blockSyntax.css:172-186`. The `::before` is `top: 50%` with
+/// `translateY(-50%)`, so its **border box** is centred on half the line box's
+/// height — and the painted band is not that border box.
+///
+/// # The border box is 4px tall and only its top 2px are painted
+///
+/// The rule declares `height: 2px` **and** `border-top: 2px dashed`, with no
+/// `box-sizing` on that selector: the six `box-sizing` declarations under
+/// `assets/styles/` are `blockSyntax.css:17, 532, 552, 626, 709, 839`, none of
+/// them this one, and the desktop renderer ships no global reset. So the
+/// default `content-box` applies and the border box is
+/// `2px content + 2px border = 4px`, which is what `translateY(-50%)` resolves
+/// against.
+///
+/// Border box → `[0.5H − 2, 0.5H + 2]`. `background: none`, so the content area
+/// paints nothing and the only painted band is the border: `[0.5H − 2, 0.5H]`,
+/// whose centre is **`0.5H − 1`**. Emitting `0.5H` puts the rule one pixel low
+/// on a 2px rule — half its own width.
+///
+/// Written out as `center − (box + thickness)/2 + thickness/2` rather than as
+/// `center − 1` so that a theme which changed the border width would still land
+/// on the top edge of a 4px-plus box, which is what the CSS would do.
+///
+/// `left_fraction` and `width_fraction` are already normalised past `ulysses`'s
 /// `left: 50%; translateX(-50%)` by D4, so they multiply the content width
 /// directly.
 ///
@@ -215,11 +246,14 @@ pub(crate) fn thematic_break_rule(theme: &Theme, content: Rect, brush: Brush) ->
     let tb = &theme.thematic_break;
     let x0 = content.x + tb.left_fraction * content.width;
     let x1 = x0 + tb.width_fraction * content.width;
+    let border_box_top = content.y + tb.center_fraction * content.height
+        - (THEMATIC_BREAK_BOX_HEIGHT_PX + tb.thickness_px) / 2.0;
+    let y = border_box_top + tb.thickness_px / 2.0;
     StrokedLine {
         x0,
-        y0: content.y + tb.center_fraction * content.height,
+        y0: y,
         x1,
-        y1: content.y + tb.center_fraction * content.height,
+        y1: y,
         width: tb.thickness_px,
         style: tb.style,
         brush,
@@ -449,7 +483,14 @@ mod tests {
             Brush::rgb(9, 9, 9),
         );
         assert_eq!((line.x0, line.x1), (0.0, 700.0));
-        assert!((line.y0 - 112.8).abs() < 1e-4, "top: 50% of 25.6");
+        // 0.5 × 25.6 = 12.8 is where the ::before's **border box** is centred,
+        // not where the rule is painted. The box is `height: 2px` plus a 2px
+        // `border-top` at the default `content-box`, so it spans [10.8, 14.8]
+        // and only its top 2px paint: [10.8, 12.8], centre 11.8.
+        //
+        // This number moved at the post-review fix: it used to assert 12.8 and
+        // was defending a rule painted one pixel — half its own width — low.
+        assert!((line.y0 - 111.8).abs() < 1e-4, "got {}", line.y0);
         assert_eq!(line.y0, line.y1);
         assert_eq!(line.width, 2.0);
         assert_eq!(line.style, crate::theme::LineStyle::Dashed);

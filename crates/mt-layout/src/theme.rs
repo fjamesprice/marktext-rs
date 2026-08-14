@@ -652,6 +652,28 @@ pub struct Footnote {
     /// `font-size: 0.8em`. Nested `pre` and `code` shrink by 0.8 again
     /// (`blockSyntax.css:1001-1009`).
     pub font_size_em: f32,
+    /// `opacity: 0.8` — `blockSyntax.css:998`, on the **whole figure**, so it
+    /// dims the tint, the label and every glyph inside.
+    pub opacity: f32,
+    /// The `[^id]:` label's `top: 0.2em` — `blockSyntax.css:1013`. Resolved
+    /// against the label's own `font-size`, which is absolute px and not the
+    /// footnote's `em`.
+    pub label_top_em: f32,
+    /// The `1em` of the label's `padding: 0 1em` — `blockSyntax.css:1019`.
+    /// Also against the label's own size.
+    pub label_padding_x_em: f32,
+    /// `font-size: 14px` — `blockSyntax.css:1023`. **Absolute**, so the label
+    /// does not track the footnote's 0.8em and is the one place in the theme
+    /// where a font size is not relative to anything.
+    pub label_font_size_px: f32,
+    /// `font-weight: 600` — `blockSyntax.css:1022`. Neither 400 nor 700, so it
+    /// cannot be a `bool` the way [`Headings::bold`] is.
+    pub label_weight: u16,
+    /// `font-family: monospace` — `blockSyntax.css:1025`. A bare CSS generic
+    /// with no named stack in front of it, which is why this is its own field
+    /// rather than a reuse of [`Fonts::code`]: the two happen to resolve to the
+    /// same face today only because the generic is wired to it.
+    pub label_fonts: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
