@@ -29,8 +29,8 @@
 
 use parley::{
     Alignment, AlignmentOptions, BaseDirection as ParleyBaseDirection, FontFamily, FontFamilyName,
-    FontStyle, FontWeight, GenericFamily, Layout, LayoutContext, LineHeight, PositionedLayoutItem,
-    StyleProperty,
+    FontStyle, FontWeight, GenericFamily, InlineBox as ParleyInlineBox, Layout, LayoutContext,
+    LineHeight, PositionedLayoutItem, StyleProperty,
 };
 
 use crate::display::{Brush, DisplayItem, Glyph, GlyphRun, InlineBoxFlow, InlineBoxItem};
@@ -61,6 +61,46 @@ pub enum BaseDirection {
     Ltr,
     /// Right to left.
     Rtl,
+}
+
+/// A hole to reserve in the text for a replaced element.
+///
+/// The **input** half of [`InlineBoxItem`]; that type is the output half. The
+/// neutral form of parley's `InlineBox`, minus its `kind`: `mt-layout` places
+/// only in-flow boxes, because nothing in markdown floats, and
+/// [`InlineBoxFlow`] carries the other two variants on the way out for the
+/// reason it gives.
+///
+/// M3 places these and draws nothing in them — see [`InlineBoxItem`] for who
+/// owns the drawing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InlineBoxSpec {
+    /// An identifier of the caller's choosing, echoed back on
+    /// [`InlineBoxItem::id`] so a box in the output can be matched to the token
+    /// that produced it without a side table.
+    pub id: u64,
+    /// Byte offset into [`TextRequest::text`] — the **visible** string, not the
+    /// block's text — at which the box sits.
+    ///
+    /// Must be a `char` boundary. parley says so and does not check it.
+    pub index: usize,
+    /// Width in px.
+    pub width: f32,
+    /// Height in px.
+    pub height: f32,
+    /// Baseline relative to the box's top edge, or `None` to align the box's
+    /// **bottom edge** to the text baseline.
+    ///
+    /// **Asserted rather than assumed.** parley resolves this as
+    /// `baseline.unwrap_or(height)` and places the box at
+    /// `line.baseline − resolved`, which is exactly what
+    /// [`InlineBoxItem::baseline`]'s doc comment claims and had never been
+    /// executed here. See the four tests below and
+    /// `an_inline_box_is_aligned_to_the_text_baseline_and_not_to_the_line_top`
+    /// in `tests/layout.rs`. The line's own ascent grows to fit whichever of
+    /// the two the caller chose, so a tall box pushes the line down rather than
+    /// overlapping the line above.
+    pub baseline: Option<f32>,
 }
 
 /// One leaf's worth of uniformly styled text, and how to lay it out.
@@ -103,6 +143,14 @@ pub struct TextRequest<'a> {
     /// `letter-spacing: -1px` (`blockSyntax.css:336`) is a real theme field and
     /// would otherwise have no consumer.
     pub letter_spacing: f32,
+    /// Holes to reserve in the line for replaced elements, in any order.
+    ///
+    /// Empty for every caller today: this is the plumbing half of D12, and the
+    /// producer that fills it — an image with a size supplied from above the
+    /// seam — is the other half. It is here first and separately because the
+    /// alignment behaviour it depends on is the one thing D2 moved the parley
+    /// pin for and had never been executed, let alone asserted.
+    pub inline_boxes: &'a [InlineBoxSpec],
 }
 
 impl<'a> TextRequest<'a> {
@@ -145,6 +193,7 @@ impl<'a> TextRequest<'a> {
             base_direction: BaseDirection::Ltr,
             brush: Brush::default(),
             letter_spacing: 0.0,
+            inline_boxes: &[],
         }
     }
 }
@@ -220,6 +269,17 @@ impl TextShaper {
             BaseDirection::Ltr => ParleyBaseDirection::Ltr,
             BaseDirection::Rtl => ParleyBaseDirection::Rtl,
         });
+        for spec in request.inline_boxes {
+            builder.push_inline_box(ParleyInlineBox {
+                id: spec.id,
+                // `mt-layout` pushes only in-flow boxes. See `InlineBoxSpec`.
+                kind: parley::InlineBoxKind::InFlow,
+                index: spec.index,
+                width: spec.width,
+                height: spec.height,
+                baseline: spec.baseline,
+            });
+        }
 
         let mut layout = builder.build(request.text);
         layout.break_all_lines(request.max_width);
@@ -434,5 +494,202 @@ mod tests {
         assert_eq!(request.base_direction, BaseDirection::Ltr);
         assert_eq!(request.brush, Brush::default());
         assert_eq!(request.letter_spacing, 0.0);
+        assert!(request.inline_boxes.is_empty());
+    }
+
+    // --- `InlineBox::baseline` ------------------------------------------
+    //
+    // D2 moved the parley pin partly for this field — 0.11.0 has no
+    // `InlineBox::baseline` and cannot align a box — and until now nothing in
+    // this crate had ever called `push_inline_box`, so the
+    // `PositionedLayoutItem::InlineBox` arm of the walk had never executed and
+    // [`InlineBoxItem::baseline`]'s documented meaning had never been checked
+    // against parley. The four tests below are that check, and they assert the
+    // *placement*, not just that a box comes back.
+    //
+    // **No face can be registered here**, so a line's ascent comes entirely
+    // from the boxes on it. Each test therefore puts a **second, taller box**
+    // on the line, so that the box under test is placed against an ascent it
+    // did not set itself and a `y` of zero cannot pass by accident.
+    // `tests/layout.rs` carries the same two assertions against a real face,
+    // where the ascent comes from the text instead.
+
+    /// Shape one line of boxes and hand back the emitted items in push order
+    /// together with the line's baseline.
+    fn place_boxes(boxes: &[InlineBoxSpec]) -> (Vec<InlineBoxItem>, f32) {
+        let mut fonts = Fonts::new();
+        let mut shaper = TextShaper::new();
+        let families = vec!["Open Sans".to_string()];
+        // The text is empty: with no registered face it can contribute no
+        // glyphs and no metrics either way, and an empty string keeps every
+        // box's `index` trivially in bounds and on a `char` boundary.
+        let mut request = TextRequest::new("", &families, 16.0, 1.6);
+        request.inline_boxes = boxes;
+        let shaped = shaper.shape(&mut fonts, &request);
+        let mut out = Vec::new();
+        shaped.emit(&fonts, 0.0, 0.0, &mut out).unwrap();
+        let items = out
+            .into_iter()
+            .map(|item| match item {
+                DisplayItem::InlineBox(b) => b,
+                other => panic!("expected only inline boxes, got {other:?}"),
+            })
+            .collect();
+        (items, shaped.first_baseline())
+    }
+
+    #[test]
+    fn an_inline_box_with_a_baseline_puts_that_offset_on_the_lines_baseline() {
+        // Three baselines including 0.0 — a box hanging entirely *below* the
+        // baseline, which is the degenerate case an `unwrap_or` bug would
+        // pass — plus a mid-box baseline and a bottom-edge one. The 40 px box
+        // is what sets the line's ascent, so none of the three is placed at
+        // `y == 0` and each `y` is a different number.
+        let boxes = [
+            InlineBoxSpec {
+                id: 1,
+                index: 0,
+                width: 10.0,
+                height: 20.0,
+                baseline: Some(0.0),
+            },
+            InlineBoxSpec {
+                id: 2,
+                index: 0,
+                width: 10.0,
+                height: 20.0,
+                baseline: Some(8.0),
+            },
+            InlineBoxSpec {
+                id: 3,
+                index: 0,
+                width: 10.0,
+                height: 20.0,
+                baseline: Some(20.0),
+            },
+            InlineBoxSpec {
+                id: 4,
+                index: 0,
+                width: 10.0,
+                height: 40.0,
+                baseline: Some(30.0),
+            },
+        ];
+        let (items, baseline) = place_boxes(&boxes);
+        assert_eq!(items.len(), 4);
+        assert_eq!(baseline, 30.0, "the tallest ascent on the line wins");
+        for (item, spec) in items.iter().zip(boxes.iter()) {
+            let b = spec.baseline.expect("every box here declares one");
+            assert_eq!(item.baseline, spec.baseline, "id {} round-trips", spec.id);
+            assert_eq!(
+                item.y + b,
+                baseline,
+                "id {}: y {} plus baseline {b} must land on the line's baseline",
+                spec.id,
+                item.y,
+            );
+        }
+        // Stated as literals as well, so a change to the rule cannot be
+        // absorbed by the loop's own arithmetic.
+        assert_eq!(items[0].y, 30.0);
+        assert_eq!(items[1].y, 22.0);
+        assert_eq!(items[2].y, 10.0);
+        assert_eq!(items[3].y, 0.0);
+    }
+
+    #[test]
+    fn an_inline_box_without_a_baseline_sits_its_bottom_edge_on_the_baseline() {
+        // `display.rs` documents `None` as "align my bottom edge to the text
+        // baseline". This proves it rather than trusting the comment: parley
+        // resolves `baseline.unwrap_or(height)`, so `y + height` — not `y` —
+        // is the baseline.
+        let boxes = [
+            InlineBoxSpec {
+                id: 1,
+                index: 0,
+                width: 10.0,
+                height: 20.0,
+                baseline: None,
+            },
+            InlineBoxSpec {
+                id: 2,
+                index: 0,
+                width: 10.0,
+                height: 40.0,
+                baseline: Some(30.0),
+            },
+        ];
+        let (items, baseline) = place_boxes(&boxes);
+        assert_eq!(baseline, 30.0);
+        assert_eq!(items[0].baseline, None, "`None` is carried, not flattened");
+        assert_eq!(items[0].y + items[0].height, baseline);
+        assert_eq!(items[0].y, 10.0, "and it is *not* placed at the line top");
+    }
+
+    #[test]
+    fn a_box_taller_than_the_line_grows_the_line_box() {
+        // The short box alone fixes the line at 20 px. Adding a box that needs
+        // 60 above the baseline and 40 below must grow the line to 100 and
+        // move the baseline down, rather than letting the tall box overflow.
+        let short = [InlineBoxSpec {
+            id: 1,
+            index: 0,
+            width: 10.0,
+            height: 20.0,
+            baseline: Some(15.0),
+        }];
+        let (small, small_baseline) = place_boxes(&short);
+        assert_eq!(small_baseline, 15.0);
+        assert_eq!(small[0].y, 0.0);
+
+        let tall = [
+            short[0],
+            InlineBoxSpec {
+                id: 2,
+                index: 0,
+                width: 10.0,
+                height: 100.0,
+                baseline: Some(60.0),
+            },
+        ];
+        let (grown, grown_baseline) = place_boxes(&tall);
+        assert_eq!(grown_baseline, 60.0, "the line's ascent grew to 60");
+        // The short box is pushed down by exactly the ascent it gained, and
+        // still has its own baseline on the line's.
+        assert_eq!(grown[0].y, 45.0);
+        assert_eq!(grown[0].y + 15.0, grown_baseline);
+        assert_eq!(grown[1].y, 0.0);
+    }
+
+    #[test]
+    fn an_inline_box_is_translated_by_the_walks_origin_like_everything_else() {
+        // The walk adds `(origin_x, origin_y)` to glyph positions; the box arm
+        // must do the same, or a block's images would ignore its `content_y`.
+        let boxes = [InlineBoxSpec {
+            id: 9,
+            index: 0,
+            width: 12.0,
+            height: 20.0,
+            baseline: Some(16.0),
+        }];
+        let mut fonts = Fonts::new();
+        let mut shaper = TextShaper::new();
+        let families = vec!["Open Sans".to_string()];
+        let mut request = TextRequest::new("", &families, 16.0, 1.6);
+        request.inline_boxes = &boxes;
+        let shaped = shaper.shape(&mut fonts, &request);
+        let mut out = Vec::new();
+        shaped.emit(&fonts, 100.0, 250.0, &mut out).unwrap();
+        let DisplayItem::InlineBox(item) = &out[0] else {
+            panic!("expected an inline box, got {:?}", out[0]);
+        };
+        assert_eq!(item.id, 9);
+        assert_eq!(item.flow, InlineBoxFlow::InFlow);
+        assert_eq!(item.x, 100.0);
+        assert_eq!(item.y, 250.0 + (shaped.first_baseline() - 16.0));
+        assert_eq!(
+            item.rect(),
+            crate::display::Rect::new(100.0, 250.0, 12.0, 20.0)
+        );
     }
 }

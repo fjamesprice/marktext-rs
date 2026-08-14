@@ -128,6 +128,6 @@ pub use fonts::{
     Axis, BUNDLED_FACES_TOML, Face, FaceList, FaceListMeta, FaceRole, FaceStyle, FontError, FontId,
     Fonts,
 };
-pub use text::{BaseDirection, ShapedText, TextRequest, TextShaper};
+pub use text::{BaseDirection, InlineBoxSpec, ShapedText, TextRequest, TextShaper};
 pub use theme::{Theme, ThemeError};
 pub use units::Units;

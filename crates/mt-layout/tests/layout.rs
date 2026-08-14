@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use mt_doc::{Align, Block, BulletMarker, CodeKind, Document, Edit, NodeId, OrderDelim, Text};
 use mt_layout::display::{BlockKind, DisplayItem, DisplayList};
 use mt_layout::fonts::{Face, FaceList, Fonts};
-use mt_layout::text::TextShaper;
+use mt_layout::text::{InlineBoxSpec, TextRequest, TextShaper};
 use mt_layout::theme::Theme;
 use mt_layout::{LayoutOptions, LayoutTree, layout};
 
@@ -852,4 +852,104 @@ fn the_thematic_break_rule_sits_half_its_width_above_the_line_centre() {
         }
         other => panic!("expected a rule, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// `InlineBox::baseline` against a real face
+// ---------------------------------------------------------------------------
+
+/// The companion to `src/text.rs`'s four unit tests, and the half they cannot
+/// state: **the baseline a box is aligned to is the *text*'s.**
+///
+/// In `src/text.rs` no face can be registered, so a line's ascent comes only
+/// from the boxes on it and "the line's baseline" is a number the boxes
+/// themselves set. Here the line has real glyphs, the ascent is Open Sans's,
+/// and a box shorter than that ascent is placed *down* from the top of the
+/// line by an amount neither the test nor the box chose. That is the claim D2
+/// moved the parley pin for.
+#[test]
+fn an_inline_box_is_aligned_to_the_text_baseline_and_not_to_the_line_top() {
+    let mut fonts = bundled_fonts();
+    let mut shaper = TextShaper::new();
+    let families = vec!["Open Sans".to_string()];
+
+    // The same line twice: once as plain text, once with a box in the middle.
+    let plain = TextRequest::new("Hi there", &families, 16.0, 1.6);
+    let text_baseline = shaper.shape(&mut fonts, &plain).first_baseline();
+    assert!(
+        text_baseline > 0.0,
+        "the face must have resolved for this test to mean anything"
+    );
+
+    // 12px tall, shorter than the line's ascent, so a naive "place it at the
+    // top of the line" would also put it above the baseline — but at the wrong
+    // y. `Some(12.0)` and `None` are the same geometry stated two ways, and
+    // both must land the bottom edge on the text baseline.
+    let boxes = [
+        InlineBoxSpec {
+            id: 1,
+            index: 2,
+            width: 24.0,
+            height: 12.0,
+            baseline: Some(12.0),
+        },
+        InlineBoxSpec {
+            id: 2,
+            index: 3,
+            width: 24.0,
+            height: 12.0,
+            baseline: None,
+        },
+    ];
+    let mut request = TextRequest::new("Hi there", &families, 16.0, 1.6);
+    request.inline_boxes = &boxes;
+    let shaped = shaper.shape(&mut fonts, &request);
+    let mut out = Vec::new();
+    shaped.emit(&fonts, 0.0, 0.0, &mut out).expect("resolves");
+
+    // Neither box is tall enough to change the line's ascent, so the baseline
+    // is still the text's.
+    assert!((shaped.first_baseline() - text_baseline).abs() < 1e-3);
+
+    let placed: Vec<_> = out
+        .iter()
+        .filter_map(|i| match i {
+            DisplayItem::InlineBox(b) => Some(*b),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(placed.len(), 2, "both boxes are emitted");
+    for b in &placed {
+        assert!(
+            (b.y + b.height - text_baseline).abs() < 1e-3,
+            "box {} bottom edge {} must sit on the text baseline {text_baseline}",
+            b.id,
+            b.y + b.height
+        );
+        assert!(
+            b.y > 0.5,
+            "box {} must be pushed down from the line top, not pinned to it: y = {}",
+            b.id,
+            b.y
+        );
+    }
+    assert!(
+        (placed[0].y - placed[1].y).abs() < 1e-3,
+        "`Some(height)` and `None` are the same instruction"
+    );
+
+    // And the boxes really are in the line: the run after the second box
+    // starts to the right of it.
+    let advance: f32 = out
+        .iter()
+        .filter_map(|i| match i {
+            DisplayItem::Glyphs(g) => Some(g.advance),
+            _ => None,
+        })
+        .sum();
+    assert!(
+        shaped.width() > advance,
+        "the line grew by the boxes' width: {} vs {advance}",
+        shaped.width()
+    );
 }
