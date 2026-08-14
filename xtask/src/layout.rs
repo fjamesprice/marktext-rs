@@ -123,24 +123,6 @@ const DIGEST_INPUTS: [&str; 3] = ["250kb.md", "1mb.md", "5mb.md"];
 /// the third painted item catching up.
 const FORMAT_VERSION: &str = "layout-golden v3";
 
-/// The version the **committed** goldens still carry, and a temporary.
-///
-/// M3 §6 has S2 run `code → cross-check against inlineSyntax.css → assert the
-/// gate → regenerate goldens`, in that order and *"with the tree deliberately
-/// carrying stale goldens in between"*, because a golden written before the
-/// cross-check passes forever. Every committed file is therefore from before
-/// the field this bump is about, and
-/// `every_committed_golden_has_the_declared_header` accepts either version for
-/// exactly as long as that window is open.
-///
-/// **Delete this constant in the regeneration commit.** Its whole value is
-/// that it has to be deleted: leaving it makes the header assertion permanently
-/// two-valued, which is the ratchet M3-R6 depends on going slack. `#[cfg(test)]`
-/// keeps it out of the tool itself, so it can never widen what `--update`
-/// writes — only what the assertion tolerates.
-#[cfg(test)]
-const PENDING_REGENERATION_VERSION: &str = "layout-golden v2";
-
 // ---------------------------------------------------------------------------
 // Parse options — per input, and visible in the header
 // ---------------------------------------------------------------------------
@@ -1655,10 +1637,9 @@ mod tests {
                 .split_once("\n\n")
                 .unwrap_or_else(|| panic!("{name}: no blank line after the header"));
             let lines: Vec<&str> = header.lines().collect();
-            assert!(
-                lines[0] == FORMAT_VERSION || lines[0] == PENDING_REGENERATION_VERSION,
-                "{name}: version is {:?}, want {FORMAT_VERSION} \
-                 (or {PENDING_REGENERATION_VERSION} while S2 carries stale goldens)",
+            assert_eq!(
+                lines[0], FORMAT_VERSION,
+                "{name}: version is {:?}, want {FORMAT_VERSION}",
                 lines[0]
             );
             assert_eq!(

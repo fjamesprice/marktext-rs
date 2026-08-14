@@ -1,4 +1,4 @@
-layout-golden v2
+layout-golden v3
 theme          muya-default
 theme-width    800.00
 content-width  700.00

@@ -1,4 +1,4 @@
-layout-golden v2
+layout-golden v3
 theme          muya-default
 theme-width    800.00
 content-width  700.00
@@ -10,9 +10,9 @@ input          5mb.md
 input-bytes    5243009
 form           digest
 
-list           width=700.00 height=2783862.25 blocks=54896
-full-sha256    c9870aa79afbddb0a2f9664a3c3df12cee9f6b5b84e0085b990a92c1840f9cde
-full-bytes     16657490
+list           width=700.00 height=2677043.00 blocks=54896
+full-sha256    58c1207a64b737455e149497d8cba64c284d497167005dbf54ad4310a5123e8c
+full-bytes     29432215
 count paragraph      19406
 count atx-heading    9812
 count setext-heading 0

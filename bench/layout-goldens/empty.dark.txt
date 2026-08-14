@@ -1,4 +1,4 @@
-layout-golden v2
+layout-golden v3
 theme          dark
 theme-width    750.00
 content-width  650.00
