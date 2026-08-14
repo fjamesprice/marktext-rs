@@ -61,6 +61,18 @@
 //! inline-widget baseline alignment, nested bidi interacting with inline
 //! boxes — to be exercised in **M3 week 1, not month 5**.
 
+pub mod display;
+pub mod fonts;
+pub mod text;
 pub mod theme;
 
+pub use display::{
+    BlockDisplay, BlockKind, Brush, DisplayItem, DisplayList, FilledRect, Glyph, GlyphRun,
+    InlineBoxFlow, InlineBoxItem, Rect, StrokedLine,
+};
+pub use fonts::{
+    Axis, BUNDLED_FACES_TOML, Face, FaceList, FaceListMeta, FaceRole, FaceStyle, FontError, FontId,
+    Fonts,
+};
+pub use text::{BaseDirection, ShapedText, TextRequest, TextShaper};
 pub use theme::{Theme, ThemeError};

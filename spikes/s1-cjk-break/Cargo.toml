@@ -1,0 +1,28 @@
+[package]
+name = "s1-cjk-break"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# Same pin and same feature cut as `s1-faces` and `e1-fonts-main`. The whole
+# point of this probe is that **one** variable changes between its two runs —
+# the `complex-scripts` feature below — so everything else must be identical to
+# the arm the rest of S1 measured on.
+parley = { git = "https://github.com/linebender/parley", rev = "a0752c7bdc3ad88dac19fc194d2b8e57e59bea2e", default-features = false, features = [
+    "std",
+] }
+
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+toml = { version = "1", default-features = false, features = [
+    "std",
+    "parse",
+    "serde",
+] }
+
+[features]
+# The feature under test. C9 called it "almost certainly required" for M3's CJK
+# gate clause and D7 priced it at +3.6 MiB with 0 extra crates. Run the binary
+# twice — with and without — and diff the break positions it prints.
+complex-scripts = ["parley/complex-scripts"]

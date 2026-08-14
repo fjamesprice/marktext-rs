@@ -52,6 +52,12 @@ members = [
     # font measurement rather than starting a new one; see the note below about
     # building it on its own.
     "s1-faces",
+    # M3 S1 step 3 — the `complex-scripts` question C9 left as an assumption and
+    # D7 priced at +3.6 MiB without checking. It lives here rather than in the
+    # root workspace because measuring it means building the same code twice
+    # with one feature flipped, and the root workspace must not carry a feature
+    # nothing ships with.
+    "s1-cjk-break",
 ]
 
 # NOTE ON BUILDING: the `e1-fonts-*` members set `default-features = false` on

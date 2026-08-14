@@ -4,7 +4,26 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.85"
+# §1 says 1.85 and M0 kept it there. **M3 S1 raises it to 1.86, and D2's parley
+# pin is what raises it** — this is not a preference and there is no version of
+# the workspace at 1.85 that compiles.
+#
+# The chain is mechanical. `parley_engine` at rev `a0752c7b` calls
+# `icu_properties::PropertyNamesShort::new()` inside a `static`
+# (`parley_engine/src/itemize.rs:243`). That function became `const` in
+# **icu_properties 2.2.0**, and 2.2.0 declares `rust-version = "1.86"`. Cargo's
+# MSRV-aware resolver will not select a dependency whose floor is above the
+# workspace's, so at 1.85 it holds the whole ICU family at 2.1.x and
+# `parley_engine` fails to compile with `E0015: cannot call non-const
+# associated function ... in statics`. parley's own manifest declares only
+# `icu_properties = "2.1.1"`, so this is an under-specified upstream bound
+# rather than anything the pin says out loud — which is exactly why it is
+# recorded here instead of being rediscovered at the next `cargo update`.
+#
+# 1.86 and not higher: it is the *lowest* floor that admits icu 2.2.0, which is
+# the lowest icu that compiles. `rust-toolchain.toml` pins the stable channel
+# rather than a version, so nothing else has to move.
+rust-version = "1.86"
 # Not specified in RUST-REWRITE-PLAN.md §1; added because every member needs a
 # version and a license field. Everything above this line is verbatim from §1.
 version = "0.1.0"
@@ -144,9 +163,98 @@ opt-level = "s"
 # no GPU. The two shipped themes reach the binary through `include_str!`,
 # which is a compile-time read, so `cargo xtask deps`' source scan for
 # filesystem calls in the four headless crates stays clean.
+#
+# ---------------------------------------------------------------------------
+# `parley` is the ninth third-party crate and the eighth scheduled one.
+#
+# It is at the head of the "not until the milestone that needs it" list above,
+# and M3 is that milestone: `mt-layout` is M3 (§9), and §5's whole design rests
+# on parley being the shaping, bidi, font-fallback, line-breaking *and*
+# hit-testing answer at once. Nothing before S1 needed it and nothing before S1
+# had it.
+#
+# **Why a git rev and not 0.11.0.** M3.md §5 D2 took this with numbers on both
+# sides, and the trade goes against performance:
+#
+#   | eager layout, 5mb.md | +13.9 % slower than 0.11.0 |
+#   | peak RSS             | +40 %                      |
+#   | `break_all_lines`    | +74 % (points at #697)     |
+#   | binary size          | +512 B                     |
+#   | port cost 0.11.0 → main | 2 lines                 |
+#
+# Against that, `main` carries three things M3's exit gate requires and 0.11.0
+# does not have: `InlineBox::baseline` (#639), without which inline images and
+# inline math have no baseline to align to; `set_base_direction` (#708),
+# without which an RTL-base document cannot be laid out correctly; and correct
+# Arabic cursive joining across an inline box, which 0.11.0 gets **wrong**. The
+# gate says "Bidi, CJK, emoji, ligatures render correctly", and the released
+# version fails that clause on exactly the construct M3-R1 is about. The
+# performance gap is recoverable by means M3 is building anyway (D9's laziness,
+# S6's parallel layout, measured at 2.37×); a correctness defect in shaped
+# Arabic is not recoverable at all.
+#
+# **A pin move rewrites the goldens, and is a reviewable event on the same
+# footing as a golden update (M3-R6).** This is the part a future `cargo
+# update` must not be allowed to do by accident. The churn that actually landed
+# between 0.11.0 and this rev was *geometric*, not API: #697 moved line height
+# 24.00 → 28.40, baseline 22.00 → 24.00 and inline-box y −2.00 → 0.00, changing
+# every measured case. That kind of change does not fail to compile — it
+# silently produces different numbers, which D10's exact-equality layout
+# goldens then flag as a diff in every file at once. **Move the pin
+# deliberately, never by `cargo update`, and re-evaluate when 0.12.0 ships.**
+#
+# **`default-features = false` is load-bearing, not tidiness.** parley's
+# default feature set is `["system"]`, which enables fontique's system font
+# backends — i.e. filesystem enumeration — inside a crate whose own doc comment
+# commits to "No I/O" and whose `src/` `cargo xtask deps` greps for `std::fs::`
+# (a deliberately crude check that would *not* catch I/O inside a dependency,
+# which is why this line has to be right). S0 measured that turning it off
+# **drops the dependency count 61 → 49** and costs nothing: fonts register from
+# in-memory bytes through `Collection::new(CollectionOptions { shared: false,
+# system_fonts: false })` and `register_fonts(Blob<u8>, None)`. D7's "the one
+# to beat" option is not merely honest, it is the *default* once the feature is
+# off — and it is what makes D10's goldens reproducible across machines, since
+# a golden that depends on the developer's installed fonts is not a golden.
+#
+# **`complex-scripts` is NOT enabled, and that is now a measurement rather than
+# an omission.** C9 called the feature "almost certainly required" for the
+# gate's CJK clause; D7 priced it at **+3.6 MiB with 0 extra crates**, the
+# second-largest line item in the binary after the GPU backend D1 declined to
+# ship. Nobody had checked the claim. `spikes/s1-cjk-break` lays
+# `bench/corpus/cjk.md`'s long unspaced Chinese line out on both settings, at
+# both theme widths (800 / 750), at both theme *content* widths (700 / 650) and
+# at a forced 320px column. **The break positions are byte-identical on every
+# one**: no break at 800, 750 or 700 (the line is 681.49px wide at 16px), a
+# break at byte 116 at 650, and breaks at bytes 53 and 110 at 320 — the same
+# numbers, the same line advances, the same layout height, with the feature on
+# and off. UAX #14 permits a break between two ideographs without any
+# dictionary, so for Han the lightweight segmenter and the dictionary agree.
+#
+# The run carries its own control, because "no difference" is worthless
+# evidence unless something in the same run *does* differ: a Thai string breaks
+# at byte 96 with the feature on and does not break at all with it off,
+# overflowing a 320px column at 604.90px. So the flag reaches the code, and the
+# 3.6 MiB buys nothing this corpus can see.
+#
+# **The trigger for revisiting is written down rather than implied:** the
+# corpus contains no Thai, Khmer, Lao or Myanmar, and the moment it gains any,
+# this feature stops being optional. It is a feature flag rather than an
+# architecture, so flipping it is a one-line change plus a golden rewrite.
+#
+# **The pin raises the workspace MSRV** — see `rust-version` above, where the
+# chain from `parley_engine` through `icu_properties` is spelled out. That was
+# not predicted by D2 and is recorded there rather than here because it is a
+# property of the workspace, not of this dependency line.
+#
+# It satisfies §1's purity constraint for `mt-layout`: no windowing, no GPU,
+# and — with the feature cut above — no I/O. `cargo xtask deps` still reports
+# 14 workspace crates.
 [workspace.dependencies]
 ammonia = "4"
 fancy-regex = "0.19"
+parley = { git = "https://github.com/linebender/parley", rev = "a0752c7bdc3ad88dac19fc194d2b8e57e59bea2e", default-features = false, features = [
+    "std",
+] }
 proptest = "1"
 pulldown-cmark = { version = "0.13", default-features = false }
 ropey = "1"
