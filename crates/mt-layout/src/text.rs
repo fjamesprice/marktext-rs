@@ -289,6 +289,62 @@ impl<'a> TextRequest<'a> {
     }
 }
 
+/// The byte range of **one** glyph run, which is not what parley's
+/// `Run::text_range()` answers.
+///
+/// # The defect this exists for
+///
+/// parley's `GlyphRun` is *"a sequence of fully positioned glyphs with the same
+/// style"* and its `run()` is the enclosing **shaped** run — one font, one bidi
+/// level — which a style change does not split. So a paragraph reading
+/// `See [the plan](…) and …` yields three `GlyphRun`s (plain, link, plain) that
+/// all share one `Run`, and `Run::text_range()` answers all three with the
+/// whole item's range. Before S2 there was one style per leaf, run and item
+/// were the same thing, and the range was right by accident; with markers
+/// hidden and styles per token it is a superset, and
+/// [`GlyphRun::text_range`](crate::GlyphRun::text_range) claims to be the
+/// range of *these* glyphs — the thing M4 hit-tests and D13's map converts.
+///
+/// # How it is recovered
+///
+/// parley groups a run's glyphs into `GlyphRun`s by walking
+/// `visual_clusters()` and cutting where the style index changes, so a glyph
+/// index within the line item identifies the cluster it came from. This walks
+/// the same clusters, accumulating glyph counts, and unions the byte ranges of
+/// those falling in `glyph_start .. glyph_start + glyph_count`. A cluster that
+/// contributes **no** glyph — a default-ignorable such as ZWJ, VS16 or the RLM
+/// of [`crate::RTL_MARK`] — is invisible to parley's grouping, so it is
+/// attributed to the group its index falls inside, which keeps the ranges
+/// tiling instead of leaving its bytes in neither.
+fn glyph_run_text_range(
+    run: &parley::Run<'_, Brush>,
+    glyph_start: usize,
+    glyph_count: usize,
+) -> std::ops::Range<usize> {
+    let end = glyph_start + glyph_count;
+    let mut at = 0usize;
+    let mut lo = usize::MAX;
+    let mut hi = 0usize;
+    for cluster in run.visual_clusters() {
+        let n = cluster.glyphs().count();
+        // `n.max(1)` for the overlap test only: a zero-glyph cluster occupies
+        // the slot it sits at without advancing past it.
+        if at < end && at + n.max(1) > glyph_start {
+            let range = cluster.text_range();
+            lo = lo.min(range.start);
+            hi = hi.max(range.end);
+        }
+        at += n;
+    }
+    if lo == usize::MAX {
+        // No cluster claimed a glyph — an empty run. The item's own range is
+        // the only answer there is, and it is empty too.
+        run.text_range()
+    } else {
+        lo..hi
+    }
+}
+
 /// A theme's family names as parley's, with CSS generics recognised.
 ///
 /// `sans-serif`, `monospace` and `emoji` become `FontFamilyName::Generic` and
@@ -634,10 +690,22 @@ impl ShapedText {
                     brush: ground.brush,
                 }));
             }
+            // Where in the current line item's glyphs the next glyph run
+            // starts. parley splits one shaped run into one `GlyphRun` per
+            // *style*, and every one of them answers `run().text_range()` with
+            // the whole item's range — so the range has to be recovered from
+            // the clusters. See `glyph_run_text_range`.
+            let mut item_key: Option<std::ops::Range<usize>> = None;
+            let mut glyph_start = 0usize;
             for item in line.items() {
                 match item {
                     PositionedLayoutItem::GlyphRun(gr) => {
                         let run = gr.run();
+                        let key = run.text_range();
+                        if item_key.as_ref() != Some(&key) {
+                            item_key = Some(key);
+                            glyph_start = 0;
+                        }
                         // `Run::font()` returns `&FontInstance` on `main`
                         // (it was `&FontData` on 0.11.0 — D2's breaking
                         // change), and `.font` is the `FontData` handle E2
@@ -651,7 +719,7 @@ impl ShapedText {
                                 .ok_or_else(|| FontError::UnresolvedFont {
                                     text_range: run.text_range(),
                                 })?;
-                        let glyphs = gr
+                        let glyphs: Vec<Glyph> = gr
                             .positioned_glyphs()
                             .map(|g| Glyph {
                                 id: g.id,
@@ -659,11 +727,13 @@ impl ShapedText {
                                 y: g.y + origin_y,
                             })
                             .collect();
+                        let text_range = glyph_run_text_range(run, glyph_start, glyphs.len());
+                        glyph_start += glyphs.len();
                         out.push(DisplayItem::Glyphs(GlyphRun {
                             font,
                             font_size: run.font_size(),
                             is_rtl: run.is_rtl(),
-                            text_range: run.text_range(),
+                            text_range,
                             baseline: gr.baseline() + origin_y,
                             offset: gr.offset() + origin_x,
                             advance: gr.advance(),
@@ -707,6 +777,10 @@ impl ShapedText {
                         }
                     }
                     PositionedLayoutItem::InlineBox(b) => {
+                        // parley restarts its own glyph cursor at every box,
+                        // so this one restarts with it.
+                        item_key = None;
+                        glyph_start = 0;
                         out.push(DisplayItem::InlineBox(InlineBoxItem {
                             id: b.id,
                             x: b.x + origin_x,

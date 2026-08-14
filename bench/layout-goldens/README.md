@@ -61,7 +61,7 @@ the house style, for the reason `xtask/src/deps.rs:14-17` gives.
 Every file has the same three parts, separated by blank lines:
 
 ```text
-layout-golden v2                       <- format version
+layout-golden v3                       <- format version
 theme          muya-default            ┐
 theme-width    800.00                  │
 content-width  700.00                  │
@@ -79,9 +79,9 @@ count atx-heading    4                 │ all nineteen, always, including the
 count setext-heading 0                 ┘ zeroes
 
 block 0 atx-heading bounds=[0.00 0.00 700.00 42.00] items=1
-  glyphs font=OpenSans-Bold size=30.00 rtl=0 text=0..34 origin=[0.00 32.00] advance=513.87 n=34 seq=6d58f8fc
+  glyphs font=OpenSans-Bold size=30.00 fill=#4d4d4dff rtl=0 text=0..34 origin=[0.00 32.00] advance=513.87 n=34 seq=6d58f8fc
 block 1 paragraph bounds=[0.00 58.00 700.00 102.40] items=4
-  glyphs font=OpenSans-Regular size=16.00 rtl=0 text=0..69 origin=[0.00 76.00] advance=499.73 n=67 seq=771c52d4
+  glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=0..69 origin=[0.00 76.00] advance=499.73 n=67 seq=771c52d4
 ```
 
 **The blank line after the provenance is a seam with a job**: everything above
@@ -92,7 +92,7 @@ both-themes-must-differ check cuts there, and so should your eye.
 
 | Field | What it pins |
 |---|---|
-| `layout-golden v2` | the format. Bumped when the serialization changes shape, so a file written by an older tool is identifiable from the artifact. **v2** added `parse` |
+| `layout-golden v3` | the format. Bumped when the serialization changes shape, so a file written by an older tool is identifiable from the artifact. **v2** added `parse`; **v3** added the glyph run's `fill=` |
 | `theme` | which of the two shipped themes |
 | `theme-width` | `[metrics] content_width_px` — the CSS `max-width`, **800 or 750** |
 | `content-width` | that less `2 × container_padding_x_px` — **700 or 650**, the column text actually wraps in |
@@ -187,7 +187,7 @@ golden.
 ### The item lines
 
 ```text
-  glyphs font=<face file stem> size= rtl=0|1 text=<start>..<end> origin=[x baseline] advance= n= seq=
+  glyphs font=<face file stem> size= fill=#rrggbbaa rtl=0|1 text=<start>..<end> origin=[x baseline] advance= n= seq=
   rect [x y w h] fill=#rrggbbaa [radius=] [rot=]
   line [x0 y0]-[x1 y1] width= style=solid|dashed|dotted|none stroke=#rrggbbaa
   inline-box id= [x y w h] baseline=<f|none> flow=in-flow|out-of-flow|custom-out-of-flow
@@ -202,6 +202,22 @@ The face is named by its **file**, not by its `FontId`. A `FontId` is an index
 into whatever order the shell happened to register in, so `font7` would be both
 unreadable and unstable under a `faces.toml` reorder that changed nothing about
 the glyphs.
+
+A glyph run's fields are in two groups. `font size fill` are the run's
+**resolved style**; `rtl text origin advance n seq` are where it landed and
+what is in it. `fill` was added at **v3**, and its absence had been a hole in
+the instrument rather than a tidiness: until inline styling existed every run
+in a block carried the block's own colour, so the field said nothing. Now it
+carries a link's `--link-color`, a `<strong>`'s theme override, inline code's
+`--editor-color` and an unresolved emoji shortcode's `--delete-color`, and
+**every one of those decisions was invisible to the golden** that was about to
+freeze the display list. `rect` has printed `fill=` and `line` `stroke=` since
+v1; this is the third painted item catching up.
+
+`text=<start>..<end>` is the range in the leaf's **visible** text — markers
+hidden — and it is the range of *that run's* glyphs, which is not what parley's
+own `Run::text_range()` answers for a run split by style. See
+`glyph_run_text_range` in `crates/mt-layout/src/text.rs`.
 
 ### Two things the format deliberately does not carry
 

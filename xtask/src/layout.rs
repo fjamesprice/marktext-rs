@@ -112,7 +112,34 @@ const DIGEST_INPUTS: [&str; 3] = ["250kb.md", "1mb.md", "5mb.md"];
 /// **v2** added the `parse` header field. v1 recorded `LayoutOptions` and left
 /// the parse options implicit, which was safe only while every input was parsed
 /// identically — see [`PARSE_OVERRIDES`].
-const FORMAT_VERSION: &str = "layout-golden v2";
+///
+/// **v3** added `fill=` to the glyph-run line. Until S2 every leaf was one
+/// style, so every glyph run in a block carried the block's own colour and the
+/// field said nothing; with inline styling it carries a link's blue, a
+/// `<strong>`'s override, inline code's `--editor-color` and an unresolved
+/// shortcode's `--delete-color`, and a serialization that omits it is not
+/// *"a stable serialization of the display list"* (D10) but of most of one. A
+/// `rect` has printed its `fill=` and a `line` its `stroke=` since v1; this is
+/// the third painted item catching up.
+const FORMAT_VERSION: &str = "layout-golden v3";
+
+/// The version the **committed** goldens still carry, and a temporary.
+///
+/// M3 §6 has S2 run `code → cross-check against inlineSyntax.css → assert the
+/// gate → regenerate goldens`, in that order and *"with the tree deliberately
+/// carrying stale goldens in between"*, because a golden written before the
+/// cross-check passes forever. Every committed file is therefore from before
+/// the field this bump is about, and
+/// `every_committed_golden_has_the_declared_header` accepts either version for
+/// exactly as long as that window is open.
+///
+/// **Delete this constant in the regeneration commit.** Its whole value is
+/// that it has to be deleted: leaving it makes the header assertion permanently
+/// two-valued, which is the ratchet M3-R6 depends on going slack. `#[cfg(test)]`
+/// keeps it out of the tool itself, so it can never widen what `--update`
+/// writes — only what the assertion tolerates.
+#[cfg(test)]
+const PENDING_REGENERATION_VERSION: &str = "layout-golden v2";
 
 // ---------------------------------------------------------------------------
 // Parse options — per input, and visible in the header
@@ -1115,11 +1142,17 @@ fn blocks_section(list: &DisplayList, detail: Detail, fonts: &Fonts) -> String {
 /// consumer `Fonts::file_name` has had, and it is what D8 said the accessor
 /// was for: getting from an id in the display list back to the bytes the shell
 /// registered.
+///
+/// The fields are in two groups: `font size fill` are the run's resolved
+/// **style**, and `rtl text origin advance n seq` are where it landed and what
+/// is in it. `fill` joined the first group at v3 — see [`FORMAT_VERSION`] for
+/// why a golden without it was not a serialization of the display list.
 fn glyph_run_line(run: &GlyphRun, fonts: &Fonts) -> String {
     format!(
-        "glyphs font={} size={} rtl={} text={}..{} origin=[{} {}] advance={} n={} seq={}",
+        "glyphs font={} size={} fill={} rtl={} text={}..{} origin=[{} {}] advance={} n={} seq={}",
         face_name(run.font, fonts),
         f2(run.font_size),
+        hex(run.brush),
         u8::from(run.is_rtl),
         run.text_range.start,
         run.text_range.end,
@@ -1622,7 +1655,12 @@ mod tests {
                 .split_once("\n\n")
                 .unwrap_or_else(|| panic!("{name}: no blank line after the header"));
             let lines: Vec<&str> = header.lines().collect();
-            assert_eq!(lines[0], FORMAT_VERSION, "{name}");
+            assert!(
+                lines[0] == FORMAT_VERSION || lines[0] == PENDING_REGENERATION_VERSION,
+                "{name}: version is {:?}, want {FORMAT_VERSION} \
+                 (or {PENDING_REGENERATION_VERSION} while S2 carries stale goldens)",
+                lines[0]
+            );
             assert_eq!(
                 lines.len(),
                 11,
