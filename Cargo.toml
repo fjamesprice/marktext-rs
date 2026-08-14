@@ -262,6 +262,19 @@ serde = { version = "1", default-features = false, features = ["std", "derive"] 
 serde_json = "1"
 toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
 
+# **Dev-only, and only `mt-layout`'s.** An oracle's whole value is
+# independence: S2's gate asks for the *visual order* of a bidi line to be
+# asserted, and expectations transcribed from parley's own output would make
+# the test agree with itself. S0's E1 experiment settled the method — an
+# independent UAX #9 implementation, U+FFFC standing in for an inline box, the
+# visual neighbours compared character for character — and D2's choice of pin
+# rests on that experiment's result, so the gate grades the shipped engine the
+# same way the spike graded the candidate. Pinned exactly to the version E1
+# used (`spikes/results/e1-bidi-inline-box.md`, "ground truth"), because an
+# oracle that moves is not one. Never a normal dependency: `mt-layout` does its
+# own bidi through parley and this must not enter the shipped binary.
+unicode-bidi = "=0.3.18"
+
 mt-app = { path = "crates/mt-app", version = "0.1.0" }
 mt-cli = { path = "crates/mt-cli", version = "0.1.0" }
 mt-diagram = { path = "crates/mt-diagram", version = "0.1.0" }

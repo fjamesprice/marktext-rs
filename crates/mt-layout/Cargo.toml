@@ -23,3 +23,10 @@ toml.workspace = true
 # the `complex-scripts` measurement. `parley::Layout` is held behind
 # `mt-layout`'s own display list and names no public type here — D8.
 parley.workspace = true
+
+[dev-dependencies]
+# The bidi oracle for S2's gate, and the one deliberate exception to this
+# crate's hand-rolled-over-dependency habit. See the workspace manifest for
+# why, and `tests/inline.rs` for the method it implements. Dev-only, so it is
+# in no shipped binary and changes nothing about the headless rules.
+unicode-bidi.workspace = true
