@@ -8,7 +8,7 @@
 use super::*;
 
 fn plain(text: &str) -> InlineText {
-    lay_out(text, InlineSyntax::default(), None)
+    lay_out(text, &InlineSyntax::default(), BaseDirection::Ltr, None)
 }
 
 fn kinds(map: &VisibleTextMap) -> Vec<(MapKind, Range<usize>, Range<usize>)> {
@@ -21,7 +21,11 @@ fn kinds(map: &VisibleTextMap) -> Vec<(MapKind, Range<usize>, Range<usize>)> {
 /// Every visible offset, mapped back and checked against the token that
 /// produced it — D13's property test in its smallest form.
 fn every_offset_round_trips(text: &str) {
-    let laid = plain(text);
+    every_offset_round_trips_with(text, BaseDirection::Ltr);
+}
+
+fn every_offset_round_trips_with(text: &str, base_direction: BaseDirection) {
+    let laid = lay_out(text, &InlineSyntax::default(), base_direction, None);
     assert_eq!(laid.map.block_len(), text.len());
     assert_eq!(laid.map.visible_len(), laid.visible.len());
     for v in 0..=laid.visible.len() {
@@ -290,9 +294,9 @@ fn a_footnote_identifier_is_its_own_run_when_the_syntax_is_enabled() {
 
     let syntax = InlineSyntax {
         footnote: true,
-        super_sub_script: false,
+        ..InlineSyntax::default()
     };
-    let on = lay_out("see [^why] here", syntax, None);
+    let on = lay_out("see [^why] here", &syntax, BaseDirection::Ltr, None);
     assert_eq!(on.visible, "see why here");
     let marked: Vec<_> = on
         .runs
@@ -387,4 +391,138 @@ fn the_gate_shapes_of_the_corpus_all_tile() {
     ] {
         every_offset_round_trips(text);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Labels, and D12's images
+// ---------------------------------------------------------------------------
+
+fn with_labels(pairs: &[(&str, &str)]) -> InlineSyntax {
+    InlineSyntax {
+        labels: pairs
+            .iter()
+            .map(|(key, href)| {
+                (
+                    (*key).to_string(),
+                    mt_inline::Label {
+                        href: (*href).to_string(),
+                        title: String::new(),
+                    },
+                )
+            })
+            .collect(),
+        ..InlineSyntax::default()
+    }
+}
+
+/// The exact line from `bench/corpus/10kb.md:53`, which is what a golden would
+/// have frozen if the label table had stayed empty.
+#[test]
+fn a_reference_link_shows_its_anchor_once_the_labels_are_threaded_down() {
+    let text = "See [the plan][plan] and more.";
+
+    let without = plain(text);
+    assert_eq!(
+        without.visible, text,
+        "with no label table it is literal brackets, which is what part 1 froze"
+    );
+
+    let syntax = with_labels(&[("plan", "https://example.com/plan")]);
+    let with = lay_out(text, &syntax, BaseDirection::Ltr, None);
+    assert_eq!(with.visible, "See the plan and more.");
+    let linked: Vec<_> = with
+        .runs
+        .iter()
+        .filter(|r| r.style.link)
+        .map(|r| r.range.clone())
+        .collect();
+    assert_eq!(linked, vec![4..12], "`the plan`, and not the label");
+    assert_eq!(with.map.to_visible(4), None, "the opening `[` is a marker");
+    assert_eq!(with.map.to_block(4), 5, "visible `t` is block `t`");
+    assert_eq!(
+        with.map.to_visible(14),
+        None,
+        "and so is every byte of `[plan]`"
+    );
+}
+
+#[test]
+fn an_image_contributes_no_visible_text_and_one_box_carrying_its_src() {
+    let text = "before ![alt text](./diagram.png \"Architecture\") after";
+    let laid = plain(text);
+    assert_eq!(
+        laid.visible, "before  after",
+        "the alt text is an attribute in muya, not something a reader sees"
+    );
+    assert_eq!(laid.images.len(), 1);
+    let image = &laid.images[0];
+    assert_eq!(image.src, "./diagram.png");
+    assert_eq!(image.visible_index, "before ".len());
+    assert_eq!(image.block, 7..text.len() - " after".len());
+    every_offset_round_trips(text);
+}
+
+#[test]
+fn an_empty_src_is_a_real_state_and_reaches_the_box_as_an_empty_string() {
+    let laid = plain("![alt]()");
+    assert_eq!(laid.visible, "");
+    assert_eq!(laid.images.len(), 1);
+    assert_eq!(laid.images[0].src, "");
+}
+
+/// `ReferenceImage` carries `alt`, `label` and two backslash runs and no
+/// `href`, so the `src` has to come back out of the table that made it a
+/// reference image at all.
+#[test]
+fn a_reference_image_takes_its_src_from_the_same_table_that_defined_it() {
+    let text = "see ![a diagram][fig] here";
+    assert!(
+        plain(text).images.is_empty(),
+        "with no table this is plain text and not an image at all"
+    );
+
+    let syntax = with_labels(&[("fig", "./fig.png")]);
+    let laid = lay_out(text, &syntax, BaseDirection::Ltr, None);
+    assert_eq!(laid.visible, "see  here");
+    assert_eq!(laid.images.len(), 1);
+    assert_eq!(laid.images[0].src, "./fig.png");
+}
+
+/// M3-R1's workaround exists and fires on exactly one condition. **Not a test
+/// of its correctness** — that needs a shaped line and a later phase's gate —
+/// only that the construct reaches it and that nothing else does.
+#[test]
+fn an_image_leading_a_right_to_left_paragraph_is_preceded_by_a_right_to_left_mark() {
+    let text = "![diagram](./x.png) مرحبا";
+
+    let ltr = lay_out(text, &InlineSyntax::default(), BaseDirection::Ltr, None);
+    assert_eq!(
+        ltr.visible, " مرحبا",
+        "a left-to-right paragraph is untouched"
+    );
+    assert_eq!(ltr.images[0].visible_index, 0);
+
+    let rtl = lay_out(text, &InlineSyntax::default(), BaseDirection::Rtl, None);
+    assert_eq!(rtl.visible, format!("{RTL_MARK} مرحبا"));
+    assert_eq!(
+        rtl.images[0].visible_index,
+        RTL_MARK.len(),
+        "the box sits after the mark, so it is no longer before the first run"
+    );
+    // The mark stands *for* the image's bytes, so both sides still tile and
+    // D13 needed no fourth `MapKind`.
+    assert_eq!(rtl.map.runs()[0].kind, MapKind::Substituted);
+    assert_eq!(rtl.map.runs()[0].block, 0..19);
+    assert_eq!(rtl.map.to_block(0), 0);
+    every_offset_round_trips_with(text, BaseDirection::Rtl);
+
+    // An image anywhere but the head of the paragraph is left alone, because
+    // parley only mislevels a box that precedes the first shaped run.
+    let later = lay_out(
+        "مرحبا ![diagram](./x.png)",
+        &InlineSyntax::default(),
+        BaseDirection::Rtl,
+        None,
+    );
+    assert!(!later.visible.contains(RTL_MARK));
 }

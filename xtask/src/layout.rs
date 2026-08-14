@@ -188,11 +188,27 @@ fn parse_options(input: &str) -> (mt_md::Options, String) {
 /// The header does not grow a field for them: the `parse` line already records
 /// `footnote=` and `super-sub=`, and recording the same bit twice invites the
 /// two copies to disagree.
-fn layout_options(parse: &mt_md::Options) -> LayoutOptions {
+///
+/// # The labels come from the same parse, and that is the whole trick
+///
+/// `TokenizerOptions::labels` is typed `mt_inline::Labels`, which `mt_md::labels`
+/// merely populates — so handing `Parsed::labels` down needs no new dependency
+/// edge and no `mt-md` reference inside `mt-layout`. Without it,
+/// `[the plan][plan]` in `10kb.md` lays out as four literal brackets, and a
+/// golden written over that reading would freeze it.
+///
+/// # The image table is deliberately empty
+///
+/// D12 has the shell resolve image sizes, and this harness resolves none: it
+/// opens no PNG, so every inline image takes the reference's own no-bitmap
+/// geometry. That is the point — the goldens then exercise `.mu-image-fail`
+/// deterministically, with no file on disk and no machine dependence.
+fn layout_options(parse: &mt_md::Options, labels: mt_inline::Labels) -> LayoutOptions {
     LayoutOptions {
         inline_syntax: mt_layout::InlineSyntax {
             footnote: parse.footnote,
             super_sub_script: parse.super_sub_script,
+            labels,
         },
         ..LayoutOptions::default()
     }
@@ -384,7 +400,7 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
     for (name, text) in &documents {
         let (parse_opts, parse_label) = parse_options(name);
         let parsed = mt_md::parse(text, parse_opts);
-        let options = layout_options(&parse_opts);
+        let options = layout_options(&parse_opts, parsed.labels.clone());
         for theme in &themes {
             let list = layout_with(
                 &parsed.document,
@@ -1252,7 +1268,7 @@ fn measure(
     for (name, text) in documents {
         let (parse_opts, parse_label) = parse_options(name);
         let parsed = mt_md::parse(text, parse_opts);
-        let options = layout_options(&parse_opts);
+        let options = layout_options(&parse_opts, parsed.labels.clone());
         let mut sizes = Vec::new();
         let mut blocks = 0usize;
         let mut items = 0usize;

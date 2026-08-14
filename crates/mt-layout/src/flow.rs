@@ -186,9 +186,12 @@ use mt_doc::{Align, Block, Document, NodeId, OrderDelim};
 
 use crate::display::{BlockDisplay, BlockKind, Brush, DisplayItem, DisplayList, FilledRect, Rect};
 use crate::fonts::{FontError, Fonts};
-use crate::inline::{self, InlineRun, InlineSyntax, VisibleTextMap};
+use crate::images::ImageSizes;
+use crate::inline::{self, InlineImage, InlineRun, InlineSyntax, VisibleTextMap};
 use crate::paint;
-use crate::text::{ShapedText, StyleRun, TextRequest, TextShaper};
+use crate::text::{
+    BaseDirection, InlineBoxSpec, ShapedText, StyleRun, TextGround, TextRequest, TextShaper,
+};
 use crate::theme::{CheckboxTop, CodeBlock, Color, ListMarker, OrderedMarker, TextAlign, Theme};
 use crate::units::Units;
 
@@ -201,7 +204,7 @@ use crate::units::Units;
 /// Kept apart from [`Theme`] because they are: `codeBlockLineNumbers` lives in
 /// `packages/muya/src/config/index.ts:323`, not in any stylesheet, and no theme
 /// file can set it. Its default here is muya's default — **`false`**.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct LayoutOptions {
     /// muya's `wrapCodeBlocks`, default `false`
     /// (`packages/muya/src/config/index.ts:324`, the line immediately after
@@ -232,7 +235,18 @@ pub struct LayoutOptions {
     /// absence — so a caller that parsed with something other than
     /// `Options::MUYA_DEFAULT` has to say so. The default matches
     /// `MUYA_DEFAULT`: both **off**.
+    ///
+    /// It also carries the document's reference definitions, without which
+    /// `[text][ref]` is four literal brackets. See [`InlineSyntax`].
     pub inline_syntax: InlineSyntax,
+    /// Every inline image whose bitmap the caller has already decoded —
+    /// **D12**.
+    ///
+    /// Empty is the correct value for a caller with no image loader, and it is
+    /// what the goldens use: `mt-layout` opens nothing, so an image with no
+    /// entry takes the reference's own no-bitmap geometry rather than a
+    /// guessed number. See [`crate::images`].
+    pub images: ImageSizes,
 }
 
 /// Lay a document out at a width, in a theme.
@@ -384,6 +398,13 @@ struct TextStyle {
     brush: Brush,
     wrap: Wrap,
     letter_spacing: f32,
+    /// The paragraph's base direction — `Ltr` everywhere today, for the
+    /// reference-parity reason [`TextRequest::new`] argues at length.
+    ///
+    /// A planned field rather than a constant in `shape` because it is the one
+    /// input M3-R1's workaround keys on, and because M5 exposes the
+    /// reference's own two-valued `dir` preference by setting it here.
+    base_direction: BaseDirection,
 }
 
 /// A block's margins, border and padding, resolved to px.
@@ -472,6 +493,15 @@ struct Planned {
     /// list. `None` for a container, and the identity for a leaf whose text is
     /// not inline markdown.
     map: Option<VisibleTextMap>,
+    /// [`InlineBoxItem::id`]s of the images this block reserved a box for that
+    /// have **no bitmap** — D12's `.mu-image-fail` / `.mu-empty-image`. Those
+    /// are the ones `emit_block` draws a ground and an icon for; a resolved
+    /// image draws neither, because `.mu-inline-image.mu-image-success` sets
+    /// `background: transparent` (`inlineSyntax.css:392-394`) and the bitmap
+    /// itself is the renderer's to paint into the box.
+    ///
+    /// [`InlineBoxItem::id`]: crate::display::InlineBoxItem::id
+    image_placeholders: Vec<u64>,
     /// Synthetic text that is not the block's own: an ordered list marker, or a
     /// code block's line numbers. Never both — no block kind needs two.
     aux_text: String,
@@ -563,7 +593,7 @@ impl LayoutTree {
 
         let mut tree = LayoutTree {
             theme: theme.clone(),
-            options: *options,
+            options: options.clone(),
             blocks: Vec::new(),
             roots: Vec::new(),
             content_width,
@@ -703,9 +733,26 @@ impl LayoutTree {
             // text is already what a reader sees, so it is shaped verbatim and
             // gets the identity map rather than no map at all.
             let (shaped, map) = if self.blocks[index].kind.lays_out_inline_markdown() {
-                let laid = inline::lay_out(&text, self.options.inline_syntax, None);
+                let laid = inline::lay_out(
+                    &text,
+                    &self.options.inline_syntax,
+                    style.base_direction,
+                    None,
+                );
                 let runs = self.style_runs(&style, &laid.runs, opacity);
-                let shaped = self.shape(&style, &laid.visible, &runs, content_width, fonts, shaper);
+                let grounds = self.grounds(&style, &laid.runs, opacity);
+                let (boxes, placeholders) = self.image_boxes(&laid.images, content_width);
+                let shaped = self.shape_with(
+                    &style,
+                    &laid.visible,
+                    &runs,
+                    &grounds,
+                    &boxes,
+                    content_width,
+                    fonts,
+                    shaper,
+                );
+                self.blocks[index].image_placeholders = placeholders;
                 (shaped, laid.map)
             } else {
                 let shaped = self.shape(&style, &text, &[], content_width, fonts, shaper);
@@ -810,6 +857,21 @@ impl LayoutTree {
         fonts: &mut Fonts,
         shaper: &mut TextShaper,
     ) -> ShapedText {
+        self.shape_with(style, text, runs, &[], &[], content_width, fonts, shaper)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn shape_with(
+        &self,
+        style: &TextStyle,
+        text: &str,
+        runs: &[StyleRun<'_>],
+        grounds: &[TextGround],
+        boxes: &[InlineBoxSpec],
+        content_width: f32,
+        fonts: &mut Fonts,
+        shaper: &mut TextShaper,
+    ) -> ShapedText {
         let mut request = TextRequest::new(
             text,
             self.families(style.stack),
@@ -820,7 +882,10 @@ impl LayoutTree {
         request.align = style.align;
         request.brush = style.brush;
         request.letter_spacing = style.letter_spacing;
+        request.base_direction = style.base_direction;
         request.runs = runs;
+        request.grounds = grounds;
+        request.inline_boxes = boxes;
         request.max_width = match style.wrap {
             Wrap::AtContentWidth => Some(content_width.max(0.0)),
             Wrap::Never => None,
@@ -837,9 +902,17 @@ impl LayoutTree {
     /// are merged, and any run that ends up identical to the block's own style
     /// is dropped — because a style-run boundary is a shaping boundary, so a
     /// needless push costs a kerning pair and a paragraph with no markup must
-    /// shape exactly as it did before any of this existed. Two of `mt-inline`'s
-    /// distinctions vanish here by design: `del` and a revealed marker are
-    /// semantic today and drawn later, so neither changes a glyph.
+    /// shape exactly as it did before any of this existed.
+    ///
+    /// # The colour cascade is CSS's, not a precedence table
+    ///
+    /// `colors.strong` and `colors.em` default to `inherit`
+    /// (`inlineSyntax.css:49-57` sets `color` on `<strong>`/`<em>` and nothing
+    /// else), and `inherit` for a `<strong>` inside an `<a>` is **the link's
+    /// colour**, not the paragraph's. So the brush is built by applying each
+    /// enclosing element's rule in the order the DOM nests them — link, then
+    /// emphasis, then code — rather than by picking a winner. `dark` sets both
+    /// to real colours and is where the difference shows.
     fn style_runs(&self, style: &TextStyle, runs: &[InlineRun], opacity: f32) -> Vec<StyleRun<'_>> {
         let theme = &self.theme;
         let base = self.families(style.stack);
@@ -860,6 +933,22 @@ impl LayoutTree {
             if s.footnote {
                 font_size *= theme.inline.footnote_identifier_font_size_em;
             }
+            let mut brush = style.brush;
+            if s.link {
+                brush = inline_brush(theme.colors.link, brush, opacity);
+            }
+            if s.strong {
+                brush = inline_brush(theme.colors.strong, brush, opacity);
+            }
+            if s.em {
+                brush = inline_brush(theme.colors.em, brush, opacity);
+            }
+            if s.code {
+                // `color: var(--editor-color)` — and note it is the editor's
+                // colour and not the inherited one, so inline code inside a
+                // blockquote does **not** take `blockquote_text`.
+                brush = inline_brush(theme.colors.editor, brush, opacity);
+            }
             let resolved = StyleRun {
                 range: run.range.clone(),
                 families,
@@ -870,16 +959,10 @@ impl LayoutTree {
                     style.weight
                 },
                 italic: s.em && theme.inline.em_italic,
-                brush: if s.code {
-                    // `color: var(--editor-color)` — and note it is the
-                    // editor's colour and not the inherited one, so inline code
-                    // inside a blockquote does **not** take `blockquote_text`.
-                    inline_brush(theme.colors.editor, style.brush, opacity)
-                } else if s.link {
-                    inline_brush(theme.colors.link, style.brush, opacity)
-                } else {
-                    style.brush
-                },
+                brush,
+                // Both are the UA sheet reading the face — see `StyleRun`.
+                underline: s.link,
+                strikethrough: s.del,
             };
             match out.last_mut() {
                 Some(last)
@@ -888,7 +971,9 @@ impl LayoutTree {
                         && last.font_size == resolved.font_size
                         && last.weight == resolved.weight
                         && last.italic == resolved.italic
-                        && last.brush == resolved.brush =>
+                        && last.brush == resolved.brush
+                        && last.underline == resolved.underline
+                        && last.strikethrough == resolved.strikethrough =>
                 {
                     last.range.end = resolved.range.end;
                 }
@@ -907,8 +992,125 @@ impl LayoutTree {
                 || r.weight != style.weight
                 || r.italic
                 || r.brush != style.brush
+                || r.underline
+                || r.strikethrough
         });
         out
+    }
+
+    /// The rounded grounds behind inline code and behind a footnote
+    /// identifier's pill.
+    ///
+    /// Not part of [`LayoutTree::style_runs`] because a ground is not a text
+    /// style: it changes no glyph, it is painted before the glyphs rather than
+    /// with them, and it survives the `retain` that drops a run which changes
+    /// nothing. Both paddings are in the **run's own** `em`, which is what a
+    /// CSS length on the same rule as a `font-size` means.
+    fn grounds(&self, style: &TextStyle, runs: &[InlineRun], opacity: f32) -> Vec<TextGround> {
+        let theme = &self.theme;
+        let bg = inline_brush(theme.colors.code_block_bg, style.brush, opacity);
+        if !bg.is_visible() {
+            return Vec::new();
+        }
+        let mut out: Vec<TextGround> = Vec::new();
+        for run in runs {
+            // Code wins over the footnote pill when both are set: a `[^id]`
+            // cannot contain a code span, so the pair is unreachable, and
+            // choosing rather than emitting two overlapping rects is the answer
+            // that stays right if it ever becomes reachable.
+            let (em, padding_x_em, padding_y_em, radius) = if run.style.code {
+                (
+                    style.font_size * theme.inline_code.font_size_em,
+                    theme.inline_code.padding_x_em,
+                    theme.inline_code.padding_y_em,
+                    theme.inline_code.corner_radius_px,
+                )
+            } else if run.style.footnote {
+                (
+                    style.font_size * theme.inline.footnote_identifier_font_size_em,
+                    theme.inline.footnote_identifier_padding_x_em,
+                    theme.inline.footnote_identifier_padding_y_em,
+                    theme.inline.footnote_identifier_corner_radius_px,
+                )
+            } else {
+                continue;
+            };
+            let ground = TextGround {
+                range: run.range.clone(),
+                padding_x: em * padding_x_em,
+                padding_y: em * padding_y_em,
+                corner_radius: radius,
+                brush: bg,
+            };
+            match out.last_mut() {
+                Some(last)
+                    if last.range.end == ground.range.start
+                        && last.padding_x == ground.padding_x
+                        && last.padding_y == ground.padding_y
+                        && last.corner_radius == ground.corner_radius =>
+                {
+                    last.range.end = ground.range.end;
+                }
+                _ => out.push(ground),
+            }
+        }
+        out
+    }
+
+    /// D12: one [`InlineBoxSpec`] per inline image, plus the ids of the ones
+    /// that need the no-bitmap chrome drawn behind them.
+    ///
+    /// The id is the image token's **block-text start offset**, which is unique
+    /// within a leaf and is what matches a box in the display list back to the
+    /// token that produced it without a side table.
+    fn image_boxes(
+        &self,
+        images: &[InlineImage],
+        content_width: f32,
+    ) -> (Vec<InlineBoxSpec>, Vec<u64>) {
+        let mut boxes = Vec::with_capacity(images.len());
+        let mut placeholders = Vec::new();
+        for image in images {
+            let id = image.block.start as u64;
+            let size = self.options.images.get(&image.src);
+            let (width, height) = match size {
+                // `max-width: 100%` on the container *and* on the `<img>`
+                // (`inlineSyntax.css:374-390`), which for a replaced element
+                // scales the height with it rather than squashing it.
+                Some(size) if size.width_px > content_width && size.width_px > 0.0 => {
+                    let scale = content_width / size.width_px;
+                    (content_width, size.height_px * scale)
+                }
+                Some(size) => (size.width_px, size.height_px),
+                // No entry is a completed failure, not a pending load, so it is
+                // `.mu-image-fail`/`.mu-empty-image`: `width: 100%` of the
+                // containing block and `height: 50px`
+                // (`inlineSyntax.css:434-440`). A box as wide as the column
+                // cannot share a line with anything, which is the visible
+                // consequence D12 predicts.
+                None => {
+                    placeholders.push(id);
+                    (
+                        content_width.max(0.0),
+                        self.theme.inline.image_placeholder_height_px,
+                    )
+                }
+            };
+            boxes.push(InlineBoxSpec {
+                id,
+                index: image.visible_index,
+                width,
+                height,
+                // `.mu-inline-image` is an `inline-block` with `font-size: 0`,
+                // `line-height: 0` and an empty container, so its baseline is
+                // its bottom margin edge — and `.mu-image-loading` says
+                // `vertical-align: bottom` in as many words
+                // (`inlineSyntax.css:442-448`). `None` is exactly that
+                // instruction; see `InlineBoxSpec::baseline`.
+                baseline: None,
+            });
+        }
+        (boxes, placeholders)
     }
 
     fn text_height(&self, index: usize) -> f32 {
@@ -1150,7 +1352,9 @@ impl LayoutTree {
         // hidden text occupies.
         if b.kind != BlockKind::ThematicBreak {
             if let Some(text) = b.text.built() {
+                let first = items.len();
                 text.emit(fonts, b.content_x, b.content_y(), &mut items)?;
+                self.emit_image_placeholders(b, first, &mut items);
             }
         }
 
@@ -1189,6 +1393,70 @@ impl LayoutTree {
             items,
             text_map: b.map.clone(),
         })
+    }
+
+    /// D12's chrome for an image with no bitmap: the ground, and the icon's
+    /// square.
+    ///
+    /// Appended after the text rather than interleaved with it, because a
+    /// placeholder is `width: 100%` of the column and so shares its line with
+    /// nothing — there is no glyph anywhere it can paint over. It is skipped
+    /// entirely for an image the shell did size, whose ground the reference
+    /// makes transparent (`inlineSyntax.css:392-394`) and whose bitmap belongs
+    /// to the renderer.
+    ///
+    /// **The label is not drawn**, and that is D12's decision rather than an
+    /// omission: it is `content: attr(fail-text)` where the attribute is
+    /// `i18n.t('Load image failed')` (`image.ts:89-90`) — a localized UI string
+    /// and not document content. M3 has no locale, and an invented English one
+    /// would put chrome inside a display list that is also PDF export's input.
+    /// Owed to S5, which is the first thing in this project with a UI language.
+    fn emit_image_placeholders(&self, b: &Planned, from: usize, items: &mut Vec<DisplayItem>) {
+        if b.image_placeholders.is_empty() {
+            return;
+        }
+        let inline = &self.theme.inline;
+        let ground = dim(
+            Brush::resolve(self.theme.colors.code_block_bg, Brush::default()),
+            b.opacity,
+        );
+        // The icon is a font glyph in the reference and this repository has no
+        // icon set, so what is drawn is its box. `--icon-color` has no theme
+        // field either; `editor_50` is the neutral chrome colour the same
+        // stylesheet uses for every other unemphasised mark.
+        let icon = dim(
+            Brush::resolve(self.theme.colors.editor_50, Brush::default()),
+            b.opacity,
+        );
+        let mut chrome = Vec::new();
+        for item in &items[from..] {
+            let DisplayItem::InlineBox(bx) = item else {
+                continue;
+            };
+            if !b.image_placeholders.contains(&bx.id) {
+                continue;
+            }
+            if ground.is_visible() {
+                chrome.push(DisplayItem::Rect(FilledRect {
+                    rect: bx.rect(),
+                    corner_radius: inline.image_corner_radius_px,
+                    rotation_deg: 0.0,
+                    brush: ground,
+                }));
+            }
+            if icon.is_visible() {
+                chrome.push(DisplayItem::Rect(FilledRect::new(
+                    Rect::new(
+                        bx.x + inline.image_icon_inset_px,
+                        bx.y + inline.image_icon_inset_px,
+                        inline.image_icon_px,
+                        inline.image_icon_px,
+                    ),
+                    icon,
+                )));
+            }
+        }
+        items.append(&mut chrome);
     }
 
     fn emit_marker(
@@ -1582,6 +1850,7 @@ impl LayoutTree {
             text: ShapeState::Unbuilt,
             intrinsic_width: 0.0,
             map: None,
+            image_placeholders: Vec::new(),
             aux_text,
             aux_style,
             aux: ShapeState::Unbuilt,
@@ -1758,6 +2027,7 @@ fn body_style(units: &Units, line_height: f32, brush: Brush) -> TextStyle {
         brush,
         wrap: Wrap::AtContentWidth,
         letter_spacing: 0.0,
+        base_direction: BaseDirection::Ltr,
     }
 }
 
@@ -1789,6 +2059,7 @@ fn gutter_style(units: &Units, cb: &CodeBlock, brush: Brush) -> TextStyle {
         brush,
         wrap: Wrap::AtContentWidth,
         letter_spacing: cb.gutter_letter_spacing_px,
+        base_direction: BaseDirection::Ltr,
     }
 }
 

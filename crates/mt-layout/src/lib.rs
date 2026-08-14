@@ -103,12 +103,18 @@
 //! [`InlineBoxSpec`] plumbing that lets a caller reserve a hole in a line.
 //! `**bold**` is four columns now, not eight.
 //!
-//! What S2 still owes: a producer for those holes (an image with a size, D12),
-//! the drawn half of inline decoration — inline code's background, `del`'s
-//! strikethrough, a footnote identifier's pill — and the deliberate
-//! line-by-line cross-check of the emitted geometry against
-//! `inlineSyntax.css`, which §6 puts *before* the goldens are regenerated
-//! because a golden written first freezes whatever it was shown.
+//! It also places D12's inline images — sized from an [`ImageSizes`] table the
+//! shell builds, and taking the reference's own no-bitmap geometry when the
+//! shell resolved nothing — and draws the inline decorations: inline code's
+//! ground, a footnote identifier's pill, and the `del`/link rules, whose
+//! thickness and offset come from the **face's** metrics because muya has no
+//! CSS for either and a browser would read the font too.
+//!
+//! What S2 still owes: the emoji shortcode, which is copied verbatim because
+//! `mt-inline` ships no name table, and the deliberate line-by-line
+//! cross-check of the emitted geometry against `inlineSyntax.css`, which §6
+//! puts *before* the goldens are regenerated because a golden written first
+//! freezes whatever it was shown.
 //!
 //! Geometry is guarded two ways: `theme::tests` asserts §2's table as
 //! constants, and `cargo xtask layout` compares the display list for every
@@ -120,6 +126,7 @@
 pub mod display;
 pub mod flow;
 pub mod fonts;
+pub mod images;
 pub mod inline;
 // Private: every item in it is `pub(crate)`. D8's public surface is the
 // display list, not the recipe that fills it.
@@ -137,9 +144,13 @@ pub use fonts::{
     Axis, BUNDLED_FACES_TOML, Face, FaceList, FaceListMeta, FaceRole, FaceStyle, FontError, FontId,
     Fonts,
 };
+pub use images::{ImageSize, ImageSizes};
 pub use inline::{
-    InlineRun, InlineStyle, InlineSyntax, InlineText, MapKind, MapRun, VisibleTextMap,
+    InlineImage, InlineRun, InlineStyle, InlineSyntax, InlineText, MapKind, MapRun, RTL_MARK,
+    VisibleTextMap,
 };
-pub use text::{BaseDirection, InlineBoxSpec, ShapedText, StyleRun, TextRequest, TextShaper};
+pub use text::{
+    BaseDirection, InlineBoxSpec, ShapedText, StyleRun, TextGround, TextRequest, TextShaper,
+};
 pub use theme::{Theme, ThemeError};
 pub use units::Units;

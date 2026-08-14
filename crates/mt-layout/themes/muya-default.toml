@@ -112,8 +112,25 @@ corner_radius_px = 3.0
 # `em { font-style: italic }`), so there is no MarkText number here to transcribe.
 strong_weight = 700
 em_italic = true
-# `font-size: 0.7em` — inlineSyntax.css:604
+# The footnote-identifier pill — inlineSyntax.css:599-609.
+# `font-size: 0.7em`, `padding: 0 0.4em`, `border-radius: 3px`. The padding's
+# `em` is the pill's own 0.7em, which is what a length on the same rule means.
 footnote_identifier_font_size_em = 0.7
+footnote_identifier_padding_x_em = 0.4
+footnote_identifier_padding_y_em = 0.0
+footnote_identifier_corner_radius_px = 3.0
+
+# The inline image with no bitmap — D12.
+# `.mu-image-fail` and `.mu-empty-image` are `width: 100%; height: 50px`
+# (inlineSyntax.css:434-440) on the `--code-block-bg-color` ground of
+# `.mu-inline-image` (:346-352), whose radius is 2 and NOT inline code's 3.
+# The icon inside is 20x20 at `top: 15px; left: 15px` (:396-410).
+# `.mu-image-loading`'s 400x250 (:442-448) is unreachable at M3 and has no
+# field: nothing here can report "pending".
+image_placeholder_height_px = 50.0
+image_corner_radius_px = 2.0
+image_icon_px = 20.0
+image_icon_inset_px = 15.0
 
 [lists]
 # `padding-inline-start: 30px` — blockSyntax.css:410, 481

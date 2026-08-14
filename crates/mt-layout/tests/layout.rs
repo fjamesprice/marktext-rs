@@ -1139,3 +1139,130 @@ fn every_visible_offset_in_a_laid_out_document_maps_back_inside_its_token() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// The drawn inline decorations, against real faces
+// ---------------------------------------------------------------------------
+
+fn rects(list: &DisplayList, kind: BlockKind) -> Vec<mt_layout::FilledRect> {
+    list.blocks
+        .iter()
+        .filter(|b| b.kind == kind)
+        .flat_map(|b| b.items.iter())
+        .filter_map(|i| match i {
+            DisplayItem::Rect(r) => Some(*r),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Inline code's ground is a rounded rect **behind** the run — `padding:
+/// 0.2em 0.4em`, `border-radius: 3px`, `background: var(--code-block-bg-color)`
+/// (`inlineSyntax.css:60-70`) — and the `em` is the code's own 0.8em, not the
+/// paragraph's.
+#[test]
+fn an_inline_code_span_is_painted_on_a_rounded_ground_before_its_glyphs() {
+    let theme = Theme::muya_default();
+    let mut doc = Doc::new();
+    let root = doc.root();
+    doc.para(root, "before `code` after");
+    let list = lay_out(&doc, &theme);
+    let grounds = rects(&list, BlockKind::Paragraph);
+    assert_eq!(grounds.len(), 1, "one code span, one ground: {grounds:#?}");
+    let ground = grounds[0];
+    assert_eq!(ground.corner_radius, theme.inline_code.corner_radius_px);
+    assert_eq!(ground.corner_radius, 3.0);
+
+    // Paint order: `BlockDisplay::items` is paint order and a ground sits
+    // behind the glyphs it belongs to, so it must come first.
+    let para = list
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::Paragraph)
+        .expect("a paragraph");
+    assert!(
+        matches!(para.items.first(), Some(DisplayItem::Rect(_))),
+        "the ground is painted before any glyph run"
+    );
+
+    // The padding is the code's own em: 16 × 0.8 × 0.4 on each side.
+    let em = theme.metrics.font_size_px * theme.inline_code.font_size_em;
+    let code_run = para
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            DisplayItem::Glyphs(g) => Some(g),
+            _ => None,
+        })
+        .find(|g| g.font_size == em)
+        .expect("the code span shapes at 0.8em");
+    let pad = em * theme.inline_code.padding_x_em;
+    assert!((ground.rect.x - (code_run.offset - pad)).abs() < 0.01);
+    assert!((ground.rect.width - (code_run.advance + 2.0 * pad)).abs() < 0.01);
+    // It does not grow the line: a paragraph with a code span is exactly as
+    // tall as one without, because CSS pads the inline box and not the line box.
+    let mut plain = Doc::new();
+    let plain_root = plain.root();
+    plain.para(plain_root, "before code after");
+    assert_eq!(
+        lay_out(&plain, &theme).height,
+        list.height,
+        "inline code's padding is not line height"
+    );
+}
+
+/// `del` and a link are drawn from the **face's own** metrics, because muya has
+/// no CSS for either — `grep line-through` is empty and `a.mu-inline-rule` sets
+/// colour alone — so both are the browser's UA sheet, which reads `post` and
+/// `OS/2`.
+///
+/// Asserted as *relationships to the baseline* rather than as literal pixels,
+/// because the literal is Open Sans's and belongs in a golden.
+#[test]
+fn a_strikethrough_and_an_underline_come_from_the_faces_own_metrics() {
+    let theme = Theme::muya_default();
+    let mut doc = Doc::new();
+    let root = doc.root();
+    doc.para(root, "~~struck~~ and [linked](https://example.com)");
+    let list = lay_out(&doc, &theme);
+    let para = list
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::Paragraph)
+        .expect("a paragraph");
+    let baseline = para
+        .items
+        .iter()
+        .find_map(|i| match i {
+            DisplayItem::Glyphs(g) => Some(g.baseline),
+            _ => None,
+        })
+        .expect("glyphs");
+    let lines = rects(&list, BlockKind::Paragraph);
+    assert_eq!(lines.len(), 2, "one strikethrough, one underline");
+
+    let strike = lines
+        .iter()
+        .find(|r| r.rect.y < baseline)
+        .expect("a strikeout sits above the baseline");
+    let underline = lines
+        .iter()
+        .find(|r| r.rect.y > baseline)
+        .expect("an underline sits below it");
+    for rule in [strike, underline] {
+        assert_eq!(rule.corner_radius, 0.0);
+        assert!(
+            rule.rect.height > 0.0 && rule.rect.height < theme.metrics.font_size_px * 0.25,
+            "a face-derived thickness, not a guess: {rule:?}"
+        );
+        assert!(rule.rect.width > 0.0);
+    }
+    // Both take the run's own colour, which is what `text-decoration-color:
+    // currentColor` means: the link's rule is the link colour and the `del`'s
+    // is the paragraph's.
+    assert_ne!(strike.brush, underline.brush);
+    assert_eq!(
+        underline.brush,
+        mt_layout::Brush::resolve(theme.colors.link, mt_layout::Brush::default())
+    );
+}

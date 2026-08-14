@@ -10,7 +10,7 @@
 //! string handed to parley is not the block's text: `**bold**` is eight bytes
 //! of block text and four of visible text.
 //!
-//! So this module produces three things from one walk of `mt_inline`'s token
+//! So this module produces four things from one walk of `mt_inline`'s token
 //! tree:
 //!
 //! 1. the **visible string**, which is what gets shaped;
@@ -18,7 +18,9 @@
 //!    code, link text and so on — [`crate::flow`] resolves those against the
 //!    theme into the style runs parley is given;
 //! 3. the [`VisibleTextMap`], D13's public run list, which is how any caller
-//!    gets from a shaped offset back to a block-text offset.
+//!    gets from a shaped offset back to a block-text offset;
+//! 4. a list of [`InlineImage`]s — where a replaced box goes and what its `src`
+//!    is, with no size, because D12 puts the size above this seam.
 //!
 //! # C6's premise is wrong in one word, and D13 corrects it
 //!
@@ -45,9 +47,11 @@
 use std::ops::Range;
 
 use mt_inline::{
-    Cursor, MarkerState, Span, Token, TokenKind, TokenizerOptions, escape_character, marker_state,
-    marker_state_of_range, tokenizer,
+    Cursor, Labels, MarkerState, Span, Token, TokenKind, TokenizerOptions, escape_character,
+    marker_state, marker_state_of_range, tokenizer,
 };
+
+use crate::text::BaseDirection;
 
 // ---------------------------------------------------------------------------
 // The map — D13
@@ -80,6 +84,11 @@ pub enum MapKind {
     ///
     /// An offset *inside* such a run has no meaningful partner on the other
     /// side, so both directions answer with the run's start.
+    ///
+    /// A fourth producer arrived with D12 and is not a rendering of anything:
+    /// an image that leads a right-to-left paragraph substitutes its bytes for
+    /// one [`RTL_MARK`], so that M3-R1's workaround costs no new variant and
+    /// the run list keeps tiling both sides.
     Substituted,
     /// A marker. The bytes are in the block text and nowhere in the visible
     /// string, so [`MapRun::visible`] is empty and
@@ -241,14 +250,15 @@ pub struct InlineStyle {
     pub strong: bool,
     /// Inside `*` / `_`.
     pub em: bool,
-    /// Inside `~~`. **Carried but not yet drawn**: muya has no `line-through`
-    /// rule anywhere, so the strikethrough is the browser's UA `<del>` and the
-    /// decoration it needs is a later commit's.
+    /// Inside `~~`. Drawn as a rule at the face's own strikeout position and
+    /// thickness, because muya has no `line-through` rule anywhere and a
+    /// browser's UA `<del>` reads `OS/2` for both numbers.
     pub del: bool,
     /// Inside `` ` ``. Takes the theme's inline-code stack and its `0.8em`.
     pub code: bool,
     /// Inside a link, reference link or autolink — the anchor text, never the
-    /// href, which is a marker and hidden with the rest.
+    /// href, which is a marker and hidden with the rest. Underlined from the
+    /// face's `post` table, for [`del`](Self::del)'s reason.
     pub link: bool,
     /// A footnote identifier's own text, which is drawn smaller.
     pub footnote: bool,
@@ -267,6 +277,68 @@ pub struct InlineRun {
 // The walk
 // ---------------------------------------------------------------------------
 
+/// An inline image found by the walk, and where its box belongs — **D12**.
+///
+/// Deliberately carries no width and no height. `mt-inline`'s `Image` token has
+/// no dimension of any kind, markdown has nowhere to put one, and this module
+/// owns no theme and may not open a file. The size is resolved one layer up
+/// from [`ImageSizes`](crate::images::ImageSizes), which the shell builds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineImage {
+    /// Byte offset into [`InlineText::visible`] at which the box sits.
+    ///
+    /// Always on a `char` boundary, and normally at the offset the token's own
+    /// hidden bytes reached. The one exception is the RTL workaround — see
+    /// [`RTL_MARK`].
+    pub visible_index: usize,
+    /// The token's own `src`, as it appears in the source.
+    ///
+    /// The **unencoded** slice and not `ImageAttrs::src`, which is
+    /// `encodeURI`'d: the shell resolves this against a directory, and a path
+    /// with a space in it would never match its own percent-encoded spelling.
+    ///
+    /// Empty is a real state — `![alt]()` — and D12 gives it the same geometry
+    /// as a failed load under a different class name.
+    pub src: String,
+    /// The token's extent in the block's own text, which is also the box's
+    /// [`id`](crate::display::InlineBoxItem::id) once flow has it.
+    pub block: Range<usize>,
+}
+
+/// U+200F RIGHT-TO-LEFT MARK, inserted before an inline box that would
+/// otherwise sit at offset 0 of a right-to-left paragraph — **M3-R1's
+/// workaround**.
+///
+/// # What is actually wrong upstream
+///
+/// parley assigns an inline box the bidi level of the shaped run *before* it
+/// (`parley/src/shape/mod.rs:204-208`), and for a box before the **first** run
+/// there is no previous run, so it takes `BidiLevel::new(0)` — level 0, not the
+/// paragraph's level. Upstream's own TODO on those lines says what the right
+/// answer is: the box should be analysed as a U+FFFC object replacement
+/// character and take *that* character's level. In a paragraph at base level 1,
+/// a leading U+FFFC resolves to level 1 and the box belongs at the right-hand
+/// end of the line; parley puts it at the left.
+///
+/// # Why a right-to-left mark fixes it
+///
+/// The mark is a strong R character, so it shapes into a run of its own at
+/// level 1 and the box is no longer before the first run. It then takes that
+/// run's level — 1 — which is the level the U+FFFC would have had. The mark is
+/// default-ignorable and contributes no advance, so the line is unchanged
+/// apart from the box moving to the end it belongs at.
+///
+/// # Reachability, stated rather than implied
+///
+/// The condition is a **paragraph** at base level 1, and `mt-layout` lays every
+/// paragraph out at [`BaseDirection::Ltr`] today for the reference-parity
+/// reason [`TextRequest::new`](crate::TextRequest::new) argues at length — so
+/// nothing in `bench/corpus/` triggers it and no golden moves. `rtl.md` carries
+/// the construct anyway, because the day M5 exposes the reference's own
+/// two-valued `dir` preference is the day this fires, and a workaround with no
+/// input is indistinguishable from a workaround that does not work.
+pub const RTL_MARK: &str = "\u{200f}";
+
 /// One leaf's text, tokenized and reduced to what a reader sees.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct InlineText {
@@ -277,6 +349,8 @@ pub struct InlineText {
     pub runs: Vec<InlineRun>,
     /// D13's map.
     pub map: VisibleTextMap,
+    /// The images that need a box reserved, in document order.
+    pub images: Vec<InlineImage>,
 }
 
 /// The tokenizer settings `mt-layout` uses.
@@ -289,14 +363,18 @@ pub struct InlineText {
 /// instead — the same shape as `xtask`'s own `PARSE_OVERRIDES`, which is where
 /// the one corpus input that turns footnotes on already lives.
 ///
-/// **`labels` is empty and that is a limitation, not a choice.** A reference
-/// link is a reference link only if its label resolves, and the label table is
-/// collected per *document* by `mt_md::labels`. Until it is threaded down here,
-/// `[text][ref]` tokenizes as plain text and the [`TokenKind::ReferenceLink`]
-/// and [`TokenKind::ReferenceImage`] arms below are unreachable. They are
-/// written anyway, because the arm being absent when the table arrives is the
-/// expensive half.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// # `labels` is the same shape and needs no new edge
+///
+/// A reference form is a reference form only if its label resolves, and the
+/// label table is collected per *document*. It does **not** follow that
+/// `mt-layout` has to call `mt_md::labels` to get one:
+/// [`TokenizerOptions::labels`] is typed [`mt_inline::Labels`] — `mt-inline`'s
+/// own type, which `mt_md::labels` merely *populates*. `mt_md::parse` hands
+/// back `Parsed { document, labels, source_map }` and §3 already has the viewer
+/// holding all three, so the shell passes the table down exactly the way D7 has
+/// it pass a font collection down. No dependency edge, no `mt-md` reference,
+/// and `[text][ref]` resolves.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct InlineSyntax {
     /// `[^note]` — `mt_md::Options::footnote`, which `MUYA_DEFAULT` sets
     /// **off**.
@@ -310,16 +388,28 @@ pub struct InlineSyntax {
     /// `<sup>`/`<sub>` at all, so there is no MarkText number to be faithful to
     /// and parley has no vertical-align (#208) to be faithful with.
     pub super_sub_script: bool,
+    /// The document's reference definitions, keyed lowercase — the thing that
+    /// separates `[text][ref]` from four literal brackets.
+    ///
+    /// Empty is a legitimate value (a document that defines nothing), not a
+    /// stub. The walk reads it a second time for [`TokenKind::ReferenceImage`],
+    /// which names a label but carries no `href` of its own.
+    pub labels: Labels,
 }
 
 impl InlineSyntax {
-    fn options(self) -> TokenizerOptions {
+    fn options(&self) -> TokenizerOptions {
         let mut options = TokenizerOptions::muya_default();
         // Left **on**, which is what makes an ATX heading's `# ` a marker this
         // hides rather than three glyphs it draws.
         options.has_begin_rules = true;
         options.syntax.footnote = self.footnote;
         options.syntax.super_sub_script = self.super_sub_script;
+        // One clone per leaf. The map is per *document* and small — the whole
+        // twelve-file corpus defines three reference definitions between them
+        // — so this is cheaper than threading a prebuilt `TokenizerOptions`
+        // through a signature that would then name an `mt-inline` type.
+        options.labels.clone_from(&self.labels);
         options
     }
 }
@@ -330,15 +420,27 @@ impl InlineSyntax {
 /// It is a parameter rather than a constant because M4's editor is the whole
 /// reason `mt_inline::marker` exists, and because a hard-coded `None` would
 /// make the reveal path unreachable *and* untested.
-pub fn lay_out(text: &str, syntax: InlineSyntax, cursor: Option<Cursor>) -> InlineText {
+///
+/// `base_direction` is the paragraph's, and it is here for exactly one reason:
+/// [`RTL_MARK`], which is a change to the *visible string* and so cannot live
+/// anywhere the string has already been built.
+pub fn lay_out(
+    text: &str,
+    syntax: &InlineSyntax,
+    base_direction: BaseDirection,
+    cursor: Option<Cursor>,
+) -> InlineText {
     let tokens = tokenizer(text, &syntax.options());
     let mut walk = Walk {
         src: text,
+        labels: &syntax.labels,
+        base_direction,
         cursor,
         out: InlineText {
             visible: String::with_capacity(text.len()),
             runs: Vec::new(),
             map: VisibleTextMap::default(),
+            images: Vec::new(),
         },
     };
     walk.tokens(&tokens, InlineStyle::default());
@@ -350,6 +452,8 @@ pub fn lay_out(text: &str, syntax: InlineSyntax, cursor: Option<Cursor>) -> Inli
 
 struct Walk<'a> {
     src: &'a str,
+    labels: &'a Labels,
+    base_direction: BaseDirection,
     cursor: Option<Cursor>,
     out: InlineText,
 }
@@ -447,6 +551,34 @@ impl Walk<'_> {
             at = child.range.end;
         }
         self.marker(Span::new(at, token.range.end), token.range, state, style);
+    }
+
+    /// An image: no visible text, a box reserved at the offset its bytes
+    /// reached, and D12's one deliberate exception to "hidden means nothing in
+    /// the visible string".
+    fn image(&mut self, token: &Token, src: String, style: InlineStyle) {
+        let state = marker_state(token, self.cursor);
+        // The workaround, written as the one condition it is rather than as a
+        // constant somewhere downstream: *a box that would be the first thing
+        // in a right-to-left paragraph*. See `RTL_MARK` for the upstream
+        // defect, and for why nothing in the corpus reaches this today.
+        let would_lead_an_rtl_paragraph = state == MarkerState::Hidden
+            && self.out.visible.is_empty()
+            && self.base_direction == BaseDirection::Rtl;
+        if would_lead_an_rtl_paragraph {
+            // A substitution and not an insertion: the mark stands *for* the
+            // image's bytes, so the map still tiles both sides and D13 needs no
+            // fourth `MapKind`. An offset inside it answers with the image's
+            // block start, which is the same answer the hidden run gave.
+            self.substitute(RTL_MARK, token.range, token.range, style);
+        } else {
+            self.marker(token.range, token.range, state, style);
+        }
+        self.out.images.push(InlineImage {
+            visible_index: self.out.visible.len(),
+            src,
+            block: token.range.start..token.range.end,
+        });
     }
 
     /// The same rule for a childless token whose reader-facing text is one
@@ -579,21 +711,30 @@ impl Walk<'_> {
                 );
             }
 
-            // --- images: nothing to show, and a hole to come ---------------
+            // --- images: no visible text, and a box in its place -----------
             //
             // Hidden **whole**, alt text included: muya renders an `<img>`, and
             // an image's alt text is an attribute rather than something a
-            // reader sees. The replaced box that belongs at this offset is
-            // D12's, and pushing it is the next commit's job — which is why
-            // this is a clean hidden run rather than a placeholder string
-            // something would later have to remove.
-            TokenKind::Image(_) | TokenKind::ReferenceImage(_) => {
-                self.marker(
-                    token.range,
-                    token.range,
-                    marker_state(token, self.cursor),
-                    style,
-                );
+            // reader sees. What a reader sees instead is a replaced box, and
+            // D12 gives it a size from above the seam.
+            TokenKind::Image(i) => {
+                let src = i.src.of(self.src).to_string();
+                self.image(token, src, style);
+            }
+            // `ReferenceImage` carries `alt`, `label` and two backslash runs
+            // and **no `href` at all**, so the `src` has to come back out of
+            // the same table that made this a reference image in the first
+            // place — `mt-inline` emits the kind only when the label is defined
+            // (`lexer.rs:973`). A miss is therefore unreachable rather than
+            // defended against, and it degrades to the empty `src`, which is a
+            // real D12 state (`.mu-empty-image`) rather than a panic.
+            TokenKind::ReferenceImage(r) => {
+                let src = self
+                    .labels
+                    .get(r.label.of(self.src).to_lowercase().as_str())
+                    .map(|label| label.href.clone())
+                    .unwrap_or_default();
+                self.image(token, src, style);
             }
 
             // --- the one substitution that survives ------------------------

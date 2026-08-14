@@ -22,6 +22,7 @@ use mt_doc::{
 };
 
 use crate::display::DisplayItem;
+use crate::images::ImageSize;
 use crate::theme::{CheckboxShape, ListMarker};
 
 // ---------------------------------------------------------------------------
@@ -1575,7 +1576,7 @@ fn runs_for(text: &str, theme: &Theme) -> Vec<crate::text::StyleRun<'static>> {
         .style
         .clone()
         .expect("a paragraph is a leaf with a style");
-    let laid = inline::lay_out(text, InlineSyntax::default(), None);
+    let laid = inline::lay_out(text, &InlineSyntax::default(), BaseDirection::Ltr, None);
     // The theme is borrowed from `tree`, which outlives nothing here, so the
     // runs are copied into an owned form the caller can hold. The families
     // slice is the only borrow and it points into the theme's own vectors,
@@ -1589,6 +1590,8 @@ fn runs_for(text: &str, theme: &Theme) -> Vec<crate::text::StyleRun<'static>> {
             weight: r.weight,
             italic: r.italic,
             brush: r.brush,
+            underline: r.underline,
+            strikethrough: r.strikethrough,
         })
         .collect()
 }
@@ -1662,7 +1665,12 @@ fn inline_codes_em_is_relative_to_whatever_it_sits_in() {
     );
     let tree = LayoutTree::plan(&doc.doc, &theme, f32::INFINITY, &LayoutOptions::default());
     let style = tree.blocks[0].style.clone().expect("a heading is a leaf");
-    let laid = inline::lay_out("# a `b` c", InlineSyntax::default(), None);
+    let laid = inline::lay_out(
+        "# a `b` c",
+        &InlineSyntax::default(),
+        BaseDirection::Ltr,
+        None,
+    );
     let runs = tree.style_runs(&style, &laid.runs, 1.0);
     let code = runs
         .iter()
@@ -1733,5 +1741,204 @@ fn every_leaf_in_the_display_list_carries_its_map_and_containers_do_not() {
     assert!(
         find(&list, BlockKind::BlockQuote).text_map.is_none(),
         "a container holds no text and so has no map"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// D12 — the inline image
+// ---------------------------------------------------------------------------
+
+fn boxes(block: &BlockDisplay) -> Vec<crate::display::InlineBoxItem> {
+    block
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            DisplayItem::InlineBox(b) => Some(*b),
+            _ => None,
+        })
+        .collect()
+}
+
+fn with_images(doc: &Doc, theme: &Theme, images: ImageSizes, width: f32) -> DisplayList {
+    let options = LayoutOptions {
+        images,
+        ..LayoutOptions::default()
+    };
+    let mut fonts = Fonts::new();
+    let mut shaper = TextShaper::new();
+    let mut tree = LayoutTree::plan(&doc.doc, theme, width, &options);
+    tree.build_all(&doc.doc, &mut fonts, &mut shaper);
+    tree.place();
+    tree.emit(&fonts).expect("nothing to resolve without faces")
+}
+
+/// An image the shell could not size takes the reference's own no-bitmap
+/// geometry — **100 % of the containing block by 50 px**
+/// (`inlineSyntax.css:434-440`) — and not a number this project invented.
+///
+/// The 100 % is the visible half of D12: at `muya-default` that is 700 px in a
+/// 700 px column, so the box cannot share its line with anything.
+#[test]
+fn an_image_with_no_entry_is_the_full_column_wide_and_fifty_tall() {
+    for theme in [Theme::muya_default(), Theme::dark()] {
+        let mut doc = Doc::new();
+        let root = doc.root();
+        doc.para(root, "![alt](./missing.png)");
+        let list = with_images(&doc, &theme, ImageSizes::new(), f32::INFINITY);
+        let para = find(&list, BlockKind::Paragraph);
+        let placed = boxes(para);
+        assert_eq!(placed.len(), 1);
+        assert_eq!(placed[0].width, theme.content_width_px());
+        assert_eq!(placed[0].height, theme.inline.image_placeholder_height_px);
+        assert_eq!(placed[0].height, 50.0);
+        // `.mu-inline-image` is an `inline-block` with `font-size: 0`,
+        // `line-height: 0` and an empty container, so its baseline is its
+        // bottom margin edge — which is what `None` already means.
+        assert_eq!(placed[0].baseline, None);
+        assert_eq!(placed[0].flow, crate::display::InlineBoxFlow::InFlow);
+        // The id is the token's own block-text offset, so a box in the output
+        // is matched back to the token without a side table.
+        assert_eq!(placed[0].id, 0);
+    }
+}
+
+/// The ground's radius is **2**, deliberately not inline code's 3, and the icon
+/// is a 20 × 20 square inset 15 on both axes.
+#[test]
+fn a_placeholder_draws_its_ground_and_its_icon_and_nothing_else() {
+    let theme = Theme::muya_default();
+    let mut doc = Doc::new();
+    let root = doc.root();
+    doc.para(root, "![alt](./missing.png)");
+    let list = with_images(&doc, &theme, ImageSizes::new(), f32::INFINITY);
+    let para = find(&list, BlockKind::Paragraph);
+    let rects = fills(para);
+    assert_eq!(
+        rects.len(),
+        2,
+        "the ground and the icon, no label: {rects:#?}"
+    );
+
+    let ground = rects[0];
+    let placed = boxes(para)[0];
+    assert_eq!(ground.rect, placed.rect());
+    assert_eq!(ground.corner_radius, 2.0);
+    assert_ne!(
+        ground.corner_radius, theme.inline_code.corner_radius_px,
+        "the two rules sit 290 lines apart and disagree on purpose"
+    );
+
+    let icon = rects[1];
+    assert_eq!(icon.rect.width, 20.0);
+    assert_eq!(icon.rect.height, 20.0);
+    assert_eq!(icon.rect.x, placed.x + 15.0);
+    assert_eq!(icon.rect.y, placed.y + 15.0);
+}
+
+/// An image the shell *did* size takes that size, clamped by `max-width: 100%`
+/// with its aspect ratio kept — and draws no chrome, because
+/// `.mu-inline-image.mu-image-success` makes the ground transparent.
+#[test]
+fn a_sized_image_keeps_its_aspect_ratio_when_the_column_clamps_it() {
+    let theme = Theme::muya_default();
+    let mut doc = Doc::new();
+    let root = doc.root();
+    doc.para(root, "![a](./small.png) and ![b](./huge.png)");
+    let mut images = ImageSizes::new();
+    images.insert("./small.png", ImageSize::new(120.0, 90.0));
+    images.insert("./huge.png", ImageSize::new(1400.0, 700.0));
+    let list = with_images(&doc, &theme, images, f32::INFINITY);
+    let para = find(&list, BlockKind::Paragraph);
+    let placed = boxes(para);
+    assert_eq!(placed.len(), 2);
+
+    let small = placed.iter().find(|b| b.width == 120.0).expect("small");
+    assert_eq!(small.height, 90.0);
+
+    let huge = placed.iter().find(|b| b.width == 700.0).expect("clamped");
+    assert_eq!(huge.height, 350.0, "700/1400 of 700, not a squashed 700");
+
+    assert!(
+        fills(para).is_empty(),
+        "a resolved image draws no ground and no icon"
+    );
+}
+
+/// `colors.strong` and `colors.em` were populated in both TOMLs and consumed by
+/// nothing until now, and the reason they are easy to get wrong is that both
+/// default to `inherit` — which, for a `<strong>` inside an `<a>`, is **the
+/// link's colour** and not the paragraph's.
+///
+/// So the brush is built by applying each enclosing element's rule in DOM
+/// order rather than by picking a winner from a precedence table.
+#[test]
+fn strong_and_em_take_their_own_colour_and_inherit_the_links_when_they_have_none() {
+    let muya = Theme::muya_default();
+    let link = Brush::resolve(muya.colors.link, Brush::default());
+    assert_eq!(muya.colors.strong, Color::Inherit, "muya sets neither");
+    assert_eq!(muya.colors.em, Color::Inherit);
+
+    let runs = runs_for("plain [**bold link**](https://x)", &muya);
+    let bold = runs
+        .iter()
+        .find(|r| r.weight == muya.inline.strong_weight)
+        .expect("a strong run");
+    assert_eq!(
+        bold.brush, link,
+        "`inherit` inside an <a> is the link colour, not the body colour"
+    );
+    assert!(bold.underline, "and it is still inside the link");
+
+    // `dark` overrides both, so the same construct paints the strong colour
+    // over the inherited link colour rather than under it.
+    let dark = Theme::dark();
+    let dark_runs = runs_for("plain [**bold link**](https://x)", &dark);
+    let dark_bold = dark_runs
+        .iter()
+        .find(|r| r.weight == dark.inline.strong_weight)
+        .expect("a strong run");
+    assert_eq!(
+        dark_bold.brush,
+        Brush::resolve(dark.colors.strong, Brush::default())
+    );
+    assert_ne!(
+        dark_bold.brush,
+        Brush::resolve(dark.colors.link, Brush::default())
+    );
+
+    let em = runs_for("*just emphatic*", &dark);
+    assert_eq!(em.len(), 1);
+    assert!(em[0].italic);
+    assert_eq!(
+        em[0].brush,
+        Brush::resolve(dark.colors.em, Brush::default())
+    );
+}
+
+/// `del` asks for a strikethrough and a link for an underline, and neither asks
+/// for anything else: the two are the only inline styles that change no glyph.
+#[test]
+fn del_and_a_link_are_the_only_runs_that_carry_a_decoration() {
+    let theme = Theme::muya_default();
+    let runs = runs_for("a ~~struck~~ b [linked](https://x) c `code` d", &theme);
+    let struck: Vec<_> = runs.iter().filter(|r| r.strikethrough).collect();
+    assert_eq!(struck.len(), 1);
+    assert!(!struck[0].underline);
+    let underlined: Vec<_> = runs.iter().filter(|r| r.underline).collect();
+    assert_eq!(underlined.len(), 1);
+    assert!(!underlined[0].strikethrough);
+    // A `del` run differs from the body in nothing but its strikethrough, which
+    // is exactly why `style_runs`' `retain` has to test for it: without that
+    // clause the run would be dropped and the line never drawn.
+    assert_eq!(struck[0].weight, 400);
+    assert!(!struck[0].italic);
+    assert_eq!(
+        struck[0].brush,
+        Brush::resolve(theme.colors.editor, Brush::default()),
+        "the body brush, unchanged"
+    );
+    assert!(
+        runs_for("plain prose", &theme).is_empty(),
+        "and a paragraph with no markup still produces no runs at all"
     );
 }

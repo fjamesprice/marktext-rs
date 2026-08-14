@@ -104,7 +104,18 @@ corner_radius_px = 3.0
 # weight nor the slant, because muya has no rule for either — see muya-default.
 strong_weight = 700
 em_italic = true
+# Unchanged too: `dark` overrides colours and no inline geometry. Repeated
+# rather than defaulted, because `deny_unknown_fields` plus no `serde` default
+# is what makes a theme that forgot a number fail loudly instead of quietly
+# taking muya's (D4).
 footnote_identifier_font_size_em = 0.7
+footnote_identifier_padding_x_em = 0.4
+footnote_identifier_padding_y_em = 0.0
+footnote_identifier_corner_radius_px = 3.0
+image_placeholder_height_px = 50.0
+image_corner_radius_px = 2.0
+image_icon_px = 20.0
+image_icon_inset_px = 15.0
 
 [lists]
 indent_px = 30.0

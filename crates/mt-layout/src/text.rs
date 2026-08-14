@@ -35,7 +35,9 @@ use parley::{
     LineHeight, PositionedLayoutItem, StyleProperty,
 };
 
-use crate::display::{Brush, DisplayItem, Glyph, GlyphRun, InlineBoxFlow, InlineBoxItem};
+use crate::display::{
+    Brush, DisplayItem, FilledRect, Glyph, GlyphRun, InlineBoxFlow, InlineBoxItem, Rect,
+};
 use crate::fonts::{FontError, Fonts};
 use crate::theme::TextAlign;
 
@@ -134,6 +136,50 @@ pub struct StyleRun<'a> {
     pub italic: bool,
     /// The colour to paint this run's glyphs.
     pub brush: Brush,
+    /// Draw a line under this run, at the **face's own** underline position
+    /// and thickness.
+    ///
+    /// A link, and nothing else. muya has no `text-decoration` rule for `<a>`
+    /// anywhere — `a.mu-inline-rule` (`inlineSyntax.css:33-35`) sets colour
+    /// alone — so the underline is the browser's UA sheet, and a UA underline
+    /// is positioned from the font's `post` table rather than from a
+    /// stylesheet. Following the same mechanism rather than inventing two theme
+    /// numbers is what makes this faithful; see [`ShapedText::emit`] for where
+    /// the metrics are read.
+    pub underline: bool,
+    /// Draw a line through this run, at the face's own strikeout position and
+    /// thickness.
+    ///
+    /// `<del>`, and nothing else. `grep line-through` over muya's stylesheets
+    /// returns **zero hits**, so this too is the UA sheet reading the font —
+    /// `OS/2`'s `yStrikeoutPosition` and `yStrikeoutSize` this time.
+    pub strikethrough: bool,
+}
+
+/// A ground to paint **behind** a stretch of the text.
+///
+/// Inline code's background (`inlineSyntax.css:60-70`) and the footnote
+/// identifier's pill (`:599-609`), which are the same shape: a rounded rect
+/// under a run, sized from the run's own font metrics plus a padding expressed
+/// in that run's `em`.
+///
+/// It is a request-level concept rather than a [`StyleRun`] field because it is
+/// **not** a text style: it changes no glyph, it must be emitted before the
+/// glyphs it sits under, and it fragments across a line break the way a CSS
+/// inline box does — see [`ShapedText::emit`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextGround {
+    /// Byte range in [`TextRequest::text`].
+    pub range: std::ops::Range<usize>,
+    /// Horizontal padding in px, applied at the true start and true end of the
+    /// range only — CSS's `box-decoration-break: slice`, which is the default.
+    pub padding_x: f32,
+    /// Vertical padding in px, applied on every fragment.
+    pub padding_y: f32,
+    /// Corner radius in px.
+    pub corner_radius: f32,
+    /// The fill.
+    pub brush: Brush,
 }
 
 /// One leaf's worth of text, and how to lay it out.
@@ -186,12 +232,14 @@ pub struct TextRequest<'a> {
     pub runs: &'a [StyleRun<'a>],
     /// Holes to reserve in the line for replaced elements, in any order.
     ///
-    /// Empty for every caller today: this is the plumbing half of D12, and the
-    /// producer that fills it — an image with a size supplied from above the
-    /// seam — is the other half. It is here first and separately because the
-    /// alignment behaviour it depends on is the one thing D2 moved the parley
-    /// pin for and had never been executed, let alone asserted.
+    /// Filled by [`crate::flow`] for every inline image — **D12**. Empty for
+    /// every other caller, which is most of them.
     pub inline_boxes: &'a [InlineBoxSpec],
+    /// Rounded rectangles to paint behind stretches of the text, in any order.
+    ///
+    /// Copied into the [`ShapedText`] rather than resolved here, because their
+    /// geometry depends on where the lines fell and a re-break moves them.
+    pub grounds: &'a [TextGround],
 }
 
 impl<'a> TextRequest<'a> {
@@ -236,6 +284,7 @@ impl<'a> TextRequest<'a> {
             letter_spacing: 0.0,
             runs: &[],
             inline_boxes: &[],
+            grounds: &[],
         }
     }
 }
@@ -346,6 +395,18 @@ impl TextShaper {
             if run.brush != request.brush {
                 builder.push(StyleProperty::Brush(run.brush), run.range.clone());
             }
+            // Pushed as parley's own decoration properties rather than measured
+            // here, because parley resolves `Decoration::offset`/`size` from
+            // the **run's face** when they are `None`, and the face is the
+            // browser's own source for both numbers. `emit` reads them back
+            // out. Both default to off, so a `false` is never pushed and never
+            // costs a style-run boundary.
+            if run.underline {
+                builder.push(StyleProperty::Underline(true), run.range.clone());
+            }
+            if run.strikethrough {
+                builder.push(StyleProperty::Strikethrough(true), run.range.clone());
+            }
         }
         // Deliberately **not** pushed per run: `LineHeight`. It is
         // `FontSizeRelative`, so parley recomputes it from each run's own font
@@ -379,7 +440,10 @@ impl TextShaper {
             },
             AlignmentOptions::default(),
         );
-        ShapedText { layout }
+        ShapedText {
+            layout,
+            grounds: request.grounds.to_vec(),
+        }
     }
 }
 
@@ -392,6 +456,9 @@ impl TextShaper {
 /// *method* here rather than an exposed `Layout` (D8).
 pub struct ShapedText {
     layout: Layout<Brush>,
+    /// Owned rather than borrowed, because a re-break moves every fragment and
+    /// the request is long gone by then.
+    grounds: Vec<TextGround>,
 }
 
 impl std::fmt::Debug for ShapedText {
@@ -474,6 +541,23 @@ impl ShapedText {
     /// different collection. It is an error rather than a skipped run because
     /// a silently dropped run is invisible text, and invisible text is the
     /// failure mode this whole seam is built to make impossible.
+    ///
+    /// # The two decorations, and where their numbers come from
+    ///
+    /// A strikethrough and an underline are the only things drawn here that are
+    /// not a copied number, and neither has a MarkText source: `grep
+    /// line-through` over muya's stylesheets is empty and `a.mu-inline-rule`
+    /// sets colour alone, so both are the **browser's UA sheet**, which derives
+    /// thickness and position from the *font*. That mechanism is reachable on
+    /// this pin — `Run::font_metrics()` surfaces skrifa's `post.underline*` and
+    /// `OS/2.yStrikeout*`, already scaled to the run's size — so it is used
+    /// rather than replaced by two invented theme fields. The faces are pinned
+    /// and their SHA-256s are in `faces.toml`, so the numbers are as
+    /// deterministic as a theme constant would have been and are additionally
+    /// *right* for whichever face won fallback.
+    ///
+    /// `y = baseline − offset` and `height = size` for both, which is the rule
+    /// every one of parley's own four example renderers uses.
     pub fn emit(
         &self,
         fonts: &Fonts,
@@ -482,6 +566,74 @@ impl ShapedText {
         out: &mut Vec<DisplayItem>,
     ) -> Result<(), FontError> {
         for line in self.layout.lines() {
+            // Grounds first, because `BlockDisplay::items` is paint order and a
+            // ground is by definition behind the glyphs it belongs to.
+            //
+            // One fragment per line, with the horizontal padding applied only
+            // at the range's true start and true end — CSS's default
+            // `box-decoration-break: slice`, so a code span broken across two
+            // lines is padded on the outside and flush at the break.
+            //
+            // The x-extent is the union of the *whole* glyph runs the ground
+            // overlaps, which is exact because a ground is only ever requested
+            // for a style that also changes the font, and a style-run boundary
+            // is a shaping boundary. A theme that made inline code the same
+            // family and size as body text would widen its ground to the
+            // surrounding run; that is the one case this approximates, and it
+            // is a theme that has asked for an invisible box.
+            let line_range = line.text_range();
+            for ground in &self.grounds {
+                if ground.range.start >= line_range.end || line_range.start >= ground.range.end {
+                    continue;
+                }
+                let mut min_x = f32::INFINITY;
+                let mut max_x = f32::NEG_INFINITY;
+                let mut ascent = 0.0f32;
+                let mut descent = 0.0f32;
+                let mut baseline = 0.0f32;
+                for item in line.items() {
+                    let PositionedLayoutItem::GlyphRun(gr) = item else {
+                        continue;
+                    };
+                    let range = gr.run().text_range();
+                    if range.start >= ground.range.end || ground.range.start >= range.end {
+                        continue;
+                    }
+                    min_x = min_x.min(gr.offset());
+                    max_x = max_x.max(gr.offset() + gr.advance());
+                    // The *content area* of an inline box, which is what CSS
+                    // pads and paints — the face's ascent plus descent, not the
+                    // line box, so a code span does not grow its own line.
+                    let metrics = gr.run().font_metrics();
+                    ascent = ascent.max(metrics.ascent);
+                    descent = descent.max(metrics.descent);
+                    baseline = gr.baseline();
+                }
+                if min_x > max_x {
+                    continue;
+                }
+                let pad_left = if ground.range.start >= line_range.start {
+                    ground.padding_x
+                } else {
+                    0.0
+                };
+                let pad_right = if ground.range.end <= line_range.end {
+                    ground.padding_x
+                } else {
+                    0.0
+                };
+                out.push(DisplayItem::Rect(FilledRect {
+                    rect: Rect::new(
+                        min_x - pad_left + origin_x,
+                        baseline - ascent - ground.padding_y + origin_y,
+                        (max_x - min_x) + pad_left + pad_right,
+                        ascent + descent + 2.0 * ground.padding_y,
+                    ),
+                    corner_radius: ground.corner_radius,
+                    rotation_deg: 0.0,
+                    brush: ground.brush,
+                }));
+            }
             for item in line.items() {
                 match item {
                     PositionedLayoutItem::GlyphRun(gr) => {
@@ -518,6 +670,41 @@ impl ShapedText {
                             brush: gr.style().brush,
                             glyphs,
                         }));
+                        // Decorations after the glyphs, which is the order
+                        // parley's own renderers use and the only order a
+                        // strikethrough can be drawn in.
+                        let style = gr.style();
+                        let metrics = run.font_metrics();
+                        for (decoration, offset, size) in [
+                            (
+                                style.underline.as_ref(),
+                                metrics.underline_offset,
+                                metrics.underline_size,
+                            ),
+                            (
+                                style.strikethrough.as_ref(),
+                                metrics.strikethrough_offset,
+                                metrics.strikethrough_size,
+                            ),
+                        ] {
+                            let Some(decoration) = decoration else {
+                                continue;
+                            };
+                            // `None` on either field means "take the face's",
+                            // and nothing in this crate sets either — see the
+                            // method's own note on why the face is the source.
+                            let offset = decoration.offset.unwrap_or(offset);
+                            let size = decoration.size.unwrap_or(size);
+                            out.push(DisplayItem::Rect(FilledRect::new(
+                                Rect::new(
+                                    gr.offset() + origin_x,
+                                    gr.baseline() - offset + origin_y,
+                                    gr.advance(),
+                                    size,
+                                ),
+                                decoration.brush,
+                            )));
+                        }
                     }
                     PositionedLayoutItem::InlineBox(b) => {
                         out.push(DisplayItem::InlineBox(InlineBoxItem {

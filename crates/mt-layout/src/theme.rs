@@ -382,7 +382,7 @@ pub struct InlineCode {
 
 /// Inline text styling that is not [`InlineCode`]'s.
 ///
-/// # Two of these three have no MarkText source, and the comment says so
+/// # Two of these have no MarkText source, and the comment says so
 ///
 /// `grep`ping muya's stylesheets for a weight or a slant on `<strong>` or
 /// `<em>` finds nothing: `inlineSyntax.css:49-57` is the only rule for either
@@ -407,11 +407,47 @@ pub struct Inline {
     /// `inlineSyntax.css:604`. Relative to the surrounding text, like
     /// [`InlineCode::font_size_em`].
     ///
-    /// Only the size. The pill behind it — `padding: 0 0.4em`,
-    /// `background: var(--code-block-bg-color)`, `border-radius: 3px`
-    /// (`inlineSyntax.css:600-607`) — is drawn chrome and its fields arrive
-    /// with the drawing.
+    /// The pill's colours are [`Colors::editor_80`] and
+    /// [`Colors::code_block_bg`]; its geometry is the three fields below.
     pub footnote_identifier_font_size_em: f32,
+    /// `.mu-inline-footnote-identifier { padding: 0 0.4em }` —
+    /// `inlineSyntax.css:600`. The `em` is the pill's **own** 0.7em, not the
+    /// surrounding text's, which is what a CSS length on the same rule means.
+    pub footnote_identifier_padding_x_em: f32,
+    /// The vertical half of the same `padding: 0 0.4em`, which is **zero** —
+    /// `inlineSyntax.css:600`.
+    ///
+    /// A field rather than an omission, for [`InlineCode::padding_y_em`]'s
+    /// symmetry and because a theme that wanted a taller pill has nowhere else
+    /// to say so. Zero here is transcribed, not defaulted.
+    pub footnote_identifier_padding_y_em: f32,
+    /// `.mu-inline-footnote-identifier { border-radius: 3px }` —
+    /// `inlineSyntax.css:607`. The same 3 as inline code, and unlike the inline
+    /// image's 2.
+    pub footnote_identifier_corner_radius_px: f32,
+    /// `.mu-inline-image.mu-image-fail, .mu-inline-image.mu-empty-image
+    /// { height: 50px }` — `inlineSyntax.css:434-440`. **D12.**
+    ///
+    /// The width of those two rules is `100%`, which is the containing block's
+    /// and so is not a theme number; this is the half that is.
+    pub image_placeholder_height_px: f32,
+    /// `.mu-inline-image { border-radius: 2px }` — `inlineSyntax.css:346-352`.
+    ///
+    /// **Two, not three.** It is deliberately not
+    /// [`InlineCode::corner_radius_px`], and the two rules sit 290 lines apart
+    /// in the same file, so the difference is the reference's and not a
+    /// transcription slip.
+    pub image_corner_radius_px: f32,
+    /// `.mu-inline-image .mu-image-icon-fail { width: 20px; height: 20px }` —
+    /// `inlineSyntax.css:396-410`. Square, so one field.
+    ///
+    /// M3 draws the rect and no artwork: the icon is a font glyph in the
+    /// reference (`i.icon > i[class^='icon-']` with a `drop-shadow` trick at
+    /// `:412-420`) and there is no icon set in this repository.
+    pub image_icon_px: f32,
+    /// `.mu-inline-image .mu-image-icon-fail { top: 15px; left: 15px }` —
+    /// `inlineSyntax.css:396-405`. The same 15 on both axes, so one field.
+    pub image_icon_inset_px: f32,
 }
 
 // ---------------------------------------------------------------------------
