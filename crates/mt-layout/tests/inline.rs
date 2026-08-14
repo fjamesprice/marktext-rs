@@ -11,14 +11,12 @@
 //! | Bidi | the **visual** left-to-right order of the emitted runs | `unicode-bidi`, an independent UAX #9 implementation, with U+FFFC standing in for an inline box — S0's E1 method, and the experiment D2's pin rests on |
 //! | CJK | the break positions of `cjk.md`'s long unspaced line | UAX #14: a break is permitted between two ideographs (no rule forbids `ID ÷ ID`) and forbidden before `。` (LB13, `× CL`) |
 //! | Emoji | grapheme-cluster counts for ZWJ sequences and skin-tone modifiers | UAX #29 § 3, and `bench/corpus/emoji.md`'s own table, whose third column already carries the codepoint counts |
-//! | Ligatures | that `fi`/`fl`/`ff` are one glyph over two graphemes, and that the corpus's Arabic is **not** ligated | the faces' own `GSUB`, read through cluster boundaries rather than through a glyph id |
+//! | Ligatures | that `fi`/`fl`/`ff` are one glyph over two graphemes, and that the Arabic lam-alef is formed in both faces | cluster boundaries for the Latin pairs; for Arabic, the font's **own encoded presentation form** U+FEFB, which is the ligature by definition |
 //! | The map | D13's five invariants over 2 210 leaves of the corpus | the token ranges the walk carried, which is the point of `MapRun::token` |
 //!
-//! Two of those answers are findings rather than confirmations and are stated
-//! where they are measured: the Arabic lam-alef is a *required* ligature that
-//! Noto Sans Arabic — the face the corpus's Arabic resolves to — does not
-//! form, and `MapKind::Substituted` is unreachable from the corpus at an LTR
-//! base.
+//! One of those answers is a finding rather than a confirmation and is stated
+//! where it is measured: `MapKind::Substituted` is unreachable from the corpus
+//! at an LTR base.
 //!
 //! # Why this directory
 //!
@@ -900,62 +898,116 @@ fn the_corpus_produces_latin_ligatures_at_the_body_stack() {
     }
 }
 
-/// The Arabic half is **not** reachable from the corpus, and this records why
-/// rather than asserting a ligature that is not there.
+/// The corpus's Arabic **is** ligated, in both faces — and `is_ligature_start`
+/// sees it in only one of them, which is a fact about `GSUB` design and not
+/// about shaping.
 ///
 /// §5 D2 rejects parley 0.11.0 because *"0.11.0 breaks Arabic cursive joining
-/// at an inline box"*, so an Arabic ligature would be the sharpest possible
-/// control on the pin. The corpus has the input — `rtl.md:35`'s `الأول` is lam
-/// followed by alef-with-hamza, and lam-alef is a *required* Arabic ligature —
-/// but the face the corpus's Arabic resolves to does not form it:
+/// at an inline box"*, so an Arabic ligature is the sharpest available control
+/// on the pin, and the corpus has the input: `rtl.md:35`'s `الأول` is lam
+/// followed by alef-with-hamza, and lam-alef is a **required** Arabic ligature.
 ///
-/// | stack | face | `لا` | `الأول` |
+/// # Why the cluster flag is the wrong instrument here, and what replaces it
+///
+/// `is_ligature_start` is a **many-to-one** detector: it is set when one
+/// shaped cluster spans more than one grapheme. That is how DejaVu Sans Mono
+/// implements lam-alef — a `rlig` `LookupType 4` taking two glyphs to one, so
+/// the flag is set and the second cluster carries no glyphs. Noto Sans Arabic
+/// 2.013 does not use `LookupType 4` for it at all: its `init`/`medi`/`fina`
+/// lookups are `LookupType 2` **multiple** substitutions that decompose every
+/// letter into skeleton plus dots — which is also why `ب` is two glyphs — and
+/// lam-alef comes out of the `rlig` **chain-context** lookups as two glyphs
+/// for two graphemes. Many-to-many. The flag is correctly `false` and the
+/// ligature is correctly drawn.
+///
+/// So the ligature's *presence* is asserted against the font's own encoded
+/// presentation form instead, which is an oracle inside the same face and not
+/// a number chosen here: **U+FEFB is by definition the lam-alef ligature**, so
+/// if `لا` advances exactly as `\u{FEFB}` does, the two characters produced the
+/// ligature. Measured at 16 px:
+///
+/// | face | `لا` | `\u{FEFB}` | lam alone + alef alone |
 /// |---|---|---|---|
-/// | `theme.fonts.body` | Noto Sans Arabic (fallback) | two clusters, one glyph each — **no ligature** | ditto, and `أ` decomposes to two glyphs |
-/// | `theme.fonts.code` | DejaVu Sans Mono | one glyph over two clusters — **ligature** | ditto |
+/// | Noto Sans Arabic | 9.31, glyphs `[10, 73]` | 9.31, glyph `[1268]` | 11.12 + 3.81 = 14.93 |
+/// | DejaVu Sans Mono | 9.63, glyph `[3254]` | 9.63, glyph `[3254]` | 9.63 + 9.63 = 19.26 |
 ///
-/// Nothing in `bench/corpus/` puts Arabic through the monospace stack: the one
-/// Arabic inline-code span, `rtl.md:13`, has ASCII in it. So **no corpus
-/// construct produces an Arabic ligature through the real pipeline.** That is
-/// the honest answer to the gate's fourth word for this half, and it is
-/// asserted in both directions so that a face-set change — which is a
-/// reviewable event on the same footing as a pin move — cannot flip it
-/// silently.
+/// # The `ccmp` question, answered
+///
+/// `أ` (U+0623) is decomposed by `ccmp` into alef plus U+0654 hamza-above,
+/// which is why it is two glyphs in Noto. The lam-alef ligature **still
+/// applies to the decomposed alef**: `لأ` advances as `\u{FEF7}` does in both
+/// faces, with the hamza riding along as a mark. So the correct glyph count
+/// for the pair is three in Noto — the ligature's two parts plus the mark —
+/// and one in DejaVu.
 #[test]
-fn the_corpus_arabic_is_not_ligated_and_the_monospace_stack_shows_what_is_missing() {
+fn the_corpus_lam_alef_ligates_in_both_faces_and_the_advance_is_the_evidence() {
     let theme = Theme::muya_default();
     let source = corpus_line("rtl.md", 35, "الأول");
-    let word = "الأول";
-    let at = source.find(word).expect("the anchor found it");
+    let at = source.find("الأول").expect("the anchor found it");
     // Lam at +2, alef-with-hamza at +4 — asserted, because the whole point is
     // which two characters are being asked about.
-    let lam_alef = at + 2..at + 6;
-    assert_eq!(&source[lam_alef.clone()], "لأ");
+    let lam_alef_hamza = at + 2..at + 6;
+    assert_eq!(&source[lam_alef_hamza.clone()], "لأ");
 
+    fn width(fonts: &mut Fonts, shaper: &mut TextShaper, text: &str, families: &[String]) -> f32 {
+        let request = TextRequest::new(text, families, 16.0, 1.6);
+        shaper.shape(fonts, &request).width()
+    }
     let mut fonts = bundled_fonts();
     let mut shaper = TextShaper::new();
-    for (stack, ligated) in [(&theme.fonts.body, false), (&theme.fonts.code, true)] {
-        let request = TextRequest::new(&source, stack, 16.0, 1.6);
+
+    for (label, stack, many_to_one) in [
+        ("body / Noto Sans Arabic", theme.fonts.body.clone(), false),
+        ("code / DejaVu Sans Mono", theme.fonts.code.clone(), true),
+    ] {
+        // 1. The ligature is formed, graded against the font's own U+FEFB.
+        let pair = width(&mut fonts, &mut shaper, "\u{644}\u{627}", &stack);
+        let encoded = width(&mut fonts, &mut shaper, "\u{FEFB}", &stack);
+        assert!(
+            (pair - encoded).abs() < 0.01,
+            "{label}: lam+alef advances {pair} and the encoded lam-alef U+FEFB \
+             advances {encoded} — the required ligature is not being formed"
+        );
+        // 2. And it is a collapse rather than a coincidence: the two letters
+        //    shaped apart are far wider than the pair shaped together.
+        let apart = width(&mut fonts, &mut shaper, "\u{644}", &stack)
+            + width(&mut fonts, &mut shaper, "\u{627}", &stack);
+        assert!(
+            pair < apart - 1.0,
+            "{label}: lam+alef ({pair}) is not narrower than lam and alef apart ({apart})"
+        );
+        // 3. `ccmp` decomposes U+0623, and the ligature still applies to what
+        //    it leaves behind.
+        let hamza_pair = width(&mut fonts, &mut shaper, "\u{644}\u{623}", &stack);
+        let hamza_encoded = width(&mut fonts, &mut shaper, "\u{FEF7}", &stack);
+        assert!(
+            (hamza_pair - hamza_encoded).abs() < 0.01,
+            "{label}: lam+alef-hamza ({hamza_pair}) does not match U+FEF7 ({hamza_encoded})"
+        );
+
+        // 4. Whether `is_ligature_start` can see it is a GSUB-design question.
+        //    Both answers are correct; the flag is a many-to-one detector.
+        let request = TextRequest::new(&source, &stack, 16.0, 1.6);
         let shaped = shaper.shape(&mut fonts, &request);
-        let clusters = shaped.clusters(lam_alef.clone());
+        let clusters = shaped.clusters(lam_alef_hamza.clone());
         assert_eq!(
             clusters.len(),
             2,
             "lam and alef are two graphemes either way"
         );
         assert_eq!(
-            clusters[0].is_ligature_start,
-            ligated,
-            "the {} stack {} the lam-alef. Either direction changing is a finding: \
-             the corpus's Arabic is shaped at the body stack, so a ligature \
-             appearing there is the face set having improved, and one \
-             disappearing from the monospace stack is the pin having regressed.",
-            if ligated { "monospace" } else { "body" },
-            if ligated {
-                "should ligate"
-            } else {
-                "should not ligate"
-            }
+            clusters[0].is_ligature_start, many_to_one,
+            "{label}: is_ligature_start is a many-to-one detector, so it is set \
+             only for a face that implements lam-alef as a LookupType 4 \
+             substitution. Either direction changing means the face set moved, \
+             which is a reviewable event — but it does not mean the ligature \
+             appeared or vanished; assertion 1 is what says that."
+        );
+        let glyphs: usize = clusters.iter().map(|c| c.glyphs).sum();
+        assert_eq!(
+            glyphs,
+            if many_to_one { 1 } else { 3 },
+            "{label}: lam + alef-hamza draws {glyphs} glyphs"
         );
     }
 }
