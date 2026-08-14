@@ -2,64 +2,112 @@
 //!
 //! ## Contract
 //!
-//! Consume a `Document` plus a theme, produce a **positioned display list**.
-//! Nothing is drawn here; geometry is decided here and only here.
+//! Consume a [`Document`](mt_doc::Document) plus a [`Theme`] plus an available
+//! width, produce a **positioned display list**. Nothing is drawn here;
+//! geometry is decided here and only here.
 //!
 //! Layout is the single source of truth for geometry, shared by screen
 //! rendering, PDF export, hit-testing, and print. One engine, three consumers
 //! — which is why PDF export matches the screen *by construction* (§8).
 //!
-//! ## Dependency constraints
+//! ## The display list is neutral, and that is a decision (M3 §5 D8)
 //!
-//! Per §1:
+//! §5 sketched `BlockContent::Text { layout: parley::Layout<Brush>, … }` — a
+//! public type of this crate exposing parley's. **It does not.** A
+//! [`parley::Layout`] is held per block inside [`text::ShapedText`], whose
+//! field is private, and no public signature in this crate names a parley
+//! type. What crosses the seam is [`DisplayList`]: positioned [`GlyphRun`]s,
+//! [`InlineBoxItem`]s, [`FilledRect`]s and [`StrokedLine`]s over plain `f32`,
+//! with this crate's own [`Brush`] — never `kurbo`, never `peniko`.
 //!
-//! - **No GPU.** `mt-layout` produces a display list; turning it into pixels
-//!   is `mt-render`'s job, behind a trait with both a `vello`/`wgpu` and a
-//!   `tiny-skia` backend. Nothing here may assume either exists.
+//! The reason is the consumers rather than purity. `mt-export`'s PDF writer
+//! (M6) computes no geometry of its own and takes this list as its input;
+//! exposing `parley::Layout` would make a milestone two ahead depend on the
+//! internal walk of a git-pinned 0.x crate. [`BlockKind`] carries a
+//! discriminator for the same reason: D11 lays math and diagrams out as their
+//! own source in the code-block style, and `mt-math`/`mt-diagram` replace that
+//! arm at M6 by finding it, not by re-plumbing layout.
+//!
+//! The font reference is the one named exception, and it is resolved rather
+//! than deferred: a [`FontId`] indexes the collection the shell supplied, keyed
+//! on parley's own blob identity, so the handle never crosses.
+//!
+//! ## No I/O, and the collection arrives from above (M3 §5 D7)
+//!
+//! - **No GPU.** Turning the display list into pixels is `mt-render`'s job.
+//!   M3 §5 D1 ships `vello_cpu` alone behind the §6 trait; `tiny-skia` is
+//!   struck outright, because its README puts text rendering out of scope and
+//!   a backend that cannot draw a character is not a fallback (§4 C2).
 //! - **No windowing.** No `winit`, no surfaces, no event loop. Available width
 //!   arrives as an `f32` parameter.
-//! - **No I/O.** Fonts arrive through `fontique`'s collection, not through
-//!   `std::fs` calls made here.
-//! - **No dependency on `mt-ui` or `mt-app`,** ever.
+//! - **No I/O.** parley is depended on with `default-features = false`,
+//!   because its default `system` feature enables filesystem font
+//!   enumeration. Faces are registered from **bytes** through [`Fonts`]; this
+//!   crate enumerates nothing and opens nothing. [`FaceList`] says which files
+//!   to read and how to wire them, and the shell does the reading.
+//! - **No dependency on `mt-ui` or `mt-app`,** ever. Nor on `mt-md`: D11's
+//!   language table lives on [`mt_doc::DiagramKind`] so that both consumers
+//!   share one table, which also keeps D5's "must not reference
+//!   `mt_md::reparse`" true by construction.
 //!
-//! This is the load-bearing constraint for §11.3's golden-data layout tests:
-//! layout is testable headlessly against golden data on a CI runner with no
-//! display and no GPU.
+//! An empty registration result is a **hard error**, never a warning. skrifa
+//! rejects `.woff` silently, and a font that fails to load without saying so
+//! produces a subtly wrong layout everywhere with no diagnostic (§8 M3-R10).
 //!
 //! ## Why parley is a direct fit (§0, §5)
 //!
 //! Because muya stores leaf text as a raw string and re-derives inline
 //! structure by tokenizing it, inline content is **styled runs over a single
 //! string plus a handful of replaced elements** (image, inline math, emoji).
-//! That is exactly `parley`'s data model. There is no arbitrary inline-widget
-//! nesting to invent — the "inline-flow layout with arbitrary nested widgets"
-//! hard part from the earlier plan largely evaporates.
+//! That is exactly parley's data model. There is no arbitrary inline-widget
+//! nesting to invent.
 //!
-//! Build a `RangedBuilder` over the block's text, push style ranges derived
-//! from the token tree, push `InlineBox` placeholders for the replaced
-//! elements. Parley returns lines, runs, glyph positions, and cluster
-//! boundaries — which is simultaneously the shaping, bidi, font-fallback and
-//! line-breaking answer, *and* the hit-testing and cursor-motion answer.
 //! Cursor motion and hit-testing must go through parley's cluster API so that
-//! grapheme clusters, bidi runs, and ligatures behave correctly without
-//! bespoke Unicode code.
+//! grapheme clusters, bidi runs and ligatures behave correctly without bespoke
+//! Unicode code — but D8 fixes the *shape* of that answer without pretending
+//! to know its content: if M4 needs cluster-level behaviour, this crate grows
+//! a **method** (point in, offset out) rather than exposing the `Layout`.
 //!
-//! ## Incrementality is the performance contract (§5)
+//! ## Incrementality, on the axis that turned out to be real (§4 C5, §5 D9)
 //!
-//! A dirty block re-lays out; blocks after it get their `y` shifted by the
-//! height delta; nothing else is touched. Re-wrapping the whole document
-//! happens only on width change — and even then only for visible blocks plus
-//! a viewport margin, with the rest laid out lazily on scroll.
+//! §5 said re-wrapping happens only on width change, and even then only for
+//! visible blocks. **The axis is the other way round.** parley re-linebreaks
+//! and re-aligns an existing `Layout` cheaply, but a content or style change
+//! requires a *new* one — measured over `5mb.md` at **54 ms to re-break every
+//! block against 810 ms to rebuild them**, a 15.1× ratio. So a width change is
+//! the cheap case and needs no viewport heuristic at all; laziness is needed
+//! for the **first** layout, not for reflow.
 //!
-//! **Never lay out the whole document synchronously.** This is precisely what
-//! Electron cannot do, and it is where the 5 MB-file target (§12.1: open in
-//! ≤ 800 ms) is won or lost.
+//! Which is why "a block that has no `Layout` yet" is a **first-class state**
+//! here from S1 rather than a cache bolted on later. S0 measured shaping at
+//! 90.3 % of layout cost, so a design that defers only line-breaking defers
+//! 8 %. [`LayoutTree`] holds `Unbuilt` blocks as an enum, not an `Option`;
+//! building one block touches no other, and the eager driver is a loop over
+//! the per-block build so that S6 can substitute a viewport-driven one without
+//! changing the data structure.
 //!
-//! ## M0 status
+//! Two constants that shape every design decision above them. A
+//! `parley::Layout` costs **3,956 B resident** against a 328 B struct, so cost
+//! scales with **block count × a fixed per-`Layout` price**, not with document
+//! size — ns/byte actually *falls* as documents grow. One `Layout` per code
+//! fence, never one per line: the split measured 1.38× slower and 2.21× the
+//! memory. **Any design decision that multiplies `Layout` count is the
+//! expensive one, whatever it optimizes.**
 //!
-//! Stub. `mt-layout` is M3 (§9). §13 R2 asks for the awkward parley cases —
-//! inline-widget baseline alignment, nested bidi interacting with inline
-//! boxes — to be exercised in **M3 week 1, not month 5**.
+//! ## Status
+//!
+//! **M3 S1.** Block flow, the theme model (D4), the face list (D7), the
+//! display list (D8) and the golden format (D10) are in. Inline layout —
+//! per-leaf tokenization into style runs, `InlineBox` placeholders, and C6's
+//! visible-text ↔ block-text offset map — is **S2's**, so a leaf currently
+//! lays out as a single style run and `**bold**` occupies eight columns.
+//!
+//! Geometry is guarded two ways: `theme::tests` asserts §2's table as
+//! constants, and `cargo xtask layout` compares the display list for every
+//! corpus file at both theme widths against committed goldens on **exact
+//! equality**. A golden update is a reviewable event on the same footing as
+//! moving the parley pin (§8 M3-R6) — both show up as a one-line header diff
+//! above the geometry that moved.
 
 pub mod display;
 pub mod flow;
