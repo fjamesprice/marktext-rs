@@ -503,6 +503,53 @@ impl TextShaper {
     }
 }
 
+/// One grapheme cluster of laid-out text — **D8's method, arriving early**.
+///
+/// D8 fixed the *shape* of any cluster-level answer without deciding its
+/// content: *"if M4 needs cluster-level behaviour, `mt-layout` grows a method
+/// — point in, offset out — rather than exposing the `Layout`"*. This is that
+/// shape, and its first caller is S2's gate rather than M4: the gate asks for
+/// **cluster counts** for ZWJ sequences and skin-tone modifiers, and a cluster
+/// count is not a glyph count. Nothing else on the display list can answer it,
+/// because [`GlyphRun`] carries glyphs.
+///
+/// A cluster here is a **grapheme cluster** in the [UAX #29 § 3][uax-grapheme]
+/// sense, intersected with one shaped run: parley's own type says so, and the
+/// consequence worth stating is that the count is a property of the *text*,
+/// not of the font. `👨‍👩‍👧‍👦` is one cluster whether the face draws it as one
+/// glyph or as four, which is exactly why [`glyphs`](Self::glyphs) is reported
+/// beside it rather than instead of it.
+///
+/// [uax-grapheme]: https://www.unicode.org/reports/tr29/#Grapheme_Cluster_Boundaries
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextCluster {
+    /// The cluster's extent in the shaped string — the **visible** text, so
+    /// [`VisibleTextMap`](crate::inline::VisibleTextMap) is what turns it back
+    /// into block text.
+    pub text_range: std::ops::Range<usize>,
+    /// How many glyphs the face produced for it.
+    ///
+    /// Usually one, and **not** constrained to be: a ZWJ sequence the face has
+    /// no ligature for is one cluster of several glyphs, and the far side of
+    /// the same coin is a ligature — several clusters where only the first
+    /// carries glyphs, which is what
+    /// [`is_ligature_start`](Self::is_ligature_start) names.
+    pub glyphs: usize,
+    /// This cluster begins a shaped cluster that spans **more than one**
+    /// grapheme — the definition of a ligature, and the only way to observe
+    /// one without reading the face's `GSUB`.
+    ///
+    /// `fi` shaped as a single glyph gives two clusters: the `f` with this set
+    /// and one glyph, and the `i` with
+    /// [`is_ligature_continuation`](Self::is_ligature_continuation) set and
+    /// none.
+    pub is_ligature_start: bool,
+    /// This cluster is inside a shaped cluster that began at an earlier
+    /// grapheme, so its glyphs belong to that one and
+    /// [`glyphs`](Self::glyphs) is zero.
+    pub is_ligature_continuation: bool,
+}
+
 /// One laid-out run of text.
 ///
 /// **The only place in the crate that stores a parley type**, and it is
@@ -553,6 +600,50 @@ impl ShapedText {
             .skip(1)
             .map(|line| line.text_range().start)
             .collect()
+    }
+
+    /// Every grapheme cluster overlapping `text_range`, in **logical** order.
+    ///
+    /// Byte offsets in and clusters out — D8's *"a method, not an exposed
+    /// `Layout`"*, and the reason [`TextCluster`] exists. An empty range
+    /// yields nothing; a range that covers the whole string yields every
+    /// cluster exactly once, because a cluster belongs to exactly one run of
+    /// exactly one line.
+    ///
+    /// The range is **clipped, not snapped**: a cluster that merely overlaps
+    /// the argument is included whole, so a caller that hands in the range of
+    /// one emoji gets that emoji's cluster and not a fragment of it.
+    pub fn clusters(&self, text_range: std::ops::Range<usize>) -> Vec<TextCluster> {
+        let mut out = Vec::new();
+        if text_range.is_empty() {
+            return out;
+        }
+        for line in self.layout.lines() {
+            for run in line.runs() {
+                let run_range = run.text_range();
+                if run_range.start >= text_range.end || text_range.start >= run_range.end {
+                    continue;
+                }
+                for cluster in run.clusters() {
+                    let range = cluster.text_range();
+                    if range.start >= text_range.end || text_range.start >= range.end {
+                        continue;
+                    }
+                    out.push(TextCluster {
+                        text_range: range,
+                        glyphs: cluster.glyphs().count(),
+                        is_ligature_start: cluster.is_ligature_start(),
+                        is_ligature_continuation: cluster.is_ligature_continuation(),
+                    });
+                }
+            }
+        }
+        // Runs come back in visual order and a bidi line reorders them, so the
+        // logical order the caller asked for has to be restored here rather
+        // than assumed. Sorting by start is total: two clusters of the same
+        // layout never share a start.
+        out.sort_by_key(|c| c.text_range.start);
+        out
     }
 
     /// The first line's baseline, or `0.0` if there are no lines.

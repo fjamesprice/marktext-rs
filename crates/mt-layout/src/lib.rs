@@ -150,7 +150,8 @@ pub use inline::{
     VisibleTextMap,
 };
 pub use text::{
-    BaseDirection, InlineBoxSpec, ShapedText, StyleRun, TextGround, TextRequest, TextShaper,
+    BaseDirection, InlineBoxSpec, ShapedText, StyleRun, TextCluster, TextGround, TextRequest,
+    TextShaper,
 };
 pub use theme::{Theme, ThemeError};
 pub use units::Units;
