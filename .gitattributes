@@ -11,3 +11,13 @@
 # Generated fixtures: large, and not useful to read in a diff.
 spec/fixtures/*.json linguist-generated=true -diff
 bench/corpus/*.md linguist-generated=true -diff
+
+# Vendored font faces (M3 §8 D7's pinned set). `text=auto` above already
+# detects these as binary, so this line is belt-and-braces rather than a fix —
+# but the thing it guards against is exactly the failure the rule above exists
+# to prevent, one level worse: `assets/fonts/faces.toml` pins a SHA-256 per
+# file and D10's goldens are exact-equality, so a single newline rewritten in a
+# `glyf` table would fail every layout golden with a checksum error rather than
+# a legible diff. `-diff` because a binary diff in a review is noise.
+assets/fonts/*.ttf binary
+assets/fonts/*.otf binary

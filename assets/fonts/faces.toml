@@ -1,0 +1,401 @@
+# The pinned face list — the artifact M3 §8 D7 says S1 owes.
+#
+# D7 decided that `mt-layout` never enumerates or opens a font: a collection is
+# built **above** it and passed in, and goldens run against a pinned bundled set
+# registered from bytes. That makes this directory a committed artifact of the
+# repository rather than a property of the developer's machine, which is what
+# D10's exact-equality layout goldens need in order to mean anything.
+#
+# **THE ORDER OF `[[face]]` ENTRIES IS LOAD-BEARING.** It is the fallback chain,
+# in the order a shell must register and offer the faces, and it is therefore
+# baked into every golden. Reordering these entries is a golden-changing event
+# on the same footing as moving the parley pin (D2) — review it as one.
+#
+# Each entry carries the same keys, so a loader needs no per-file special
+# casing:
+#
+#   file      name in this directory
+#   family    the family name **skrifa reports**, not the one we would like.
+#             `cargo run -p s1-faces --release` re-reads every file and fails
+#             loudly if this string disagrees with the font's own name table.
+#   subfamily the style name in the font's own name table (ID 2). Recorded
+#             because it is not always "Regular" — DejaVu Sans Mono says "Book".
+#   weight    CSS weight the shell should register/request this face as
+#   style     "normal" | "italic" | "oblique"
+#   variable  true if the file has an `fvar` table
+#   axes      variation axes; empty for every static face. A variable face's
+#             default instance is what parley resolves when nothing asks
+#             otherwise, and that instance is what a golden bakes in.
+#   scripts   ISO 15924 codes this face is in the list to cover. **Measured**
+#             from the font's own cmap (see README.md's per-block table), not
+#             claimed from the family name.
+#   fallback_scripts
+#             the ISO 15924 keys a shell should register this face under with
+#             `Collection::append_fallbacks`. A **second** field rather than a
+#             reuse of `scripts`, because they answer different questions:
+#             `scripts` is what the face covers, this is what fontique should
+#             be told to reach for. They coincide today except that the
+#             DejaVu obliques claim `Zyyy` without claiming `Arab`.
+#   generic_families
+#             CSS generic names to register this face under with
+#             `Collection::append_generic_families`. This field exists because
+#             of a measurement, not a preference: **parley resolves emoji
+#             through the generic family, not through script fallback.**
+#             `parley/src/shape/mod.rs:329` appends
+#             `QueryFamily::Generic(GenericFamily::Emoji)` to the query for any
+#             cluster where `CharCluster::is_emoji()`, so a Noto Emoji
+#             registered only as a `Zsye` script fallback is never consulted —
+#             67 of `emoji.md`'s 82 codepoints stayed tofu until this field
+#             drove `append_generic_families(Emoji, …)`. The `sans-serif` and
+#             `monospace` entries are the other half: both theme stacks end in
+#             a CSS generic, and with `system_fonts: false` nothing else
+#             defines what those generics mean.
+#   derived   true if this file was **generated from** an upstream font rather
+#             than committed as upstream shipped it. Exactly one entry is
+#             `true` today (the CJK subset). The key is on every entry, not
+#             just that one, so a loader special-cases nothing.
+#   derived_from
+#             the upstream file, its version and its SHA-256. Empty when
+#             `derived = false`.
+#   derived_command
+#             the exact command that regenerates the file from
+#             `derived_from`. Empty when `derived = false`. This is the whole
+#             reason a derived artifact is acceptable at all: it is
+#             re-derivable, byte for byte, by anyone.
+#   role      "body" | "code" | "fallback" — which theme stack names this
+#             family (crates/mt-layout/themes/muya-default.toml `[fonts]`), or
+#             "fallback" if no stack names it and it exists only to catch
+#             codepoints the named families lack.
+#   bytes     file size, so a truncated checkout is caught before the hash is
+#   sha256    of the file as committed. Determinism, per D10.
+#
+# One entry is a **corpus-derived subset and a test fixture, not a shipped
+# asset** — see the CJK section below and README.md §6. Nothing else here is
+# derived; `derived = false` on the other eleven says so mechanically.
+
+[meta]
+# Bumped when the *set* changes (a face added, removed or reordered), not when
+# this comment is edited. A golden header can cite it.
+revision = 1
+# The parley revision these faces were measured against — D2's pin. A face list
+# is only reproducible together with the shaper that reads it.
+parley_rev = "a0752c7bdc3ad88dac19fc194d2b8e57e59bea2e"
+total_font_bytes = 4388460
+
+# ---------------------------------------------------------------------------
+# 1. Open Sans — the body stack's first named family
+# ---------------------------------------------------------------------------
+# `[fonts] body` in muya-default.toml names "Open Sans" first, and D7 records
+# that MarkText's own copy is unusable: eight `.woff` files that skrifa rejects
+# silently. This is the same family re-sourced upstream as static `.ttf`, which
+# is what "M3 must re-source Open Sans" meant.
+#
+# Re-sourcing upstream also **discharged the Hebrew half of M3-R10 for free**:
+# MarkText shipped the `latin-ext_latin` web subset, and upstream v3.003 carries
+# 45 codepoints of U+0590–05FF. `rtl.md`'s Hebrew is covered by this face, not
+# by anything added for it. See README.md.
+
+[[face]]
+file = "OpenSans-Regular.ttf"
+family = "Open Sans"
+subfamily = "Regular"
+weight = 400
+style = "normal"
+variable = false
+axes = []
+scripts = ["Latn", "Grek", "Cyrl", "Hebr"]
+fallback_scripts = ["Latn", "Grek", "Cyrl", "Hebr"]
+generic_families = ["sans-serif"]
+role = "body"
+derived = false
+derived_from = ""
+derived_command = ""
+bytes = 147528
+sha256 = "c53aceea2dcf5b4098099c0c4d0a061d17e178a049317b42a422b1a9f7f8eb59"
+
+[[face]]
+file = "OpenSans-Italic.ttf"
+family = "Open Sans"
+subfamily = "Italic"
+weight = 400
+style = "italic"
+variable = false
+axes = []
+scripts = ["Latn", "Grek", "Cyrl", "Hebr"]
+fallback_scripts = ["Latn", "Grek", "Cyrl", "Hebr"]
+generic_families = ["sans-serif"]
+role = "body"
+derived = false
+derived_from = ""
+derived_command = ""
+bytes = 153256
+sha256 = "93bc1bb6abf4e6b7c75d7131714061d5b57cc478abcabe4cb3519bb38fb917aa"
+
+[[face]]
+file = "OpenSans-Bold.ttf"
+family = "Open Sans"
+subfamily = "Bold"
+weight = 700
+style = "normal"
+variable = false
+axes = []
+scripts = ["Latn", "Grek", "Cyrl", "Hebr"]
+fallback_scripts = ["Latn", "Grek", "Cyrl", "Hebr"]
+generic_families = ["sans-serif"]
+role = "body"
+derived = false
+derived_from = ""
+derived_command = ""
+bytes = 147264
+sha256 = "27da758f4dcac9a65abe914c13b463b42982b9909bc65713424099f4810bd1e6"
+
+[[face]]
+file = "OpenSans-BoldItalic.ttf"
+family = "Open Sans"
+subfamily = "Bold Italic"
+weight = 700
+style = "italic"
+variable = false
+axes = []
+scripts = ["Latn", "Grek", "Cyrl", "Hebr"]
+fallback_scripts = ["Latn", "Grek", "Cyrl", "Hebr"]
+generic_families = ["sans-serif"]
+role = "body"
+derived = false
+derived_from = ""
+derived_command = ""
+bytes = 153308
+sha256 = "d672a770037104b6af45e1336b3d3c1729c8aea940f81e010f5a8a7319c29a21"
+
+# ---------------------------------------------------------------------------
+# 2. Noto Sans Arabic — before DejaVu Sans Mono, deliberately
+# ---------------------------------------------------------------------------
+# Two measurements put this face here rather than leaving Arabic to DejaVu Sans
+# Mono, which S0 showed renders it (0/11 tofu):
+#
+#   * DejaVu Sans Mono is **monospace**. It is the code stack's family. Letting
+#     it catch Arabic in a *body* paragraph makes Arabic prose render
+#     monospaced — not tofu, but not right either, and a golden would freeze it.
+#   * `DejaVuSansMono-Oblique.ttf` and `-BoldOblique.ttf` carry **0** codepoints
+#     in U+0600–06FF, where the upright faces carry 99. S0 measured only the
+#     upright. Emphasised Arabic therefore had no covering face at all before
+#     this entry existed.
+#
+# Position matters: this must precede DejaVu Sans Mono so the chain reaches a
+# proportional Arabic face first.
+
+[[face]]
+file = "NotoSansArabic-Regular.ttf"
+family = "Noto Sans Arabic"
+subfamily = "Regular"
+weight = 400
+style = "normal"
+variable = false
+axes = []
+scripts = ["Arab"]
+fallback_scripts = ["Arab"]
+generic_families = []
+role = "fallback"
+derived = false
+derived_from = ""
+derived_command = ""
+bytes = 271652
+sha256 = "7ed3fe069312aceac454f17cf613a30f95271d6ed7ce58005ed4d016bd3823d7"
+
+[[face]]
+file = "NotoSansArabic-Bold.ttf"
+family = "Noto Sans Arabic"
+subfamily = "Bold"
+weight = 700
+style = "normal"
+variable = false
+axes = []
+scripts = ["Arab"]
+fallback_scripts = ["Arab"]
+generic_families = []
+role = "fallback"
+derived = false
+derived_from = ""
+derived_command = ""
+bytes = 298372
+sha256 = "5ccd1a8914f7c7e8aa8050f2c7c37b10fc5e855f06583c2a2248a436aad3fc0f"
+
+# ---------------------------------------------------------------------------
+# 3. Noto Emoji — monochrome, and the only variable face in the set
+# ---------------------------------------------------------------------------
+# Monochrome rather than colour on purpose. S1 needs correct advances and
+# cluster counts; **whether the face carries colour is S4's problem** (COLR vs
+# CBDT is a `mt-render` question). The price difference is the argument:
+# NotoEmoji is 1,982,596 B, NotoColorEmoji.ttf (CBDT) is 10,673,480 B and
+# Noto-COLRv1.ttf is 4,991,984 B. Swapping this entry for one of those later
+# changes advances and therefore every emoji golden — a reviewable event.
+#
+# **This is the one variable font in the set and there is no static instance to
+# prefer.** google/fonts ships `NotoEmoji[wght].ttf` only; there is no
+# `static/` directory in `ofl/notoemoji`, and googlefonts/noto-emoji publishes
+# only the colour builds. So the golden bakes in whatever instance parley
+# resolves: for text at weight 400 that is the `fvar` default (wght = 400,
+# i.e. no deltas applied); a bold heading resolves wght = 700 and gets
+# different advances. Both are deterministic, and both come out of this file.
+#
+# The brackets in the file name are upstream's, not ours. Nothing globs for it
+# — loaders read `file` from this list.
+
+[[face]]
+file = "NotoEmoji[wght].ttf"
+family = "Noto Emoji"
+subfamily = "Regular"
+weight = 400
+style = "normal"
+variable = true
+axes = [{ tag = "wght", min = 300.0, default = 400.0, max = 700.0 }]
+scripts = ["Zsye"]
+fallback_scripts = ["Zsye"]
+generic_families = ["emoji"]
+role = "fallback"
+derived = false
+derived_from = ""
+derived_command = ""
+bytes = 1982596
+sha256 = "de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551"
+
+# ---------------------------------------------------------------------------
+# 4. Noto Sans CJK SC — a CORPUS-DERIVED SUBSET, and a TEST FIXTURE
+# ---------------------------------------------------------------------------
+# **This file is not a shipped asset and must never become one.** D7 splits the
+# two roles: *"goldens run against a pinned bundled set registered from bytes;
+# the shipped previewer adds system fonts on top."* The bundled set's job is
+# **golden reproducibility**, not user-facing coverage — a real user's CJK
+# comes from their system fonts at S5 either way. So the fixture only has to
+# render the corpus, and 56,268 B does that as well as 16,437,364 B would.
+#
+# `derived = true` is the flag that says so, and it is the reason the three
+# `derived_*` keys exist on **every** entry rather than only this one: a loader
+# must not need to special-case the odd one out.
+#
+# **This face stops covering the corpus the moment the corpus changes.** That
+# is the price of the 292× saving and it is a written contract, not an
+# oversight — see `README.md` §6 for the regeneration command and for the check
+# `cargo xtask layout` owes to make the failure loud instead of silent.
+#
+# Placed after Noto Emoji and before DejaVu Sans Mono: it must not intercept
+# emoji (which route through `GenericFamily::Emoji` in any case), and DejaVu
+# stays last as the widest, least appropriate net.
+#
+# No Reserved Font Name is declared anywhere — not in the upstream OFL
+# (`LICENSE-NotoSansCJK.txt` mentions the phrase only in the licence's own
+# definitions) and not in the font's `name` table (ID 0 is
+# "© 2014-2021 Adobe (http://www.adobe.com/)", with no RFN clause). So the
+# family name is kept, which matters mechanically: the chain resolves on it.
+# ID 7 carries a trademark notice, "Noto is a trademark of Google Inc." — that
+# is trademark law rather than the OFL, and this fixture neither ships nor
+# promotes anything, so it does not bar keeping the name. Recorded so the
+# judgement is auditable rather than assumed.
+
+[[face]]
+file = "NotoSansCJKsc-Regular-corpus-subset.otf"
+family = "Noto Sans CJK SC"
+subfamily = "Regular"
+weight = 400
+style = "normal"
+variable = false
+axes = []
+scripts = ["Hani", "Hira", "Kana", "Hang", "Zyyy"]
+fallback_scripts = ["Hani", "Hira", "Kana", "Hang"]
+generic_families = []
+role = "fallback"
+derived = true
+derived_from = "NotoSansCJKsc-Regular.otf 2.004, sha256 2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b"
+derived_command = "python -m fontTools.subset NotoSansCJKsc-Regular.otf --unicodes-file=corpus-nonascii.txt --layout-features='*' --output-file=NotoSansCJKsc-Regular-corpus-subset.otf"
+bytes = 56268
+sha256 = "05cc026ccff2e5c4954fed438be311a0fe3747caf0826a7117c649a252c0137d"
+
+# ---------------------------------------------------------------------------
+# 5. DejaVu Sans Mono — the code stack, and the last-resort symbol face
+# ---------------------------------------------------------------------------
+# `[fonts] code` and `[fonts] inline_code` in muya-default.toml both name
+# "DejaVu Sans Mono" first. These are MarkText's own four files, byte-identical
+# to the reference clone's — D7 recorded them as the half of the bundled set
+# that loads (1,178,216 B, and the four hashes below prove they were copied,
+# not re-downloaded).
+#
+# Last in the chain because it is the widest net (1,019 codepoints in
+# U+2190–2BFF alone) and the least appropriate face to catch anything by
+# accident: it is monospace, so every entry above it should win first.
+
+[[face]]
+file = "DejaVuSansMono.ttf"
+family = "DejaVu Sans Mono"
+subfamily = "Book"
+weight = 400
+style = "normal"
+variable = false
+axes = []
+scripts = ["Latn", "Grek", "Cyrl", "Arab", "Zyyy"]
+fallback_scripts = ["Latn", "Grek", "Cyrl", "Arab", "Zyyy"]
+generic_families = ["monospace"]
+role = "code"
+derived = false
+derived_from = ""
+derived_command = ""
+bytes = 340712
+sha256 = "b4a6c3e4faab8773f4ff761d56451646409f29abedd68f05d38c2df667d3c582"
+
+[[face]]
+file = "DejaVuSansMono-Oblique.ttf"
+family = "DejaVu Sans Mono"
+subfamily = "Oblique"
+weight = 400
+# `italic`, not `oblique`, and the probe is why: the name table says "Oblique"
+# but OS/2 `fsSelection` sets the ITALIC bit and no `slnt` axis exists, so
+# fontique reports `FontStyle::Italic`. Declaring `oblique` here made the probe
+# fail — which is the check doing its job.
+style = "italic"
+variable = false
+axes = []
+scripts = ["Latn", "Grek", "Cyrl", "Zyyy"]
+fallback_scripts = ["Latn", "Grek", "Cyrl", "Zyyy"]
+generic_families = ["monospace"]
+role = "code"
+derived = false
+derived_from = ""
+derived_command = ""
+bytes = 251932
+sha256 = "742097840c541870e8d6dc5c9b37bb1ceeea6c0dedd1d475faf903ef9df734b0"
+
+[[face]]
+file = "DejaVuSansMono-Bold.ttf"
+family = "DejaVu Sans Mono"
+subfamily = "Bold"
+weight = 700
+style = "normal"
+variable = false
+axes = []
+scripts = ["Latn", "Grek", "Cyrl", "Arab", "Zyyy"]
+fallback_scripts = ["Latn", "Grek", "Cyrl", "Arab", "Zyyy"]
+generic_families = ["monospace"]
+role = "code"
+derived = false
+derived_from = ""
+derived_command = ""
+bytes = 331992
+sha256 = "bce60f1b4421acd9ea51ba6623d7024ecbe6817a953e3654df62a5e6bdf8f769"
+
+[[face]]
+file = "DejaVuSansMono-BoldOblique.ttf"
+family = "DejaVu Sans Mono"
+subfamily = "Bold Oblique"
+weight = 700
+# See DejaVuSansMono-Oblique.ttf above: fontique reports Italic.
+style = "italic"
+variable = false
+axes = []
+scripts = ["Latn", "Grek", "Cyrl", "Zyyy"]
+fallback_scripts = ["Latn", "Grek", "Cyrl", "Zyyy"]
+generic_families = ["monospace"]
+role = "code"
+derived = false
+derived_from = ""
+derived_command = ""
+bytes = 253580
+sha256 = "91713a71d550bba22c2a6b2bb2a9ad8f9a159e12e4e9f0a5b2677998ba21213e"

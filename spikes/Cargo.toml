@@ -47,6 +47,11 @@ members = [
     "e4-common",
     "e4-syntect",
     "e4-treesitter",
+    # M3 S1 step 2 — the face list D7 says S1 owes. Same parley pin and same
+    # `default-features = false` cut as `e1-fonts-*`, because it extends E1's
+    # font measurement rather than starting a new one; see the note below about
+    # building it on its own.
+    "s1-faces",
 ]
 
 # NOTE ON BUILDING: the `e1-fonts-*` members set `default-features = false` on
