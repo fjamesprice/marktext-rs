@@ -1,4 +1,4 @@
-layout-golden v3
+layout-golden v4
 theme          dark
 theme-width    750.00
 content-width  650.00
@@ -6,6 +6,7 @@ parley         a0752c7bdc3ad88dac19fc194d2b8e57e59bea2e
 faces          ce47b2244a2ee54b2189d04641b5381824cfa80b6872d656931c5127437f7f58 rev 1
 options        wrap-code-blocks=false line-numbers=false
 parse          muya-default+footnote  footnote=true math=true super-sub=false gitlab=true front-matter=true trim-code-blanks=false list-indent=Spaces(1)
+highlight      blocks=2 spans=27
 input          block-kinds.md
 input-bytes    2272
 form           full
@@ -31,11 +32,22 @@ count table          0
 count table.row      0
 count footnote       1
 
-block 0 frontmatter bounds=[0.00 0.00 650.00 97.92] lang=yaml items=4
+block 0 frontmatter bounds=[0.00 0.00 650.00 97.92] lang=yaml items=15
   rect [0.00 0.00 650.00 97.92] fill=#424344ff radius=3.00
-  glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=0..18 origin=[14.40 30.40] advance=156.05 n=18 seq=70c1c965
-  glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=19..27 origin=[14.40 53.40] advance=69.36 n=8 seq=9b6269b0
-  glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=28..51 origin=[14.40 76.40] advance=199.40 n=23 seq=11a8bcb3
+  glyphs font=DejaVuSansMono size=14.40 fill=#e6db74ff rtl=0 text=0..5 origin=[14.40 30.40] advance=43.35 n=5 seq=66454147
+  glyphs font=DejaVuSansMono size=14.40 fill=#f8f8f2ff rtl=0 text=5..6 origin=[57.75 30.40] advance=8.67 n=1 seq=e4fc266a
+  glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=6..18 origin=[66.42 30.40] advance=104.03 n=12 seq=8821db6b
+  glyphs font=DejaVuSansMono size=14.40 fill=#e6db74ff rtl=0 text=19..23 origin=[14.40 53.40] advance=34.68 n=4 seq=9dfe8011
+  glyphs font=DejaVuSansMono size=14.40 fill=#f8f8f2ff rtl=0 text=23..24 origin=[49.08 53.40] advance=8.67 n=1 seq=a47de47c
+  glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=24..27 origin=[57.75 53.40] advance=26.01 n=3 seq=f72f4309
+  glyphs font=DejaVuSansMono size=14.40 fill=#e6db74ff rtl=0 text=28..32 origin=[14.40 76.40] advance=34.68 n=4 seq=7c644bd3
+  glyphs font=DejaVuSansMono size=14.40 fill=#f8f8f2ff rtl=0 text=32..33 origin=[49.08 76.40] advance=8.67 n=1 seq=ed629449
+  glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=33..34 origin=[57.75 76.40] advance=8.67 n=1 seq=7f45e542
+  glyphs font=DejaVuSansMono size=14.40 fill=#f8f8f2ff rtl=0 text=34..35 origin=[66.42 76.40] advance=8.67 n=1 seq=162a24d1
+  glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=35..41 origin=[75.09 76.40] advance=52.02 n=6 seq=1b2ad1fd
+  glyphs font=DejaVuSansMono size=14.40 fill=#f8f8f2ff rtl=0 text=41..42 origin=[127.10 76.40] advance=8.67 n=1 seq=a4f9fb2c
+  glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=42..50 origin=[135.77 76.40] advance=69.36 n=8 seq=c56ec8ae
+  glyphs font=DejaVuSansMono size=14.40 fill=#f8f8f2ff rtl=0 text=50..51 origin=[205.13 76.40] advance=8.67 n=1 seq=9e05bd98
 block 1 setext-heading bounds=[0.00 113.92 650.00 42.00] items=1
   glyphs font=OpenSans-Bold size=30.00 fill=#ffffffcc rtl=0 text=0..25 origin=[0.00 145.92] advance=374.50 n=25 seq=b55a826b
 block 2 paragraph bounds=[0.00 171.92 650.00 102.40] items=7
@@ -50,13 +62,29 @@ block 3 setext-heading bounds=[0.00 290.32 650.00 33.60] items=1
   glyphs font=OpenSans-Bold size=24.00 fill=#ffffffcc rtl=0 text=0..25 origin=[0.00 316.32] advance=300.61 n=25 seq=eef78d27
 block 4 atx-heading bounds=[0.00 339.92 650.00 33.60] items=1
   glyphs font=OpenSans-Bold size=24.00 fill=#ffffffcc rtl=0 text=0..9 origin=[-7.20 365.92] advance=131.80 n=9 seq=c1a97de5
-block 5 html-block bounds=[0.00 395.12 650.00 144.00] lang=html overflow=63.69 items=6
+block 5 html-block bounds=[0.00 395.12 650.00 144.00] lang=html overflow=63.69 items=22
   rect [0.00 395.12 650.00 144.00] fill=#424344ff radius=3.00
-  glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=0..21 origin=[14.40 425.52] advance=182.06 n=21 seq=95dd7c7c
-  glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=22..101 origin=[14.40 448.52] advance=684.89 n=79 seq=8cb8532b
+  glyphs font=DejaVuSansMono size=14.40 fill=#f8f8f2ff rtl=0 text=0..1 origin=[14.40 425.52] advance=8.67 n=1 seq=410b66f9
+  glyphs font=DejaVuSansMono size=14.40 fill=#f92672ff rtl=0 text=1..5 origin=[23.07 425.52] advance=34.68 n=4 seq=422e718c
+  glyphs font=DejaVuSansMono size=14.40 fill=#a6e22eff rtl=0 text=5..10 origin=[57.75 425.52] advance=43.35 n=5 seq=c8902479
+  glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=10..11 origin=[101.10 425.52] advance=8.67 n=1 seq=2fca314f
+  glyphs font=DejaVuSansMono size=14.40 fill=#f8f8f2ff rtl=0 text=11..12 origin=[109.76 425.52] advance=8.67 n=1 seq=7063a770
+  glyphs font=DejaVuSansMono size=14.40 fill=#e6db74ff rtl=0 text=12..19 origin=[118.43 425.52] advance=60.69 n=7 seq=def34d86
+  glyphs font=DejaVuSansMono size=14.40 fill=#f8f8f2ff rtl=0 text=19..21 origin=[179.12 425.52] advance=17.34 n=2 seq=58eaa139
+  glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=22..24 origin=[14.40 448.52] advance=17.34 n=2 seq=68153a01
+  glyphs font=DejaVuSansMono size=14.40 fill=#f8f8f2ff rtl=0 text=24..25 origin=[31.74 448.52] advance=8.67 n=1 seq=6529e793
+  glyphs font=DejaVuSansMono size=14.40 fill=#f92672ff rtl=0 text=25..31 origin=[40.41 448.52] advance=52.02 n=6 seq=c565fe9b
+  glyphs font=DejaVuSansMono size=14.40 fill=#f8f8f2ff rtl=0 text=31..32 origin=[92.43 448.52] advance=8.67 n=1 seq=9b462126
+  glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=32..40 origin=[101.10 448.52] advance=69.36 n=8 seq=800b4bb7
+  glyphs font=DejaVuSansMono size=14.40 fill=#f8f8f2ff rtl=0 text=40..42 origin=[170.45 448.52] advance=17.34 n=2 seq=ce60340d
+  glyphs font=DejaVuSansMono size=14.40 fill=#f92672ff rtl=0 text=42..48 origin=[187.79 448.52] advance=52.02 n=6 seq=ac0d04c2
+  glyphs font=DejaVuSansMono size=14.40 fill=#f8f8f2ff rtl=0 text=48..49 origin=[239.81 448.52] advance=8.67 n=1 seq=39546e36
+  glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=49..101 origin=[248.48 448.52] advance=450.82 n=52 seq=315eed97
   glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=102..173 origin=[14.40 471.52] advance=615.54 n=71 seq=d16dbb37
   glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=174..238 origin=[14.40 494.52] advance=554.85 n=64 seq=f735ee90
-  glyphs font=DejaVuSansMono size=14.40 fill=#ffffff80 rtl=0 text=239..245 origin=[14.40 517.52] advance=52.02 n=6 seq=551edaea
+  glyphs font=DejaVuSansMono size=14.40 fill=#f8f8f2ff rtl=0 text=239..241 origin=[14.40 517.52] advance=17.34 n=2 seq=04431484
+  glyphs font=DejaVuSansMono size=14.40 fill=#f92672ff rtl=0 text=241..244 origin=[31.74 517.52] advance=26.01 n=3 seq=9590d225
+  glyphs font=DejaVuSansMono size=14.40 fill=#f8f8f2ff rtl=0 text=244..245 origin=[57.75 517.52] advance=8.67 n=1 seq=99aab8a8
 block 6 paragraph bounds=[0.00 553.52 650.00 51.20] items=2
   glyphs font=OpenSans-Regular size=16.00 fill=#ffffffb3 rtl=0 text=0..80 origin=[0.00 571.52] advance=601.41 n=79 seq=6330fd8b
   glyphs font=OpenSans-Regular size=16.00 fill=#ffffffb3 rtl=0 text=81..91 origin=[0.00 597.52] advance=67.60 n=10 seq=8c1523b2

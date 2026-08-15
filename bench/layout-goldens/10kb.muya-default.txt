@@ -1,4 +1,4 @@
-layout-golden v3
+layout-golden v4
 theme          muya-default
 theme-width    800.00
 content-width  700.00
@@ -6,6 +6,7 @@ parley         a0752c7bdc3ad88dac19fc194d2b8e57e59bea2e
 faces          ce47b2244a2ee54b2189d04641b5381824cfa80b6872d656931c5127437f7f58 rev 1
 options        wrap-code-blocks=false line-numbers=false
 parse          muya-default  footnote=false math=true super-sub=false gitlab=true front-matter=true trim-code-blanks=false list-indent=Spaces(1)
+highlight      blocks=1 spans=2
 input          10kb.md
 input-bytes    10521
 form           full
@@ -42,13 +43,16 @@ block 1 paragraph bounds=[0.00 58.00 700.00 102.40] items=6
   glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=223..261 origin=[0.00 153.00] advance=277.54 n=37 seq=e11b8827
 block 2 atx-heading bounds=[0.00 176.40 700.00 33.60] items=1
   glyphs font=OpenSans-Bold size=24.00 fill=#333333ff rtl=0 text=0..8 origin=[-7.20 202.40] advance=81.45 n=8 seq=9a4f5ef2
-block 3 code-block bounds=[0.00 231.60 700.00 53.84] lang=sh items=6
+block 3 code-block bounds=[0.00 231.60 700.00 53.84] lang=sh items=9
   rect [0.00 231.60 700.00 53.84] fill=#00000008 radius=3.00
   rect [0.00 231.60 700.00 1.00] fill=#e6e6e6ff
   rect [0.00 284.44 700.00 1.00] fill=#e6e6e6ff
   rect [0.00 232.60 1.00 51.84] fill=#e6e6e6ff
   rect [699.00 232.60 1.00 51.84] fill=#e6e6e6ff
-  glyphs font=DejaVuSansMono size=14.40 fill=#808080ff rtl=0 text=0..25 origin=[15.40 263.00] advance=216.74 n=25 seq=c397ace5
+  glyphs font=DejaVuSansMono size=14.40 fill=#dd4a68ff rtl=0 text=0..5 origin=[15.40 263.00] advance=43.35 n=5 seq=41d9c50f
+  glyphs font=DejaVuSansMono size=14.40 fill=#808080ff rtl=0 text=5..6 origin=[58.75 263.00] advance=8.67 n=1 seq=36cc2ad1
+  glyphs font=DejaVuSansMono size=14.40 fill=#dd4a68ff rtl=0 text=6..13 origin=[67.42 263.00] advance=60.69 n=7 seq=10c01bb3
+  glyphs font=DejaVuSansMono size=14.40 fill=#808080ff rtl=0 text=13..25 origin=[128.10 263.00] advance=104.03 n=12 seq=52fd1420
 block 4 atx-heading bounds=[0.00 301.44 700.00 33.60] items=1
   glyphs font=OpenSans-Bold size=24.00 fill=#333333ff rtl=0 text=0..4 origin=[-7.20 327.44] advance=58.86 n=4 seq=360aa864
 block 5 paragraph bounds=[0.00 351.04 700.00 76.80] items=9

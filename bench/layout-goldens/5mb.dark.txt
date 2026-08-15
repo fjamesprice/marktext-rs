@@ -1,4 +1,4 @@
-layout-golden v3
+layout-golden v4
 theme          dark
 theme-width    750.00
 content-width  650.00
@@ -6,13 +6,14 @@ parley         a0752c7bdc3ad88dac19fc194d2b8e57e59bea2e
 faces          ce47b2244a2ee54b2189d04641b5381824cfa80b6872d656931c5127437f7f58 rev 1
 options        wrap-code-blocks=false line-numbers=false
 parse          muya-default  footnote=false math=true super-sub=false gitlab=true front-matter=true trim-code-blanks=false list-indent=Spaces(1)
+highlight      blocks=1954 spans=17586
 input          5mb.md
 input-bytes    5243009
 form           digest
 
 list           width=650.00 height=2777342.75 blocks=54896
-full-sha256    2c26d5566a65de907bfc57e754296647b2ee78b660ddda86d43b50648e809804
-full-bytes     29531137
+full-sha256    078a64d71896d20b1ad63bb65e206ebf8c0845482604542ff69b9fe9c98692f3
+full-bytes     32054735
 count paragraph      19406
 count atx-heading    9812
 count setext-heading 0
