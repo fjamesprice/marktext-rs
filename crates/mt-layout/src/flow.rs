@@ -190,7 +190,8 @@ use crate::images::ImageSizes;
 use crate::inline::{self, InlineImage, InlineRun, InlineSyntax, VisibleTextMap};
 use crate::paint;
 use crate::text::{
-    BaseDirection, InlineBoxSpec, ShapedText, StyleRun, TextGround, TextRequest, TextShaper,
+    BaseDirection, InlineBoxSpec, InlineSpacing, ShapedText, StyleRun, TextGround, TextRequest,
+    TextShaper,
 };
 use crate::theme::{CheckboxTop, CodeBlock, Color, ListMarker, OrderedMarker, TextAlign, Theme};
 use crate::units::Units;
@@ -405,6 +406,28 @@ struct TextStyle {
     /// input M3-R1's workaround keys on, and because M5 exposes the
     /// reference's own two-valued `dir` preference by setting it here.
     base_direction: BaseDirection,
+}
+
+/// One inline box inside a leaf, reduced to the three things a [`StyleRun`]
+/// cannot carry: an advance before it, an advance after it, and a ground.
+///
+/// The CSS box of `code.mu-inline-rule`, `.mu-inline-footnote-identifier`,
+/// `.mu-reference-label`, `.mu-reference-title` and `.mu-header-tight-space`,
+/// all of which are non-replaced inline boxes and so are governed by the same
+/// asymmetry: [`lead`](Self::lead) and [`trail`](Self::trail) move the text,
+/// [`padding_y`](Self::padding_y) does not.
+#[derive(Debug, Clone, PartialEq)]
+struct InlineSpan {
+    /// Byte range in the leaf's **visible** text.
+    range: Range<usize>,
+    /// `padding-left` + `margin-left`, in px. Signed.
+    lead: f32,
+    /// `padding-right` + `margin-right`, in px. Signed.
+    trail: f32,
+    /// `padding-top` and `padding-bottom`, in px. Painted, never advanced.
+    padding_y: f32,
+    /// The ground's corner radius, or `None` for a span that paints none.
+    ground_radius: Option<f32>,
 }
 
 /// A block's margins, border and padding, resolved to px.
@@ -740,13 +763,16 @@ impl LayoutTree {
                     None,
                 );
                 let runs = self.style_runs(&style, &laid.runs, opacity);
-                let grounds = self.grounds(&style, &laid.runs, opacity);
+                let spans = self.inline_spans(&style, &laid.runs);
+                let grounds = self.grounds(&style, &spans, opacity);
+                let spacings = Self::spacings(&spans);
                 let (boxes, placeholders) = self.image_boxes(&laid.images, content_width);
                 let shaped = self.shape_with(
                     &style,
                     &laid.visible,
                     &runs,
                     &grounds,
+                    &spacings,
                     &boxes,
                     content_width,
                     fonts,
@@ -857,7 +883,17 @@ impl LayoutTree {
         fonts: &mut Fonts,
         shaper: &mut TextShaper,
     ) -> ShapedText {
-        self.shape_with(style, text, runs, &[], &[], content_width, fonts, shaper)
+        self.shape_with(
+            style,
+            text,
+            runs,
+            &[],
+            &[],
+            &[],
+            content_width,
+            fonts,
+            shaper,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -867,6 +903,7 @@ impl LayoutTree {
         text: &str,
         runs: &[StyleRun<'_>],
         grounds: &[TextGround],
+        spacings: &[InlineSpacing],
         boxes: &[InlineBoxSpec],
         content_width: f32,
         fonts: &mut Fonts,
@@ -885,6 +922,7 @@ impl LayoutTree {
         request.base_direction = style.base_direction;
         request.runs = runs;
         request.grounds = grounds;
+        request.spacings = spacings;
         request.inline_boxes = boxes;
         request.max_width = match style.wrap {
             Wrap::AtContentWidth => Some(content_width.max(0.0)),
@@ -1034,61 +1072,137 @@ impl LayoutTree {
         out
     }
 
-    /// The rounded grounds behind inline code and behind a footnote
-    /// identifier's pill.
+    /// Every stretch of a leaf's visible text whose CSS box has a horizontal
+    /// padding or margin, a vertical padding, or a ground behind it.
     ///
-    /// Not part of [`LayoutTree::style_runs`] because a ground is not a text
-    /// style: it changes no glyph, it is painted before the glyphs rather than
-    /// with them, and it survives the `retain` that drops a run which changes
-    /// nothing. Both paddings are in the **run's own** `em`, which is what a
-    /// CSS length on the same rule as a `font-size` means.
-    fn grounds(&self, style: &TextStyle, runs: &[InlineRun], opacity: f32) -> Vec<TextGround> {
+    /// Not part of [`LayoutTree::style_runs`], because none of the three is a
+    /// text style: they change no glyph, they survive the `retain` that drops a
+    /// run which changes nothing, and two of them are geometry the shaper has to
+    /// be told about *before* it breaks lines. Every `em` here is the **run's
+    /// own**, which is what a CSS length on the same rule as a `font-size`
+    /// means.
+    ///
+    /// The list is what [`LayoutTree::grounds`] and [`LayoutTree::spacings`] are
+    /// both derived from, so a ground and the advance that positions it can
+    /// never disagree about where a span begins.
+    fn inline_spans(&self, style: &TextStyle, runs: &[InlineRun]) -> Vec<InlineSpan> {
         let theme = &self.theme;
-        let bg = inline_brush(theme.colors.code_block_bg, style.brush, opacity);
-        if !bg.is_visible() {
-            return Vec::new();
-        }
-        let mut out: Vec<TextGround> = Vec::new();
+        let mut out: Vec<InlineSpan> = Vec::new();
         for run in runs {
+            let s = run.style;
             // Code wins over the footnote pill when both are set: a `[^id]`
             // cannot contain a code span, so the pair is unreachable, and
             // choosing rather than emitting two overlapping rects is the answer
             // that stays right if it ever becomes reachable.
-            let (em, padding_x_em, padding_y_em, radius) = if run.style.code {
-                (
-                    style.font_size * theme.inline_code.font_size_em,
-                    theme.inline_code.padding_x_em,
-                    theme.inline_code.padding_y_em,
-                    theme.inline_code.corner_radius_px,
-                )
-            } else if run.style.footnote {
-                (
-                    style.font_size * theme.inline.footnote_identifier_font_size_em,
-                    theme.inline.footnote_identifier_padding_x_em,
-                    theme.inline.footnote_identifier_padding_y_em,
-                    theme.inline.footnote_identifier_corner_radius_px,
-                )
+            let span = if s.code {
+                // `padding: 0.2em 0.4em` — `inlineSyntax.css:60-70`.
+                let em = style.font_size * theme.inline_code.font_size_em;
+                InlineSpan {
+                    range: run.range.clone(),
+                    lead: em * theme.inline_code.padding_x_em,
+                    trail: em * theme.inline_code.padding_x_em,
+                    padding_y: em * theme.inline_code.padding_y_em,
+                    ground_radius: Some(theme.inline_code.corner_radius_px),
+                }
+            } else if s.footnote {
+                // `padding: 0 0.4em` — `:600`. The block half really is zero.
+                let em = style.font_size * theme.inline.footnote_identifier_font_size_em;
+                let pad = em * theme.inline.footnote_identifier_padding_x_em;
+                InlineSpan {
+                    range: run.range.clone(),
+                    lead: pad,
+                    trail: pad,
+                    padding_y: em * theme.inline.footnote_identifier_padding_y_em,
+                    ground_radius: Some(theme.inline.footnote_identifier_corner_radius_px),
+                }
+            } else if s.reference_label || s.reference_title {
+                // `margin: 0 5px` — `:583-593`. A margin, so no ground and no
+                // vertical extent; 20 px per definition line, in four pieces.
+                InlineSpan {
+                    range: run.range.clone(),
+                    lead: theme.inline.reference_margin_x_px,
+                    trail: theme.inline.reference_margin_x_px,
+                    padding_y: 0.0,
+                    ground_radius: None,
+                }
+            } else if s.header_tight_space {
+                // `margin-left: -0.3em` — `:335-337`. Left only, and negative:
+                // the heading's first glyph lands 1.20 px *before* the content
+                // column at an h1. See `InlineStyle::header_tight_space`.
+                InlineSpan {
+                    range: run.range.clone(),
+                    lead: style.font_size * theme.inline.header_tight_space_margin_left_em,
+                    trail: 0.0,
+                    padding_y: 0.0,
+                    ground_radius: None,
+                }
             } else {
                 continue;
             };
-            let ground = TextGround {
-                range: run.range.clone(),
-                padding_x: em * padding_x_em,
-                padding_y: em * padding_y_em,
-                corner_radius: radius,
-                brush: bg,
-            };
             match out.last_mut() {
                 Some(last)
-                    if last.range.end == ground.range.start
-                        && last.padding_x == ground.padding_x
-                        && last.padding_y == ground.padding_y
-                        && last.corner_radius == ground.corner_radius =>
+                    if last.range.end == span.range.start
+                        && last.lead == span.lead
+                        && last.trail == span.trail
+                        && last.padding_y == span.padding_y
+                        && last.ground_radius == span.ground_radius =>
                 {
-                    last.range.end = ground.range.end;
+                    last.range.end = span.range.end;
                 }
-                _ => out.push(ground),
+                _ => out.push(span),
             }
+        }
+        out
+    }
+
+    /// The rounded grounds behind inline code and behind a footnote
+    /// identifier's pill.
+    ///
+    /// The **vertical** padding, and only the vertical: CSS 2.1 § 10.6.1 keeps
+    /// padding and border out of the line box height for a non-replaced inline
+    /// box, so a `0.2em` here paints outside its line and grows nothing. The
+    /// horizontal half of the same declaration is an advance and is
+    /// [`LayoutTree::spacings`]' business.
+    fn grounds(&self, style: &TextStyle, spans: &[InlineSpan], opacity: f32) -> Vec<TextGround> {
+        let bg = inline_brush(self.theme.colors.code_block_bg, style.brush, opacity);
+        if !bg.is_visible() {
+            return Vec::new();
+        }
+        spans
+            .iter()
+            .filter_map(|span| {
+                Some(TextGround {
+                    range: span.range.clone(),
+                    // Both grounded constructs are `padding: y x`, so the two
+                    // sides are equal by construction and `TextGround` needs
+                    // only one number.
+                    padding_x: span.lead,
+                    padding_y: span.padding_y,
+                    corner_radius: span.ground_radius?,
+                    brush: bg,
+                })
+            })
+            .collect()
+    }
+
+    /// The horizontal padding and margin of the same spans, as the advances
+    /// that displace the text after them — see [`InlineSpacing`].
+    ///
+    /// Two per span, at its true start and its true end. A line break inside a
+    /// span leaves both where they are, which is CSS's default
+    /// `box-decoration-break: slice`: the leading edge belongs to the first
+    /// fragment and the trailing edge to the last.
+    fn spacings(spans: &[InlineSpan]) -> Vec<InlineSpacing> {
+        let mut out = Vec::with_capacity(spans.len() * 2);
+        for span in spans {
+            out.push(InlineSpacing {
+                index: span.range.start,
+                advance: span.lead,
+            });
+            out.push(InlineSpacing {
+                index: span.range.end,
+                advance: span.trail,
+            });
         }
         out
     }

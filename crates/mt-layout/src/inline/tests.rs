@@ -84,25 +84,53 @@ fn a_leaf_with_no_markers_is_its_own_visible_text() {
     every_offset_round_trips("just some prose, with punctuation.");
 }
 
-/// **A hidden marker at the start of a leaf.** An ATX heading's `# ` is the
+/// **A hidden marker at the start of a leaf.** An ATX heading's `#` is the
 /// commonest one in any document, and it is the case where a naive map that
 /// starts both spaces at zero is wrong from the first byte.
+///
+/// # The `#` is hidden and the space after it is not
+///
+/// The expectation was `"Heading"` — the whole `# ` hidden — until the space was
+/// checked against `header.ts:44-52`, which puts the `#`s in
+/// `span.mu-hide.mu-remove` (`font-size: 0`, so no advance) and the **space** in
+/// `span.mu-header-tight-space.mu-remove`, a span with no hide class whose only
+/// rule is `margin-left: -0.3em` (`inlineSyntax.css:335-337`). So the reference
+/// draws the space and pulls the heading back under it: at an h1's 30 px the
+/// space's own 6.23 px minus 9.00 px of margin puts the `H` at −2.77, and
+/// hiding both put it at 0.
+///
+/// The map therefore has **three** runs rather than two, and the `#` alone is
+/// the byte with no visible position.
 #[test]
 fn a_marker_at_the_start_of_a_leaf_shifts_every_offset_after_it() {
     let laid = plain("# Heading");
-    assert_eq!(laid.visible, "Heading");
+    assert_eq!(laid.visible, " Heading");
     assert_eq!(
         kinds(&laid.map),
-        vec![(MapKind::Hidden, 0..0, 0..2), (MapKind::Copied, 0..7, 2..9),]
+        vec![
+            (MapKind::Hidden, 0..0, 0..1),
+            (MapKind::Copied, 0..1, 1..2),
+            (MapKind::Copied, 1..8, 2..9),
+        ]
     );
-    // Visible 0 is the `H`, which is block 2 — not block 0.
-    assert_eq!(laid.map.to_block(0), 2);
-    assert_eq!(laid.map.to_block(7), 9);
-    // And the two bytes of `# ` have no visible position at all. Not the
-    // nearest one; none.
+    // The space carries the margin and nothing else: no colour, no size.
+    assert_eq!(
+        laid.runs[0].style,
+        InlineStyle {
+            header_tight_space: true,
+            ..InlineStyle::default()
+        }
+    );
+    assert_eq!(laid.runs[0].range, 0..1);
+    assert_eq!(laid.runs[1].style, InlineStyle::default());
+    // Visible 0 is the space, which is block 1; visible 1 is the `H`, block 2.
+    assert_eq!(laid.map.to_block(0), 1);
+    assert_eq!(laid.map.to_block(1), 2);
+    assert_eq!(laid.map.to_block(8), 9);
+    // And the `#` has no visible position at all. Not the nearest one; none.
     assert_eq!(laid.map.to_visible(0), None);
-    assert_eq!(laid.map.to_visible(1), None);
-    assert_eq!(laid.map.to_visible(2), Some(0));
+    assert_eq!(laid.map.to_visible(1), Some(0));
+    assert_eq!(laid.map.to_visible(2), Some(1));
     every_offset_round_trips("# Heading");
 }
 

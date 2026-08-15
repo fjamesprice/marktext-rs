@@ -119,6 +119,8 @@ image_icon_inset_px = 15.0
 # Unchanged: `dark` overrides colours and no inline geometry.
 reference_font_size_em = 0.9
 reference_label_weight = 600
+reference_margin_x_px = 5.0
+header_tight_space_margin_left_em = -0.3
 
 [lists]
 indent_px = 30.0

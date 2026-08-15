@@ -182,6 +182,49 @@ pub struct TextGround {
     pub brush: Brush,
 }
 
+/// Extra inline advance at one byte offset — an inline box's horizontal
+/// padding or margin, which **displaces the text after it**.
+///
+/// # The rule this exists for, and it is asymmetric
+///
+/// On a non-replaced **inline** box, horizontal padding, border and margin
+/// *are* part of the inline advance: they add to the box's width and shift
+/// everything after it (CSS 2.1 § 10.3.2 and § 9.4.2). Vertical padding and
+/// borders on the same box **do not** affect the line box height at all — they
+/// paint outside it and may overlap the adjacent line (CSS 2.1 § 10.6.1 and
+/// § 10.8.1, *"the height of the inline box encloses all glyphs … it does not
+/// include padding, border or margin"*).
+///
+/// So an [`InlineSpacing`] moves glyphs and never changes a line's height, and
+/// [`TextGround::padding_y`] paints without moving anything. Between them they
+/// are the whole of `padding: 0.2em 0.4em` on `code.mu-inline-rule`
+/// (`inlineSyntax.css:60-70`).
+///
+/// # Three constructs, one primitive
+///
+/// Inline code's and the footnote pill's `padding`, the reference label's and
+/// title's `margin: 0 5px` (`:583-593`), and `.mu-header-tight-space`'s
+/// `margin-left: -0.3em` (`:335-337`) — which is why [`advance`](Self::advance)
+/// is signed rather than a width.
+///
+/// # Where it lands when the line breaks
+///
+/// The offset is a position in the text, so the spacing sits on whichever line
+/// that position falls on. That is exactly CSS's default
+/// `box-decoration-break: slice`: an inline box broken across two lines is
+/// padded on the outside of the first and last fragments and flush at the
+/// break, because its leading edge is at the start of the *first* fragment and
+/// its trailing edge at the end of the *last*. A spacing at the very start of a
+/// line indents that line, which is what a leading padding does in CSS.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InlineSpacing {
+    /// Byte offset into [`TextRequest::text`] — the **visible** string — at
+    /// which the advance is inserted. Must be a `char` boundary.
+    pub index: usize,
+    /// The advance in px. **Signed**: a margin may be negative.
+    pub advance: f32,
+}
+
 /// One leaf's worth of text, and how to lay it out.
 ///
 /// The scalar style fields are the **defaults**: they apply to any byte no
@@ -240,6 +283,11 @@ pub struct TextRequest<'a> {
     /// Copied into the [`ShapedText`] rather than resolved here, because their
     /// geometry depends on where the lines fell and a re-break moves them.
     pub grounds: &'a [TextGround],
+    /// Horizontal padding and margin on the inline boxes inside this text, in
+    /// any order — see [`InlineSpacing`].
+    ///
+    /// Empty for every caller that is not laying out inline markdown.
+    pub spacings: &'a [InlineSpacing],
 }
 
 impl<'a> TextRequest<'a> {
@@ -285,6 +333,7 @@ impl<'a> TextRequest<'a> {
             runs: &[],
             inline_boxes: &[],
             grounds: &[],
+            spacings: &[],
         }
     }
 }
@@ -485,6 +534,33 @@ impl TextShaper {
                 baseline: spec.baseline,
             });
         }
+        // An [`InlineSpacing`] is an in-flow box of **zero height** whose
+        // baseline is its own top edge, so `ascent` and `descent` are both zero
+        // and `LineBoxMetrics::add_inline_box` maxes it into a line that already
+        // covers it: the advance moves, the line box does not. That is the
+        // asymmetry CSS 2.1 § 10.6.1 requires, expressed in the one primitive
+        // parley has for "occupy inline space without being text".
+        //
+        // A zero advance is skipped rather than pushed. parley marks a line
+        // break opportunity after every inline box (`line_break.rs:683`), and a
+        // box that moves nothing would buy a wrap position CSS does not have.
+        let mut spacing_ids = Vec::new();
+        for (i, spacing) in request.spacings.iter().enumerate() {
+            if spacing.advance == 0.0 {
+                continue;
+            }
+            let id = spacing_id(i);
+            spacing_ids.push(id);
+            builder.push_inline_box(ParleyInlineBox {
+                id,
+                kind: parley::InlineBoxKind::InFlow,
+                index: spacing.index,
+                width: spacing.advance,
+                height: 0.0,
+                baseline: Some(0.0),
+            });
+        }
+        spacing_ids.sort_unstable();
 
         let mut layout = builder.build(request.text);
         layout.break_all_lines(request.max_width);
@@ -499,8 +575,20 @@ impl TextShaper {
         ShapedText {
             layout,
             grounds: request.grounds.to_vec(),
+            spacing_ids,
         }
     }
+}
+
+/// The id an [`InlineSpacing`] box carries, from the **top** of the `u64` range.
+///
+/// A spacing is not a box the caller asked for and must not reach the display
+/// list, so [`ShapedText::emit`] filters it out by id. The ids are taken from
+/// the far end of the range because [`InlineBoxSpec::id`] is chosen by the
+/// caller and `mt-layout`'s own choice is an image's block-text offset — a byte
+/// offset into one leaf, which cannot reach `u64::MAX` minus a spacing count.
+fn spacing_id(index: usize) -> u64 {
+    u64::MAX - index as u64
 }
 
 /// One grapheme cluster of laid-out text — **D8's method, arriving early**.
@@ -562,6 +650,9 @@ pub struct ShapedText {
     /// Owned rather than borrowed, because a re-break moves every fragment and
     /// the request is long gone by then.
     grounds: Vec<TextGround>,
+    /// The ids of the boxes that are [`InlineSpacing`]s rather than replaced
+    /// elements, ascending. Filtered out of [`ShapedText::emit`].
+    spacing_ids: Vec<u64>,
 }
 
 impl std::fmt::Debug for ShapedText {
@@ -872,6 +963,13 @@ impl ShapedText {
                         // so this one restarts with it.
                         item_key = None;
                         glyph_start = 0;
+                        // An [`InlineSpacing`] is a box to parley and padding
+                        // to CSS. It has already done its whole job by moving
+                        // the glyphs after it; a zero-height rect on the
+                        // display list would be an item nothing can draw.
+                        if self.spacing_ids.binary_search(&b.id).is_ok() {
+                            continue;
+                        }
                         out.push(DisplayItem::InlineBox(InlineBoxItem {
                             id: b.id,
                             x: b.x + origin_x,

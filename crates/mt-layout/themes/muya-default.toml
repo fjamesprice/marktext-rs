@@ -135,10 +135,17 @@ image_icon_inset_px = 15.0
 # inlineSyntax.css:578-593. `.mu-reference-marker` and `.mu-reference-title` are
 # both `font-size: 0.9em`; `.mu-reference-label` sets no size and is `600`, a
 # MarkText number rather than the UA's 700. The `margin: 0 5px` on the label and
-# the title has no field because nothing can consume it: an inline margin is not
-# expressible as a style run.
+# the title is one field for both rules, for the same reason the size is: the
+# reference gives them the same number.
 reference_font_size_em = 0.9
 reference_label_weight = 600
+reference_margin_x_px = 5.0
+# `.mu-header-tight-space { margin-left: -0.3em }` — inlineSyntax.css:335-337.
+# The span holds the space after an ATX heading's `#`s and has no hide class, so
+# the reference draws the space (0.26em in Open Sans) and then pulls it back by
+# more than its width. Negative, and the only negative inline advance in the
+# sheet.
+header_tight_space_margin_left_em = -0.3
 
 [lists]
 # `padding-inline-start: 30px` — blockSyntax.css:410, 481

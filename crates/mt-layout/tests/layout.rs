@@ -969,6 +969,69 @@ fn glyph_run_list(block: &mt_layout::display::BlockDisplay) -> Vec<&mt_layout::d
         .collect()
 }
 
+/// **Inline horizontal padding advances; inline vertical padding does not.**
+/// CSS 2.1 § 10.3.2 against § 10.6.1, which is the whole asymmetry of
+/// `code.mu-inline-rule { padding: 0.2em 0.4em }` (`inlineSyntax.css:60-70`).
+///
+/// At a 16 px paragraph the code is `0.8em` → 12.80 and its `0.4em` is
+/// `0.4 × 12.8` = **5.12**, so the code's glyphs start 5.12 px after the text
+/// before them and the text after them starts 5.12 px past the code's last
+/// glyph. The ground is the same box, drawn: it starts where the run before
+/// ended and is `advance + 2 × 5.12` wide. The `0.2em` adds 2.56 above and below
+/// and changes **no** line's height — the paragraph is the theme's own 25.60.
+#[test]
+fn inline_code_padding_moves_the_text_across_and_not_the_line_down() {
+    let theme = Theme::muya_default();
+    let mut doc = Doc::new();
+    let root = doc.root();
+    doc.para(root, "before `code` after");
+    let list = lay_out(&doc, &theme);
+    let block = &list.blocks[0];
+    let runs = glyph_run_list(block);
+    assert_eq!(runs.len(), 3, "before, code, after: {runs:#?}");
+    let pad = 16.0 * theme.inline_code.font_size_em * theme.inline_code.padding_x_em;
+    assert!((pad - 5.12).abs() < 1e-4, "0.4em of 0.8em of 16px");
+    assert!(
+        (runs[1].offset - (runs[0].offset + runs[0].advance + pad)).abs() < 1e-3,
+        "the code is pushed right by its own padding: {runs:#?}"
+    );
+    assert!(
+        (runs[2].offset - (runs[1].offset + runs[1].advance + pad)).abs() < 1e-3,
+        "and so is everything after it: {runs:#?}"
+    );
+    // The ground brackets the run it belongs to, on both sides.
+    let ground = block
+        .items
+        .iter()
+        .find_map(|i| match i {
+            DisplayItem::Rect(r) if r.corner_radius == theme.inline_code.corner_radius_px => {
+                Some(*r)
+            }
+            _ => None,
+        })
+        .expect("inline code paints a ground");
+    assert!(
+        (ground.rect.x - (runs[1].offset - pad)).abs() < 1e-3,
+        "{ground:?}"
+    );
+    assert!(
+        (ground.rect.width - (runs[1].advance + 2.0 * pad)).abs() < 1e-3,
+        "{ground:?}"
+    );
+    assert!(ground.rect.x > 0.0, "and it is not at a negative x");
+    // The vertical half of the same declaration paints outside the line box and
+    // grows nothing — CSS 2.1 § 10.6.1.
+    assert!(
+        (block.bounds.height - 25.6).abs() < 1e-3,
+        "got {}",
+        block.bounds.height
+    );
+    assert!(
+        ground.rect.height > 25.6 * 0.5,
+        "the 0.2em is painted even though it is not counted: {ground:?}"
+    );
+}
+
 /// The whole of C6 in one measurement: `**bold**` is narrower than `bold` was
 /// wide plus four asterisks, because the asterisks are not there.
 ///
@@ -1081,10 +1144,22 @@ fn an_inline_code_span_is_smaller_and_in_the_code_face_without_shrinking_the_lin
     );
 }
 
-/// An ATX heading's `# ` is a marker like any other, so a heading's glyphs are
-/// its title and the heading's own box is unchanged.
+/// An ATX heading's `#` is a marker like any other; the **space** after it is
+/// not, and its negative margin is where the heading's first glyph comes from.
+///
+/// # Why this is six glyphs and not five
+///
+/// The expectation was `# Title` → five glyphs, the whole `# ` hidden. It is six
+/// against `header.ts:44-52`: the `#`s go in `span.mu-hide.mu-remove`
+/// (`font-size: 0` — `inlineSyntax.css:21-30`) and the space in
+/// `span.mu-header-tight-space.mu-remove`, which carries no hide class at all
+/// and whose only rule is `margin-left: -0.3em` (`:335-337`). So the space is
+/// drawn and the heading is pulled back under it: at 30 px the margin is −9.00
+/// and Open Sans Bold's space is 0.2598em → 7.79, netting **−1.21** for the
+/// first glyph of `Title`. The box is unchanged, because a horizontal margin is
+/// an advance and nothing else.
 #[test]
-fn an_atx_headings_hash_is_hidden_and_its_box_is_not() {
+fn an_atx_headings_hash_is_hidden_and_its_space_carries_a_negative_margin() {
     let theme = Theme::muya_default();
     let mut doc = Doc::new();
     let root = doc.root();
@@ -1097,11 +1172,26 @@ fn an_atx_headings_hash_is_hidden_and_its_box_is_not() {
     );
     let list = lay_out(&doc, &theme);
     let block = &list.blocks[0];
-    let glyphs: usize = glyph_run_list(block).iter().map(|r| r.glyphs.len()).sum();
-    assert_eq!(glyphs, 5, "`Title`, not `# Title`");
+    let runs = glyph_run_list(block);
+    let glyphs: usize = runs.iter().map(|r| r.glyphs.len()).sum();
+    assert_eq!(glyphs, 6, "the space and `Title`, not `# Title`");
+    // The space and the title are one shaped run in one face, so the run's own
+    // origin is the margin and the second glyph is the `T`.
+    let margin = 30.0 * theme.inline.header_tight_space_margin_left_em;
+    assert!((margin - -9.0).abs() < 1e-6, "−0.3em of 30px");
+    assert!(
+        (runs[0].offset - margin).abs() < 1e-3,
+        "got {}",
+        runs[0].offset
+    );
+    let title_x = runs[0].glyphs[1].x;
+    assert!(
+        (-2.0..0.0).contains(&title_x),
+        "`T` is pulled left of the column but not by the whole margin: got {title_x}"
+    );
     assert!((block.bounds.height - 42.0).abs() < 1e-3, "1.4 × 30");
     let map = block.text_map.as_ref().expect("a heading is a leaf");
-    assert_eq!((map.block_len(), map.visible_len()), (7, 5));
+    assert_eq!((map.block_len(), map.visible_len()), (7, 6));
 }
 
 /// Every leaf in a mixed document maps every visible offset back to a

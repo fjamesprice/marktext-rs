@@ -302,6 +302,26 @@ pub struct InlineStyle {
     /// A reference definition's title. `.mu-reference-title`: `0.9em`
     /// (`inlineSyntax.css:583-587`).
     pub reference_title: bool,
+    /// The **space after an ATX heading's `#`s**, which the reference draws and
+    /// then pulls back under.
+    ///
+    /// `header.ts:44-52` wraps the `#`s in `.mu-hide.mu-remove` — `font-size: 0`
+    /// (`inlineSyntax.css:21-30`), so no advance — and the space that follows
+    /// them in `span.mu-header-tight-space.mu-remove`, which carries **no hide
+    /// class at all** and whose only rule is `margin-left: -0.3em`
+    /// (`:335-337`). `.mu-remove` on its own matches nothing in the sheet, so
+    /// the space is ordinary text at the heading's own size and colour, offset
+    /// by a negative margin — the net of the two being −1.20 px at an h1 and
+    /// −0.96 at an h2, which is where the heading's first glyph starts.
+    ///
+    /// The flag carries no colour or size of its own; it exists so that
+    /// [`crate::flow`] can put the margin on the run, which is the one thing
+    /// this module cannot do because it owns no theme.
+    ///
+    /// Reachable only when the `#`s are hidden: the renderer picks
+    /// `.mu-gray.mu-remove` for the space when they are revealed, and that
+    /// selector has no margin.
+    pub header_tight_space: bool,
     /// `.mu-gray` — `--editor-color-30` (`inlineSyntax.css:1-4`). A marker the
     /// caret has revealed, and the backslash run inside a reference
     /// definition, which `referenceDefinition.ts:70` gives this class
@@ -904,9 +924,42 @@ impl Walk<'_> {
             // (`header.ts:17`) — rather than the token's own, which is what
             // `marker_state_of_range` exists for and the one place in this walk
             // where the two differ.
+            //
+            // **The space after the `#`s is drawn, not hidden.** `header.ts`
+            // emits two spans: `span.mu-hide.mu-remove` around the `#`s, which
+            // is `font-size: 0` and contributes no advance, and
+            // `span.mu-header-tight-space.mu-remove` around the space, which
+            // carries no hide class and whose only rule is
+            // `margin-left: -0.3em` (`inlineSyntax.css:335-337`). Hiding both —
+            // which is what this did — lands the heading's first glyph at 0
+            // where the reference puts it at −1.20 px (h1) or −0.96 (h2): the
+            // space's own 0.26em advance minus 0.3em of margin. The margin
+            // itself is [`InlineStyle::header_tight_space`]'s job one layer up;
+            // this is the half that is a *string* decision.
+            //
+            // The split follows the renderer's own arithmetic —
+            // `end - content.length` — rather than `rule.marker`, whose capture
+            // includes the space.
             TokenKind::Header(rule) => {
                 let state = marker_state_of_range(rule.marker, self.cursor);
-                self.marker(token.range, token.range, state, style);
+                match rule.content {
+                    Some(space) if state == MarkerState::Hidden => {
+                        self.hide(Span::new(token.range.start, space.start), token.range);
+                        self.copy(
+                            space,
+                            token.range,
+                            InlineStyle {
+                                header_tight_space: true,
+                                ..style
+                            },
+                        );
+                    }
+                    // Revealed, or a heading whose regex matched no second
+                    // group at all. The revealed branch wraps the space in
+                    // `.mu-gray.mu-remove` instead — same colour as the `#`s
+                    // and **no margin** — which is what `marker` produces.
+                    _ => self.marker(token.range, token.range, state, style),
+                }
             }
             TokenKind::Hr(_)
             | TokenKind::CodeFence(_)

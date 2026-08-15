@@ -467,6 +467,25 @@ pub struct Inline {
     /// number rather than a UA one, which is why it does not reuse the field
     /// beside it.
     pub reference_label_weight: u16,
+    /// `.mu-reference-label`, `.mu-reference-title { margin: 0 5px }` —
+    /// `inlineSyntax.css:583-593`. Horizontal only; the block half is zero.
+    ///
+    /// One field for two rules, for [`Self::reference_font_size_em`]'s reason:
+    /// the reference gives both the same number. A px rather than an `em`
+    /// because that is what the sheet says, and the two elements it sits on are
+    /// at different sizes.
+    pub reference_margin_x_px: f32,
+    /// `.mu-header-tight-space { margin-left: -0.3em }` —
+    /// `inlineSyntax.css:335-337`, applied to the space after an ATX heading's
+    /// `#`s.
+    ///
+    /// **Negative**, and the only negative inline advance in the sheet: the
+    /// reference draws the space and then pulls the heading back by more than
+    /// the space is wide, netting −1.20 px at an h1's 30 px and −0.96 at an
+    /// h2's 24. See [`InlineStyle::header_tight_space`].
+    ///
+    /// [`InlineStyle::header_tight_space`]: crate::inline::InlineStyle::header_tight_space
+    pub header_tight_space_margin_left_em: f32,
 }
 
 // ---------------------------------------------------------------------------
