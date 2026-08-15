@@ -1,6 +1,10 @@
 [package]
 name = "mt-highlight"
-description = "Syntax highlighting for fenced code via tree-sitter."
+# Was "via tree-sitter" from M0 until M3 S3. docs/M3.md §5 D3 overturned that
+# with numbers at S0 — tree-sitter never enters the dependency graph — and D14
+# fixed the mechanism: the grammars are a snapshot of a *loaded* Prism, emitted
+# as Rust by `cargo xtask grammars`.
+description = "Syntax highlighting for fenced code, as a port of Prism's grammars and tokenizer."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,3 +12,28 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# **No new third-party code enters the workspace here.** `fancy-regex` has been
+# a dependency of `mt-inline` since M1 S1 and is already in the lockfile; this
+# is a second consumer of a crate that is already paid for, not a ninth
+# dependency. The workspace policy in the root manifest asks for a recorded
+# reason anyway, and it is this:
+#
+# `regex` alone cannot compile Prism's grammars. Across the 10,182 patterns in
+# the loaded registry, **32,347 group openers are `(?:`, `(?!` or `(?=`** —
+# lookahead appears in 4,211 patterns across 267 of the 297 languages — and 890
+# are back-references. `regex` refuses both by design, and it is not a matter of
+# rewriting a handful of rules: Prism's whole idiom for "a keyword not followed
+# by a paren" is a lookahead. `fancy-regex` wraps `regex` and adds exactly those
+# two, delegating whole patterns to the non-backtracking engine when they do not
+# need the extra power — so the patterns that are plain keep `regex`'s
+# performance.
+#
+# The cost is on the record rather than discovered later: a backtracking engine
+# has no linear-time bound, and `interpreter::match_from` therefore treats an
+# engine error as "this rule did not match" so one pathological pattern degrades
+# a rule instead of hanging a fence. That is containment, not a bound; §8 M3-R9's
+# `syntect` fallback is what the milestone holds against it.
+#
+# It satisfies §1's purity constraint for this crate: no I/O, no windowing, no
+# GPU. Its own tree is `regex` + `bit-set`, both pure.
+fancy-regex.workspace = true

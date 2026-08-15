@@ -15,6 +15,7 @@
 //! | `normalize` | `normalizeHtml` vs `spec/runner.ts`'s | M2 §10, owed since M0 |
 //! | `corpus` | Generate `bench/corpus/` | §14 step 4 |
 //! | `layout` | Textual layout goldens for every corpus file × theme | M3 §5 D10 |
+//! | `grammars` | Regenerate `mt-highlight`'s grammar tables from a loaded Prism | M3 §5 D14 |
 //! | `highlight` | Highlight-span differential against Prism, over every corpus fence | M3 §5 D14/D15 |
 //! | `fuzz-seed` | Write `fuzz/corpus/` from the sweep's inputs | M1 §5 D6 |
 //! | `deps` | Enforce the dependency-direction constraints | §1 |
@@ -27,6 +28,7 @@ mod deps;
 mod diff;
 mod divergences;
 mod fuzz;
+mod grammars;
 mod highlight;
 mod html;
 mod layout;
@@ -111,6 +113,15 @@ COMMANDS:
         --measure          Print the would-be full serialization size of every
                            input at both themes. This is the measurement the
                            three digest goldens were cut from.
+    grammars [OPTIONS]   Regenerate crates/mt-highlight/src/generated.rs from a
+                         fully-loaded Prism in the marktext clone (docs/M3.md
+                         §5 D14). Emits the ported languages of
+                         xtask/src/highlight.rs's PORTED plus everything they
+                         reach through `inside`, translating every JS regex to
+                         fancy-regex syntax and compiling it before writing.
+        --check            Verify the committed file matches a fresh generation
+                           instead of rewriting it. What `ci` runs.
+        --require-ts       Fail instead of skipping when Prism is unavailable.
     highlight [OPTIONS]  Compare the highlight spans of every bench/corpus/
                          fenced code block against Prism's own tokenization,
                          run from the marktext clone (docs/M3.md §5 D14/D15).
@@ -123,8 +134,9 @@ COMMANDS:
     fuzz-seed [--check]  Write fuzz/corpus/<target>/ from the differential
                          sweep's inputs (M1 §5 D6). Not part of `ci`.
     deps                 Enforce the §1 dependency-direction constraints.
-    ci                   deps, corpus --check, layout, highlight, divergences,
-                         conformance, blocks, normalize, diff — in order.
+    ci                   deps, corpus --check, layout, grammars --check,
+                         highlight, divergences, conformance, blocks,
+                         normalize, diff — in order.
 ";
 
 fn main() {
@@ -145,6 +157,7 @@ fn main() {
         "normalize" => normalize::main(&root, rest),
         "corpus" => corpus::main(&root, rest),
         "layout" => layout::main(&root, rest),
+        "grammars" => grammars::main(&root, rest),
         "highlight" => highlight::main(&root, rest),
         "fuzz-seed" => fuzz::main(&root, rest),
         "deps" => deps::main(&root),
@@ -220,6 +233,20 @@ fn ci(root: &Path, rest: &[String]) -> Result<i32, String> {
         // and spans came back for every fence — and running it on every commit
         // is what stops the harness from silently rotting in the window between
         // being built and being used.
+        // Immediately before `highlight`, for the reason `corpus --check` sits
+        // before `layout`: `crates/mt-highlight/src/generated.rs` is generated
+        // from the reference clone's prismjs, and a tree whose committed
+        // grammars do not match a fresh generation should say so *here* rather
+        // than as a wall of span disagreements in the step below. A prismjs bump
+        // in the clone shows up as this step failing, which names the cause.
+        (
+            "grammars --check",
+            Box::new(|| {
+                let mut args = vec!["--check".to_string()];
+                args.extend(engine_flags.iter().cloned());
+                grammars::main(root, &args)
+            }),
+        ),
         (
             "highlight",
             Box::new(|| highlight::main(root, &engine_flags)),

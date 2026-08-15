@@ -14,11 +14,19 @@ input string ─┬──► node → muya tokenizer → token JSON ─┐
               │                                         ├──► assert equal
               └──► mt_inline::tokenizer ────────────────┘
 
-highlight spans (M3 §5 D14/D15) — what mt-highlight will produce
+highlight spans (M3 §5 D14/D15) — what mt-highlight produces
 {lang, code} ─┬──► node → Prism.tokenize → span JSON ──┐
               │                                         ├──► assert equal
               └──► mt_highlight ───────────────────────┘
 ```
+
+The span half has a **fourth** script behind it, and it is not a differential:
+`tools/dump-prism-grammars.mjs` snapshots the loaded registry so that
+`cargo xtask grammars` can emit `mt-highlight`'s tables (M3 §5 D14). It lives one
+directory up because it feeds the *port*, not the comparison — but it loads
+Prism exactly the way `dump-prism-tokens.mjs` does, full 297 in dependency order
+with muya's two patches, because a port generated from one load set and compared
+against another would be measuring its own configuration.
 
 ```sh
 cargo xtask diff                    # block state, the whole corpus
@@ -31,6 +39,9 @@ cargo xtask divergences --full-sweep  # 41,009 inputs, ~120 s; the nightly soak 
 
 cargo xtask highlight               # highlight spans: every fence in bench/corpus/
 cargo xtask highlight --only 50-code  # one corpus file's 51 code blocks
+
+cargo xtask grammars                # regenerate mt-highlight's grammar tables
+cargo xtask grammars --check        # verify the committed ones; what `ci` runs
 ```
 
 **None subsumes another.** Block state does not carry inline tokens, a token
@@ -39,8 +50,9 @@ landed at M1 S7 and is what makes `spec/divergences.json` enforceable — before
 it, every register entry reported `SKIPPED` and reverting a fix still exited 0.
 The span half landed at M3 S3 and is the odd one out in two ways worth naming
 here: its reference engine is **Prism**, not muya, and it was built one commit
-**before** the thing it judges, so it reports `0/297` coverage until the grammar
-interpreter lands. The rest of this document is about the block-state half;
+**before** the thing it judges — it reported `0/297` coverage on the commit it
+landed in, and the interpreter that followed took it to **16/297**, agreeing with
+Prism on all 2,504 tokenized fences. The rest of this document is about the block-state half;
 `xtask/src/tokens.rs` and `xtask/src/highlight.rs` document the other two.
 
 ## Why this is the highest-value test asset in the project

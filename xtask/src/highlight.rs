@@ -33,14 +33,15 @@
 //! interpreter is the whole point: an interpreter written first is an
 //! interpreter whose first check is the thing it was written to satisfy."*
 //!
-//! **This module is the first of those commits, and it reports zero coverage.**
-//! [`PORTED`] is empty, `mt-highlight` is still a stub, and every fence comes
-//! back `NOT-PORTED`. That is the honest state, not a failure — and §6 names the
-//! hazard it creates: *"a differential that runs is indistinguishable in a
-//! summary from a differential that was skipped, and both look like a passing
-//! stage. S3's record states what was compared, how many cases, and against
-//! what — or it has not discharged the gate."* So the report below prints, on
-//! every run:
+//! **This module was the first of those commits, and it reported zero
+//! coverage** — [`PORTED`] was empty, `mt-highlight` was a stub, and every fence
+//! came back `NOT-PORTED`. The interpreter commit that followed took it to
+//! **16/297**: 2,504 fences compared, 2,504 agreeing, 0 disagreeing. §6 names
+//! the hazard that a green line like that creates: *"a differential that runs is
+//! indistinguishable in a summary from a differential that was skipped, and both
+//! look like a passing stage. S3's record states what was compared, how many
+//! cases, and against what — or it has not discharged the gate."* So the report
+//! below prints, on every run:
 //!
 //! - how many fences were collected and how many **distinct** `(lang, code)`
 //!   inputs they are;
@@ -100,13 +101,19 @@
 //!
 //! # Where the seam for the interpreter is
 //!
-//! [`rust_spans`], and it is the only place. When `mt-highlight` grows an entry
-//! point, that function stops returning `None` and this module gains a
-//! dependency edge; nothing else here changes shape. [`PORTED`] is the ratchet
-//! §5's `mt-highlight` header asks for — *"let `cargo xtask highlight` count
-//! coverage as a number that only goes up"* — and it is a plain list rather
-//! than a generated file so that adding a language is a reviewable one-line
-//! diff beside the grammar that earned it.
+//! [`rust_spans`], and it was the only place: the interpreter commit changed
+//! that one function and added one manifest edge, and nothing else here changed
+//! shape.
+//!
+//! [`PORTED`] is the ratchet §5's `mt-highlight` header asks for — *"let
+//! `cargo xtask highlight` count coverage as a number that only goes up"* — and
+//! it is a plain list rather than a generated file so that adding a language is
+//! a reviewable one-line diff. **It now drives the port as well as the
+//! measurement**: `cargo xtask grammars` generates `mt-highlight`'s tables from
+//! this same list, so a name cannot be added here without the grammar it names
+//! being emitted, and cannot be emitted without this harness comparing it. The
+//! two halves of "ported" are one list, which is the only arrangement under
+//! which the number means anything.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -134,16 +141,41 @@ const PRISM_LANGUAGES: usize = 297;
 
 /// The Prism languages `mt-highlight` has a ported grammar for.
 ///
-/// **Empty, and that is the point of landing this file first.** S3's order of
-/// work is harness → interpreter → differential green, and an interpreter
-/// written first is one whose first check is the thing it was written to
-/// satisfy. Until the interpreter lands, every fence reports `NOT-PORTED` and
-/// the coverage line reads `0/297`.
+/// **This list is the ratchet, and it drives two things rather than one.**
+/// `cargo xtask grammars` generates `crates/mt-highlight/src/generated.rs` from
+/// exactly these names (plus everything they reach through `inside`), and this
+/// harness compares exactly these names against Prism. So a language is here if
+/// and only if the differential agreed with Prism on **every corpus fence in
+/// it**, span for span — and adding a name without regenerating produces a
+/// missing grammar, which [`rust_spans`] turns into a panic rather than into a
+/// quiet `NotPorted`.
 ///
-/// Adding a name here without wiring the interpreter panics in [`rust_spans`]
-/// rather than reporting agreement — a coverage number that can be raised by
-/// editing a list is not a measurement.
-const PORTED: &[&str] = &[];
+/// **These are resolved ids, not fence words.** The corpus writes ```` ```ts
+/// ````, ```` ```js ```` , ```` ```sh ```` and ```` ```html ````; MarkText's
+/// `transformAliasToOrigin` answers `typescript`, `javascript`, `bash` and
+/// `markup`, and coverage is a question about the grammar, not about the word.
+///
+/// The order is D3's *"port languages in usage order"*, which for this corpus
+/// is the sixteen languages it actually contains — there is no seventeenth to
+/// choose between.
+pub(crate) const PORTED: &[&str] = &[
+    "rust",
+    "javascript",
+    "typescript",
+    "python",
+    "go",
+    "c",
+    "cpp",
+    "java",
+    "bash",
+    "yaml",
+    "json",
+    "toml",
+    "markup",
+    "css",
+    "sql",
+    "diff",
+];
 
 // ---------------------------------------------------------------------------
 // The inputs
@@ -384,28 +416,38 @@ fn dump_prism(repo_root: &Path, fences: &[Fence]) -> Result<Result<Reference, St
 
 /// The port's spans for one fence, in the dumper's wire shape.
 ///
-/// **This function is the whole seam, and it is the only thing S3's next commit
-/// has to change.** It returns `None` when `mt-highlight` has no grammar for
-/// `lang`, which is every language today; the caller turns that into
-/// [`Verdict::NotPorted`] and counts it against coverage rather than treating it
-/// as agreement.
+/// **This function is the whole seam, and it was the only thing S3's second
+/// commit had to change.** It returns `None` when `lang` is not in [`PORTED`];
+/// the caller turns that into [`Verdict::NotPorted`] and counts it against
+/// coverage rather than treating it as agreement.
 ///
-/// When the interpreter lands, the body becomes one call and one conversion:
-/// the value must be a JSON array of `{start, end, type}` objects, byte offsets
-/// into `code`, ascending, non-overlapping, one entry per emitted run, with an
-/// **empty array omitted entirely** — `serde_json::Value::Null` is not the same
-/// wire state as `[]`, and the dumper omits `spans` when there is nothing to
-/// report. `xtask` adds an `mt-highlight` edge at the same commit, with the
-/// justification comment `xtask/Cargo.toml` requires of every upward edge.
+/// The conversion is the wire shape `dump-prism-tokens.mjs` documents: a JSON
+/// array of `{start, end, type}`, byte offsets into `code`, ascending,
+/// non-overlapping, one entry per emitted run. An empty result stays `[]` here
+/// and [`decide`] normalises the dumper's *absent* `spans` to the same value,
+/// because absent and empty are one state and both sides must spell it the same
+/// way.
+///
+/// The name check comes **first**, and the `expect` behind it is the ratchet's
+/// teeth: a name added to `PORTED` without a regeneration has no grammar in
+/// `mt-highlight`, and this panics rather than reporting agreement, because a
+/// coverage number that can be raised by editing a list is not a measurement.
 fn rust_spans(lang: &str, code: &str) -> Option<Value> {
     if !PORTED.contains(&lang) {
         return None;
     }
-    let _ = code;
-    unreachable!(
-        "`{lang}` is listed in PORTED but no interpreter is wired up; a coverage number \
-         that can be raised by editing a list is not a measurement"
-    )
+    let spans = mt_highlight::highlight(lang, code).unwrap_or_else(|| {
+        panic!(
+            "`{lang}` is listed in PORTED but `mt-highlight` has no grammar for it; \
+             run `cargo xtask grammars`"
+        )
+    });
+    Some(Value::Array(
+        spans
+            .iter()
+            .map(|s| json!({"start": s.start, "end": s.end, "type": s.class}))
+            .collect(),
+    ))
 }
 
 // ---------------------------------------------------------------------------

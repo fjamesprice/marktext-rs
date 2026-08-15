@@ -49,3 +49,19 @@ mt-layout.workspace = true
 # and going through `mt_layout::code_language` would silently widen S3's gate to
 # D11's four non-fence block kinds.
 mt-doc.workspace = true
+# M3 S3: `rust_spans` in `src/highlight.rs` is the seam the harness was built
+# around — *"when `mt-highlight` grows an entry point, that function stops
+# returning `None` and this module gains a dependency edge; nothing else here
+# changes shape."* This is that edge. Upward from dev tooling, like the four
+# above, and it costs nothing that is not already paid: `mt-highlight`'s only
+# dependency is `fancy-regex`, which `mt-inline` already pulls in here.
+mt-highlight.workspace = true
+# M3 S3: the grammar generator (`src/grammars.rs`, D14) compiles **every**
+# pattern it translates with the same engine `mt-highlight` will use, before it
+# writes a byte. That check is the entire reason the JS → Rust regex translation
+# lives on the Rust side of the generator rather than in the Node dumper — a
+# translator that cannot compile its own output can only be checked by eye. No
+# new third-party code: `fancy-regex` arrives here anyway through `mt-inline`
+# and now `mt-highlight`, so this line names an existing edge rather than adding
+# one.
+fancy-regex.workspace = true
