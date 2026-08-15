@@ -66,8 +66,8 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use mt_layout::{
-    BlockKind, Brush, DisplayItem, DisplayList, Fonts, GlyphRun, LayoutOptions, TextRequest,
-    TextShaper, Theme, layout_with,
+    BlockKind, Brush, CodeSpans, DisplayItem, DisplayList, Fonts, GlyphRun, HighlightSpan,
+    LayoutOptions, TextRequest, TextShaper, Theme, layout_with,
 };
 
 // ---------------------------------------------------------------------------
@@ -121,7 +121,18 @@ const DIGEST_INPUTS: [&str; 3] = ["250kb.md", "1mb.md", "5mb.md"];
 /// *"a stable serialization of the display list"* (D10) but of most of one. A
 /// `rect` has printed its `fill=` and a `line` its `stroke=` since v1; this is
 /// the third painted item catching up.
-const FORMAT_VERSION: &str = "layout-golden v3";
+///
+/// **v4** added the `highlight` header line — D15's table, counted. The
+/// argument is §6's own hazard for this stage: *"a differential that runs is
+/// indistinguishable in a summary from a differential that was skipped, and
+/// both look like a passing stage."* The same is true of the seam. A shell that
+/// stopped passing `code_spans` would produce a perfectly well-formed golden
+/// full of one-brush fences, and the diff would read as a colour change rather
+/// than as a missing input — so the count is in the artifact, next to the
+/// parley revision and the face digest, for exactly the reason D10 property 3
+/// puts those there. It also moves when a grammar is ported, which is the
+/// behaviour wanted: `mt-highlight`'s tables are an input to these goldens now.
+const FORMAT_VERSION: &str = "layout-golden v4";
 
 // ---------------------------------------------------------------------------
 // Parse options — per input, and visible in the header
@@ -215,15 +226,76 @@ pub(crate) fn parse_options(input: &str) -> (mt_md::Options, String) {
 /// opens no PNG, so every inline image takes the reference's own no-bitmap
 /// geometry. That is the point — the goldens then exercise `.mu-image-fail`
 /// deterministically, with no file on disk and no machine dependence.
-fn layout_options(parse: &mt_md::Options, labels: mt_inline::Labels) -> LayoutOptions {
+///
+/// # The highlight table is **not** empty, and that is D15's whole seam
+///
+/// `mt-layout` takes no dependency on `mt-highlight`, so spans are computed
+/// here and handed down — see [`code_spans`]. This harness is the shell for
+/// both halves of D15 and is the only one in the repository today.
+fn layout_options(
+    parse: &mt_md::Options,
+    labels: mt_inline::Labels,
+    document: &mt_doc::Document,
+) -> LayoutOptions {
     LayoutOptions {
         inline_syntax: mt_layout::InlineSyntax {
             footnote: parse.footnote,
             super_sub_script: parse.super_sub_script,
             labels,
         },
+        code_spans: code_spans(document),
         ..LayoutOptions::default()
     }
+}
+
+/// Every code-box block's highlight spans, keyed by `NodeId` — **D15**.
+///
+/// # Two crates meet here and neither one knows about the other
+///
+/// `mt_layout::code_language` answers *"what language is this block's source
+/// written in?"* for the **five** kinds that share the code-block box (D11:
+/// a `MathBlock` is `latex`, a `Diagram` its `info_lang`, a `Frontmatter` its
+/// own `lang`, an `HtmlBlock` is `html`, and a `CodeBlock` is the first word of
+/// its info string). `mt_highlight::highlight` answers *"and how does Prism
+/// tokenize it?"*. Joining them is this function's whole content, and it is
+/// deliberately **not** the join `cargo xtask highlight` makes: that harness
+/// goes through `Block::highlight_language()` and sees fences only, because
+/// widening S3's differential to D11's four non-fence kinds would change what
+/// the gate measures. Here the wider set is the right one — a `latex` math
+/// block laid out as its own source is exactly what D11 asks for, and it gets
+/// coloured for the same reason a fence does.
+///
+/// `None` from `highlight` is *"no ported grammar"* and inserts nothing, so the
+/// block lays out unhighlighted — S3's coverage number, not a defect. `Some`
+/// with an empty `Vec` is the other answer and is inserted, because a fence
+/// that was highlighted and matched nothing is a different fact from one that
+/// was never offered to a grammar.
+fn code_spans(document: &mt_doc::Document) -> CodeSpans {
+    fn visit(document: &mt_doc::Document, node: mt_doc::NodeId, out: &mut CodeSpans) {
+        if let Some(block) = document.block(node) {
+            if let Some(language) = mt_layout::code_language(block) {
+                let text = block
+                    .text()
+                    .map(|t| t.to_str().into_owned())
+                    .unwrap_or_default();
+                if let Some(spans) = mt_highlight::highlight(language, &text) {
+                    out.insert(
+                        node,
+                        spans
+                            .into_iter()
+                            .map(|s| HighlightSpan::new(s.start..s.end, s.class))
+                            .collect(),
+                    );
+                }
+            }
+        }
+        for child in document.children(node) {
+            visit(document, *child, out);
+        }
+    }
+    let mut out = CodeSpans::new();
+    visit(document, document.root(), &mut out);
+    out
 }
 
 /// The full parse-option set, spelled out for the header.
@@ -416,7 +488,7 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
     for (name, text) in &documents {
         let (parse_opts, parse_label) = parse_options(name);
         let parsed = mt_md::parse(text, parse_opts);
-        let options = layout_options(&parse_opts, parsed.labels.clone());
+        let options = layout_options(&parse_opts, parsed.labels.clone(), &parsed.document);
         for theme in &themes {
             let list = layout_with(
                 &parsed.document,
@@ -455,6 +527,7 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
                             input_bytes: text.len(),
                             parse_options: parse_opts,
                             parse_label: &parse_label,
+                            code_spans: &options.code_spans,
                         },
                         &list,
                         Detail::PerGlyph,
@@ -478,6 +551,7 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
                     input_bytes: text.len(),
                     parse_options: parse_opts,
                     parse_label: &parse_label,
+                    code_spans: &options.code_spans,
                 },
                 &list,
                 detail,
@@ -913,6 +987,10 @@ struct Golden<'a> {
     input_bytes: usize,
     parse_options: mt_md::Options,
     parse_label: &'a str,
+    /// D15's table, for the `highlight` header line. The table itself, not a
+    /// pair of counts, so the two numbers cannot disagree with what was laid
+    /// out.
+    code_spans: &'a CodeSpans,
 }
 
 /// The whole artifact, as a string.
@@ -939,6 +1017,7 @@ fn serialize(golden: &Golden<'_>, list: &DisplayList, detail: Detail, fonts: &Fo
         input_bytes,
         parse_options,
         parse_label,
+        code_spans,
     } = golden;
     let mut out = String::with_capacity(4096);
     let digest = detail == Detail::Digest;
@@ -970,6 +1049,16 @@ fn serialize(golden: &Golden<'_>, list: &DisplayList, detail: Detail, fonts: &Fo
         out,
         "parse          {parse_label}  {}",
         parse_fields(parse_options)
+    );
+    // D15's seam, counted in the artifact rather than inferred from it — see
+    // `FORMAT_VERSION`'s v4 note. Both numbers, because they answer different
+    // questions: `blocks` is how many of this input's code-box blocks reached a
+    // ported grammar at all, and `spans` is how much colour that bought.
+    let _ = writeln!(
+        out,
+        "highlight      blocks={} spans={}",
+        code_spans.len(),
+        code_spans.total_spans()
     );
     let _ = writeln!(out, "input          {input}");
     let _ = writeln!(out, "input-bytes    {input_bytes}");
@@ -1290,7 +1379,7 @@ fn measure(
     for (name, text) in documents {
         let (parse_opts, parse_label) = parse_options(name);
         let parsed = mt_md::parse(text, parse_opts);
-        let options = layout_options(&parse_opts, parsed.labels.clone());
+        let options = layout_options(&parse_opts, parsed.labels.clone(), &parsed.document);
         let mut sizes = Vec::new();
         let mut blocks = 0usize;
         let mut items = 0usize;
@@ -1315,6 +1404,7 @@ fn measure(
                         input_bytes: text.len(),
                         parse_options: parse_opts,
                         parse_label: &parse_label,
+                        code_spans: &options.code_spans,
                     },
                     &list,
                     Detail::PerItem,
@@ -1615,7 +1705,7 @@ mod tests {
     }
 
     /// Every committed golden is in the format this tool writes: the version
-    /// line, the ten provenance fields, one blank line, then geometry.
+    /// line, the eleven provenance fields, one blank line, then geometry.
     #[test]
     fn every_committed_golden_has_the_declared_header() {
         let root = root();
@@ -1651,8 +1741,8 @@ mod tests {
             );
             assert_eq!(
                 lines.len(),
-                11,
-                "{name}: header is the version + ten fields"
+                12,
+                "{name}: header is the version + eleven fields"
             );
             for (i, key) in [
                 "theme",
@@ -1662,6 +1752,7 @@ mod tests {
                 "faces",
                 "options",
                 "parse",
+                "highlight",
                 "input",
                 "input-bytes",
                 "form",

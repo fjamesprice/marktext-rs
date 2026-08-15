@@ -126,6 +126,7 @@
 pub mod display;
 pub mod flow;
 pub mod fonts;
+pub mod highlight;
 pub mod images;
 pub mod inline;
 // Private: every item in it is `pub(crate)`. D8's public surface is the
@@ -144,6 +145,7 @@ pub use fonts::{
     Axis, BUNDLED_FACES_TOML, Face, FaceList, FaceListMeta, FaceRole, FaceStyle, FontError, FontId,
     Fonts,
 };
+pub use highlight::{CodeSpans, HighlightSpan};
 pub use images::{ImageSize, ImageSizes};
 pub use inline::{
     InlineImage, InlineRun, InlineStyle, InlineSyntax, InlineText, MapKind, MapRun, RTL_MARK,

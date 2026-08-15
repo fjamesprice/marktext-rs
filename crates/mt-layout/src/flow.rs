@@ -186,6 +186,7 @@ use mt_doc::{Align, Block, Document, NodeId, OrderDelim};
 
 use crate::display::{BlockDisplay, BlockKind, Brush, DisplayItem, DisplayList, FilledRect, Rect};
 use crate::fonts::{FontError, Fonts};
+use crate::highlight::CodeSpans;
 use crate::images::ImageSizes;
 use crate::inline::{self, InlineImage, InlineRun, InlineSyntax, VisibleTextMap};
 use crate::paint;
@@ -248,6 +249,16 @@ pub struct LayoutOptions {
     /// entry takes the reference's own no-bitmap geometry rather than a
     /// guessed number. See [`crate::images`].
     pub images: ImageSizes,
+    /// Every code block the caller has already highlighted — **D15**.
+    ///
+    /// The second table on this struct and the second half of the same idiom:
+    /// a shell that owns `mt-highlight` computes spans and hands them down,
+    /// because `mt-layout` takes no dependency on it. Empty is the correct
+    /// value for a caller with no highlighter, and it is what every test here
+    /// except the resolver's own uses — a fence then shapes with zero style
+    /// runs and one flat brush, which is what S1 and S2 froze. See
+    /// [`crate::highlight`].
+    pub code_spans: CodeSpans,
 }
 
 /// Lay a document out at a width, in a theme.
@@ -781,7 +792,21 @@ impl LayoutTree {
                 self.blocks[index].image_placeholders = placeholders;
                 (shaped, laid.map)
             } else {
-                let shaped = self.shape(&style, &text, &[], content_width, fonts, shaper);
+                // D15's seam. A code block's map is the identity, so the
+                // caller's highlight ranges are already ranges into `text` and
+                // nothing is converted here.
+                let (runs, grounds) = self.code_style_runs(&style, node, text.len(), opacity);
+                let shaped = self.shape_with(
+                    &style,
+                    &text,
+                    &runs,
+                    &grounds,
+                    &[],
+                    &[],
+                    content_width,
+                    fonts,
+                    shaper,
+                );
                 (shaped, VisibleTextMap::identity(text.len()))
             };
             self.blocks[index].intrinsic_width = shaped.width();
@@ -1070,6 +1095,143 @@ impl LayoutTree {
                 || r.strikethrough
         });
         out
+    }
+
+    /// Resolve the caller's highlight spans against the theme's code palette —
+    /// **D15**.
+    ///
+    /// The sibling of [`LayoutTree::style_runs`] on the other side of C6's
+    /// split: that one resolves `mt-inline`'s semantic runs over a leaf's
+    /// *visible* text, this one resolves `mt-highlight`'s token classes over a
+    /// fence's *verbatim* text. Same two contracts, same merge, same `retain`,
+    /// and the same reason for both — a style-run boundary is a shaping
+    /// boundary, so a run that changes nothing costs a kerning pair for
+    /// nothing, and every fence in the corpus would pay it.
+    ///
+    /// # The class is a single word, and an unknown one paints no run
+    ///
+    /// [`CodePalette::by_class`] takes one class because Prism's own
+    /// stylesheets are 100 % literal `.token.*` selectors and MarkText ships
+    /// no cascade for them; D15 fixes the precedence at **alias over type,
+    /// last alias wins**, resolved in `mt_highlight` at generation time so
+    /// that this end has no opinion.
+    ///
+    /// A class the palette does not style produces **no run**, which is
+    /// inheritance and not a fallback to [`CodePalette::plain`]. At the top
+    /// level of a fence the two are the same value — `plain` *is* the block
+    /// default, asserted in `theme.rs` — so the distinction is invisible here
+    /// and is not invisible in general. §5 D15's S3 subsection measures where.
+    ///
+    /// # `background` and `opacity` are the two fields that are not a brush
+    ///
+    /// `.token.inserted` and `.token.deleted` are the only classes in either
+    /// shipped palette with a background, and `.namespace` the only one with
+    /// an opacity. The background is a [`TextGround`] with **no padding and no
+    /// radius** — Prism's rule is a bare `background:` and CSS gives a
+    /// non-replaced inline box neither — so it paints without moving a glyph.
+    /// The opacity multiplies the run's alpha *after* the block's own cumulative
+    /// `opacity` has been applied, which is what nesting two `opacity`
+    /// declarations does.
+    ///
+    /// [`CodePalette::by_class`]: crate::theme::CodePalette::by_class
+    /// [`CodePalette::plain`]: crate::theme::CodePalette::plain
+    fn code_style_runs(
+        &self,
+        style: &TextStyle,
+        node: NodeId,
+        text_len: usize,
+        opacity: f32,
+    ) -> (Vec<StyleRun<'_>>, Vec<TextGround>) {
+        let Some(spans) = self.options.code_spans.get(node) else {
+            return (Vec::new(), Vec::new());
+        };
+        let palette = &self.theme.code_palette;
+        let base = self.families(style.stack);
+        let mut out: Vec<StyleRun<'_>> = Vec::new();
+        let mut grounds: Vec<TextGround> = Vec::new();
+        let mut last_end = 0usize;
+        for span in spans {
+            // `CodeSpans`' contract, re-checked rather than trusted: the caller
+            // owns `mt-highlight`, this crate does not, and a span list from
+            // somewhere else is a plain `Vec` anyone can build. A violation is
+            // a caller bug and says so in a debug build; in release the span is
+            // dropped, because `build` has no error channel and an uncoloured
+            // token beats a panic in a viewer.
+            debug_assert!(span.start < span.end, "empty highlight span {span:?}");
+            debug_assert!(
+                span.start >= last_end,
+                "out-of-order highlight span {span:?}"
+            );
+            debug_assert!(
+                span.end <= text_len,
+                "highlight span past the text {span:?}"
+            );
+            if span.start >= span.end || span.start < last_end || span.end > text_len {
+                continue;
+            }
+            last_end = span.end;
+            let Some(token) = palette.by_class(&span.class) else {
+                // Unstyled: the text inherits, which is the block default,
+                // which is the run that must never be pushed.
+                continue;
+            };
+            let brush = dim(
+                inline_brush(token.color, style.brush, opacity),
+                token.opacity,
+            );
+            let resolved = StyleRun {
+                range: span.range(),
+                families: base,
+                font_size: style.font_size,
+                // `font-weight: bold` is the CSS keyword, so 700 — the UA's
+                // number and not one of MarkText's, exactly as
+                // `theme.headings.bold` is read.
+                weight: if token.bold { 700 } else { style.weight },
+                italic: token.italic,
+                brush,
+                // Neither decoration is a Prism concept: `grep text-decoration`
+                // over all 31 shipped Prism stylesheets returns nothing.
+                underline: false,
+                strikethrough: false,
+            };
+            let ground = dim(
+                inline_brush(token.background, Brush::TRANSPARENT, opacity),
+                token.opacity,
+            );
+            if ground.is_visible() {
+                grounds.push(TextGround {
+                    range: span.range(),
+                    padding_x: 0.0,
+                    padding_y: 0.0,
+                    corner_radius: 0.0,
+                    brush: ground,
+                });
+            }
+            match out.last_mut() {
+                Some(last)
+                    if last.range.end == resolved.range.start
+                        && last.font_size == resolved.font_size
+                        && last.weight == resolved.weight
+                        && last.italic == resolved.italic
+                        && last.brush == resolved.brush =>
+                {
+                    last.range.end = resolved.range.end;
+                }
+                _ => out.push(resolved),
+            }
+        }
+        // The same `retain` [`LayoutTree::style_runs`] ends with, and for the
+        // same reason. It is not dead code here: `plain` is the block default
+        // by construction, so a palette whose `string` happened to equal it
+        // would push a boundary per string literal and change every advance in
+        // the fence.
+        out.retain(|r| {
+            r.font_size != style.font_size
+                || r.weight != style.weight
+                || r.italic
+                || r.brush != style.brush
+        });
+        (out, grounds)
     }
 
     /// Every stretch of a leaf's visible text whose CSS box has a horizontal

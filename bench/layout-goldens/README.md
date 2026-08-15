@@ -61,14 +61,15 @@ the house style, for the reason `xtask/src/deps.rs:14-17` gives.
 Every file has the same three parts, separated by blank lines:
 
 ```text
-layout-golden v3                       <- format version
+layout-golden v4                       <- format version
 theme          muya-default            ┐
 theme-width    800.00                  │
 content-width  700.00                  │
 parley         a0752c7b…               │
-faces          ce47b224… rev 1         ├ provenance: ten fields, one per line
+faces          ce47b224… rev 1         ├ provenance: eleven fields, one per line
 options        wrap-code-blocks=false line-numbers=false
 parse          muya-default  footnote=false math=true super-sub=false …
+highlight      blocks=0 spans=0        │
 input          rtl.md                  │
 input-bytes    1103                    │
 form           full                    ┘
@@ -92,7 +93,7 @@ both-themes-must-differ check cuts there, and so should your eye.
 
 | Field | What it pins |
 |---|---|
-| `layout-golden v3` | the format. Bumped when the serialization changes shape, so a file written by an older tool is identifiable from the artifact. **v2** added `parse`; **v3** added the glyph run's `fill=` |
+| `layout-golden v4` | the format. Bumped when the serialization changes shape, so a file written by an older tool is identifiable from the artifact. **v2** added `parse`; **v3** added the glyph run's `fill=`; **v4** added `highlight` |
 | `theme` | which of the two shipped themes |
 | `theme-width` | `[metrics] content_width_px` — the CSS `max-width`, **800 or 750** |
 | `content-width` | that less `2 × container_padding_x_px` — **700 or 650**, the column text actually wraps in |
@@ -100,8 +101,23 @@ both-themes-must-differ check cuts there, and so should your eye.
 | `faces` | SHA-256 of `assets/fonts/faces.toml`, and its `[meta] revision` |
 | `options` | `LayoutOptions`, both at muya's own defaults. A golden generated with either flag on is a **different artifact** |
 | `parse` | `mt_md::Options`: a preset label, then every field spelled out. `muya-default` everywhere except `block-kinds.md`, which is `muya-default+footnote` — see below |
+| `highlight` | D15's span table, counted: how many code-box blocks reached a **ported** grammar, and how many spans that produced. See below |
 | `input` / `input-bytes` | which corpus file, CRLF-normalised |
 | `form` | `full` or `digest` — see below |
+
+**The `highlight` line exists for §6's own hazard.** S3's record says *"a
+differential that runs is indistinguishable in a summary from a differential
+that was skipped, and both look like a passing stage"*, and the same is true of
+D15's seam: `mt-layout` takes no dependency on `mt-highlight`, so the spans are
+a **caller-supplied table**, and a shell that quietly stopped filling it would
+write a perfectly well-formed golden full of one-brush fences. The diff would
+read as a colour change rather than as a missing input. `blocks=0 spans=0` is
+therefore a legitimate value — nine of the twelve inputs have no code-box block
+with a ported grammar — and it is a value the file *states* rather than one a
+reader has to infer from the absence of colour. It also moves whenever
+`xtask/src/highlight.rs`'s `PORTED` grows, which is correct: `mt-highlight`'s
+generated tables are an input to these goldens now, on the same footing as the
+parley pin and the face set.
 
 **The `faces` hash is an extension of D10**, which names only theme, width and
 the parley revision. It is here for D10's own argument: the font set determines

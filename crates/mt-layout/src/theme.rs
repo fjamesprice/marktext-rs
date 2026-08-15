@@ -1053,14 +1053,42 @@ pub enum Fill {
 /// literal `.token.*` selectors — so there is nothing to inherit and everything
 /// to transcribe.
 ///
-/// The 32 classes below are exactly the set the paired stylesheets define.
-/// Prism itself emits more (`tag`'s inner `attr-name`, language-scoped
-/// variants such as `.language-css .token.string`); those fall back to their
-/// base class here, which is what an unstyled class does in the browser too.
+/// The 32 classes below are exactly the set the paired stylesheets define —
+/// **verified at S3**, as a set equality against both sheets, and the five
+/// paint properties they use (`color`, `background`, `font-weight`,
+/// `font-style`, `opacity`) are exactly [`TokenStyle`]'s five fields.
+///
+/// Prism itself emits more, and the two kinds of extra are not the same case:
+///
+/// - a class no rule matches (`tag`'s inner `attr-name` is styled, but
+///   `attr-equals`, `identifier`, `line`, `unit`, … are not) **inherits** — it
+///   does not fall back to [`CodePalette::plain`], and `by_class` returning
+///   `None` is what says so;
+/// - the **language-scoped** variants, `.language-css .token.string` and
+///   `.style .token.string`, fall back to `.token.string` for a stronger
+///   reason than being unstyled: the ancestor they need does not exist.
+///   `codeBlockContent/index.ts:183-188` highlights inside a **detached**
+///   `div.language-<lang>` and assigns only its `innerHTML` back, so no live
+///   element carries a `language-` class and the descendant selector matches
+///   nothing in MarkText either. The old wording here — *"which is what an
+///   unstyled class does in the browser too"* — reached the right answer by
+///   the wrong argument.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CodePalette {
     /// Code text carrying no token class.
+    ///
+    /// **Not a Prism colour, in any of the 31 shipped sheets.** Each of them
+    /// spells the container rule as `code[class*='language-'], pre.ag-paragraph
+    /// { color: … }`, and neither selector matches muya v2: `ag-` is the legacy
+    /// editor's prefix, and `codeBlockContent/index.ts:183-188` highlights
+    /// inside a **detached** `div.language-<lang>` and assigns only its
+    /// `innerHTML` back, so no live element ever carries a `language-` class.
+    /// What paints unclassed fence text is `.mu-code-block { color:
+    /// var(--editor-color-50) }` (`blockSyntax.css:207`) — hence
+    /// `plain == colors.editor_50`, asserted below by
+    /// `the_palettes_plain_is_the_code_blocks_own_colour`. Measured at S3; the
+    /// `dark` transcription had `#f8f8f2` here until then.
     pub plain: TokenStyle,
     /// `.token.comment`
     pub comment: TokenStyle,
@@ -1173,8 +1201,19 @@ impl CodePalette {
     /// The style for a Prism token class, or `None` if this palette does not
     /// style it.
     ///
-    /// `None` means "paint it as [`CodePalette::plain`]", which is what the
-    /// browser does with a class no rule matches.
+    /// `None` means **inherit** — push no style run and let the enclosing
+    /// colour show through, which is what a browser does with a class no rule
+    /// matches.
+    ///
+    /// **Corrected at S3**, and the old wording was *"paint it as
+    /// [`CodePalette::plain`]"*. At the top level of a fence the two answers
+    /// are the same number, because `plain` **is** the block default
+    /// (`the_palettes_plain_is_the_code_blocks_own_colour`). They are not the
+    /// same number one level in: Prism nests tokens, so an unstyled class
+    /// inside a styled one inherits the styled one's colour and not the
+    /// fence's. `mt_highlight` flattens to a single class per span, so that
+    /// case is a known divergence rather than something this method can
+    /// express — §5 D15's S3 subsection measures it.
     pub fn by_class(&self, class: &str) -> Option<&TokenStyle> {
         Some(match class {
             "comment" => &self.comment,
@@ -1549,6 +1588,34 @@ mod tests {
                 );
             }
             assert!(theme.code_palette.by_class("not-a-prism-class").is_none());
+        }
+    }
+
+    /// `plain` and the code block's own text colour are one CSS value, so they
+    /// must be one number here too.
+    ///
+    /// **The mechanised half of an S3 finding.** `flow.rs` plans a code block's
+    /// brush from `colors.editor_50` (`blockSyntax.css:207`, the rule shared by
+    /// all five kinds that use the code-block box) and D15's resolver compares
+    /// every token run against it, so a `plain` that disagrees is a second
+    /// transcription of the same declaration that nothing would ever read.
+    /// `dark` carried `#f8f8f2` — `themes/prismjs/dark.theme.css`'s
+    /// `code[class*='language-'], pre.ag-paragraph` rule, whose two selectors
+    /// both target DOM muya v2 does not build. Every one of the 31 shipped
+    /// Prism sheets spells that rule the same way, so this holds for the whole
+    /// import path M5 owes and not just for these two files.
+    #[test]
+    fn the_palettes_plain_is_the_code_blocks_own_colour() {
+        for theme in [Theme::muya_default(), Theme::dark()] {
+            assert_eq!(
+                theme.code_palette.plain.color, theme.colors.editor_50,
+                "{}: `plain` and `--editor-color-50` are one declaration",
+                theme.name
+            );
+            // And it is a colour, not `inherit`: `blockSyntax.css:207` is a
+            // concrete value, so a fence inside a blockquote does not take the
+            // quote's text colour.
+            assert!(matches!(theme.code_palette.plain.color, Color::Rgba { .. }));
         }
     }
 

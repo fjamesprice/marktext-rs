@@ -242,10 +242,26 @@ input_bg = "#2f3336ff"
 # ---------------------------------------------------------------------------
 # Code palette — `themes/prismjs/dark.theme.css`, a Monokai derivative.
 #
-# `plain` is `code[class*='language-'] { color: #f8f8f2 }` (line 7). Note that
-# its `pre.ag-paragraph { background: #272822 }` (line 36) targets the *legacy*
-# `ag-` editor and never reaches muya v2, whose code-block background comes
-# from `--codeBlockBgColor` instead.
+# `plain` was transcribed as `code[class*='language-'], pre.ag-paragraph
+# { color: #f8f8f2 }` (line 7) and **that was wrong** — corrected at S3, the
+# first stage to read this palette against an artifact. The note below already
+# knew that `pre.ag-paragraph { background: #272822 }` (line 36) targets the
+# *legacy* `ag-` editor and never reaches muya v2; it is the **same selector
+# group**, so the colour never reaches it either, and the other half of the
+# group is dead for a second, independent reason:
+#
+#   `codeBlockContent/index.ts:183-188` builds a **detached** `div` carrying
+#   `language-<lang>`, highlights inside it, and assigns only its `innerHTML`
+#   back — so no live element ever has a `language-` class, and the live
+#   elements are `pre.mu-code-block > code.mu-code` in any case.
+#
+# So unclassed fence text takes `.mu-code-block { color: var(--editor-color-50) }`
+# (`blockSyntax.css:207`), which is `--editorColor50: rgba(255,255,255,0.5)`
+# here. This is a property of **all 31** shipped Prism sheets, not of this one:
+# every one of them spells the rule with the same two dead selectors, so in
+# MarkText no theme's Prism stylesheet has ever set the plain code colour.
+# `plain` is therefore `colors.editor_50` in every theme, and a test asserts it
+# rather than leaving two transcriptions of one value to drift apart again.
 #
 # The class *set* matches muya's light sheet exactly; the groupings do not.
 # `boolean`/`number` split away from `property`, `function`/`class-name` join
@@ -253,7 +269,7 @@ input_bg = "#2f3336ff"
 # ---------------------------------------------------------------------------
 
 [code_palette]
-plain = { color = "#f8f8f2ff", background = "transparent", bold = false, italic = false, opacity = 1.0 }
+plain = { color = "#ffffff80", background = "transparent", bold = false, italic = false, opacity = 1.0 }
 comment = { color = "#708090ff", background = "transparent", bold = false, italic = false, opacity = 1.0 }
 prolog = { color = "#708090ff", background = "transparent", bold = false, italic = false, opacity = 1.0 }
 doctype = { color = "#708090ff", background = "transparent", bold = false, italic = false, opacity = 1.0 }
