@@ -10,9 +10,9 @@ input          1mb.md
 input-bytes    1048796
 form           digest
 
-list           width=700.00 height=533398.06 blocks=10744
-full-sha256    e9b93636b9a38d8af91984439c76208b6b9387f74a593e8ba73a51cb9ddbf273
-full-bytes     5776443
+list           width=700.00 height=533910.19 blocks=10744
+full-sha256    8652b8b8862b1ef5a71af1b2b2cd243bed3231cba3354f7c8261646294b80ce6
+full-bytes     5779056
 count paragraph      3861
 count atx-heading    1944
 count setext-heading 0

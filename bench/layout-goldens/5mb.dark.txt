@@ -10,9 +10,9 @@ input          5mb.md
 input-bytes    5243009
 form           digest
 
-list           width=650.00 height=2774296.50 blocks=54896
-full-sha256    b8028e3a560f0a241510deb08890b6f116d69f9cefbabb4ff7d1c0193b02f388
-full-bytes     29517936
+list           width=650.00 height=2777342.75 blocks=54896
+full-sha256    2c26d5566a65de907bfc57e754296647b2ee78b660ddda86d43b50648e809804
+full-bytes     29531137
 count paragraph      19406
 count atx-heading    9812
 count setext-heading 0

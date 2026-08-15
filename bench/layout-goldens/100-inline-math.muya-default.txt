@@ -32,14 +32,14 @@ count table.row      0
 count footnote       0
 
 block 0 atx-heading bounds=[0.00 0.00 700.00 42.00] items=1
-  glyphs font=OpenSans-Bold size=30.00 fill=#333333ff rtl=0 text=0..21 origin=[0.00 32.00] advance=326.43 n=21 seq=02cf45b3
+  glyphs font=OpenSans-Bold size=30.00 fill=#333333ff rtl=0 text=0..22 origin=[-9.00 32.00] advance=334.22 n=22 seq=61308706
 block 1 paragraph bounds=[0.00 58.00 700.00 51.20] items=6
   glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=0..17 origin=[0.00 76.00] advance=117.55 n=17 seq=f92fa7bc
   glyphs font=OpenSans-Italic size=16.00 fill=#4d4d4dff rtl=0 text=17..33 origin=[117.55 76.00] advance=121.62 n=16 seq=fe14c5b8
   glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=33..69 origin=[239.17 76.00] advance=227.71 n=33 seq=8a3aa6f8
-  rect [-5.12 87.56 79.60 20.02] fill=#00000008 radius=3.00
-  glyphs font=DejaVuSansMono size=12.80 fill=#4d4d4dff rtl=0 text=70..79 origin=[0.00 102.00] advance=69.36 n=9 seq=63b659ae
-  glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=79..141 origin=[69.36 102.00] advance=423.37 n=61 seq=f44260e3
+  rect [0.00 87.56 79.60 20.02] fill=#00000008 radius=3.00
+  glyphs font=DejaVuSansMono size=12.80 fill=#4d4d4dff rtl=0 text=70..79 origin=[5.12 102.00] advance=69.36 n=9 seq=01f64404
+  glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=79..141 origin=[79.60 102.00] advance=423.37 n=61 seq=c34fa2fa
 block 2 math-block bounds=[0.00 130.80 700.00 53.84] lang=latex items=6
   rect [0.00 130.80 700.00 53.84] fill=#00000008 radius=3.00
   rect [0.00 130.80 700.00 1.00] fill=#e6e6e6ff
@@ -421,7 +421,7 @@ block 21 paragraph bounds=[0.00 3311.60 700.00 256.00] items=30
   glyphs font=DejaVuSansMono size=16.00 fill=#4d4d4dff rtl=0 text=747..771 origin=[134.53 3559.60] advance=231.19 n=24 seq=f39e45b8
   glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=771..807 origin=[365.72 3559.60] advance=261.48 n=36 seq=c81800e1
 block 22 paragraph bounds=[0.00 3575.60 700.00 25.60] items=4
-  rect [326.64 3579.16 17.95 20.02] fill=#00000008 radius=3.00
+  rect [331.76 3579.16 17.95 20.02] fill=#00000008 radius=3.00
   glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=0..45 origin=[0.00 3593.60] advance=331.76 n=45 seq=d764261f
-  glyphs font=DejaVuSansMono size=12.80 fill=#4d4d4dff rtl=0 text=45..46 origin=[331.76 3593.60] advance=7.71 n=1 seq=98ac0f9a
-  glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=46..55 origin=[339.46 3593.60] advance=62.43 n=9 seq=a73095f5
+  glyphs font=DejaVuSansMono size=12.80 fill=#4d4d4dff rtl=0 text=45..46 origin=[336.88 3593.60] advance=7.71 n=1 seq=2aaf4017
+  glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=46..55 origin=[349.70 3593.60] advance=62.43 n=9 seq=ba2a5509
