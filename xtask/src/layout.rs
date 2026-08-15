@@ -175,7 +175,10 @@ impl ParseOverride {
 const PARSE_OVERRIDES: [(&str, ParseOverride); 1] = [("block-kinds.md", ParseOverride::Footnote)];
 
 /// The parse options for one input, and the label the header records.
-fn parse_options(input: &str) -> (mt_md::Options, String) {
+///
+/// `pub(crate)` since M3 S3, for the same reason [`inputs`] is: `crate::highlight`
+/// parses the same corpus and must parse it the same way.
+pub(crate) fn parse_options(input: &str) -> (mt_md::Options, String) {
     let mut options = mt_md::Options::MUYA_DEFAULT;
     let mut label = String::from("muya-default");
     for (name, over) in PARSE_OVERRIDES {
@@ -244,7 +247,11 @@ fn parse_fields(options: &mt_md::Options) -> String {
 }
 
 /// Every corpus file that is a layout input, sorted by name.
-fn inputs(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
+///
+/// `pub(crate)` since M3 S3: `crate::highlight` collects the corpus's fences and
+/// must read the same file set. Two harnesses with two definitions of which
+/// files count is a difference that would eventually be mistaken for a finding.
+pub(crate) fn inputs(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
     let dir = repo_root.join("bench").join("corpus");
     let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)
         .map_err(|e| format!("cannot read {}: {e}", dir.display()))?

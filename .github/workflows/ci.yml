@@ -133,7 +133,7 @@ jobs:
         # changes what the conformance ratchet measures.
         run: node tools/vendor-commonmark-spec.mjs --check --marktext marktext
 
-      - name: xtask CI (deps, corpus, divergences, conformance §11.1, differential §11.2)
+      - name: xtask CI (deps, corpus, layout, highlight, divergences, conformance §11.1, differential §11.2)
         env:
           MARKTEXT_DIR: ${{ github.workspace }}/marktext
         # --require-ts turns a missing reference engine into a hard failure
@@ -147,6 +147,14 @@ jobs:
         # token streams against the running engine (M1.md §5 D3), and without a
         # reference engine it reports SKIPPED and exits 0 — which is exactly the
         # state that stage spent itself getting the register out of.
+        #
+        # M3 S3 adds a **third**, and it needs the flag most of all while its
+        # port side is empty. `xtask highlight` compares against Prism, loaded
+        # from this checkout's `node_modules` — the `--filter @muyajs/core`
+        # install above already brings prismjs 1.30.0 with it, so no extra step
+        # is needed. Until `mt-highlight` ports a grammar, that step's entire
+        # value is proving the reference ran; a silent skip would reduce it to
+        # nothing while still printing a coverage line.
         run: cargo xtask ci --require-ts
 
       # The checks too slow for every commit run in soak.yml, nightly: the

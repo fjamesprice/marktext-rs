@@ -33,3 +33,19 @@ mt-inline.workspace = true
 # dev profile, so the corpus's three large files are laid out unoptimised —
 # see `layout.rs`'s note on what that costs.
 mt-layout.workspace = true
+# M3 S3: `cargo xtask highlight` (D14/D15) collects every fenced code block in
+# `bench/corpus/` and needs two things from `mt-doc` to do it — `Block`, to
+# recognise a `CodeBlock` while walking the tree `mt_md::parse` returns, and
+# `Block::highlight_language()`, which `mt-highlight`'s crate contract names as
+# the **only** legitimate source of a fence's language (*"never take the whole
+# info string as a language name"*).
+#
+# The edge is cheap and it is unavoidable. Cheap: `mt-doc` is the bottom of the
+# workspace and was already being compiled as a dependency of the three crates
+# above, so this adds no build time and no third-party code. Unavoidable: Rust
+# has no transitive `use`, and the alternatives were both worse — reproducing
+# the first-word rule here would give this harness a second opinion about what a
+# fence's language is, which is the one thing a differential must never have,
+# and going through `mt_layout::code_language` would silently widen S3's gate to
+# D11's four non-fence block kinds.
+mt-doc.workspace = true

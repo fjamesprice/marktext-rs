@@ -1,7 +1,7 @@
 # Differential testing against the TypeScript engine (§11.2)
 
-There are **two** of these, one per layer, and they share everything except what
-they compare.
+There are **three** of these, one per layer, and they share everything except
+what they compare.
 
 ```text
 block state (§11.2) — what mt-md will produce
@@ -13,6 +13,11 @@ token stream (M1 §5 D3) — what mt-inline produces
 input string ─┬──► node → muya tokenizer → token JSON ─┐
               │                                         ├──► assert equal
               └──► mt_inline::tokenizer ────────────────┘
+
+highlight spans (M3 §5 D14/D15) — what mt-highlight will produce
+{lang, code} ─┬──► node → Prism.tokenize → span JSON ──┐
+              │                                         ├──► assert equal
+              └──► mt_highlight ───────────────────────┘
 ```
 
 ```sh
@@ -23,13 +28,20 @@ cargo xtask diff bench/corpus/cjk.md
 cargo xtask divergences             # token streams: the register + a 4,264-input sweep
 cargo xtask divergences --no-sweep  # the register alone, for a fast local loop
 cargo xtask divergences --full-sweep  # 41,009 inputs, ~120 s; the nightly soak runs this
+
+cargo xtask highlight               # highlight spans: every fence in bench/corpus/
+cargo xtask highlight --only 50-code  # one corpus file's 51 code blocks
 ```
 
-**Neither subsumes the other.** Block state does not carry inline tokens, and a
-token stream has no blocks. The token-stream half landed at M1 S7 and is what
-makes `spec/divergences.json` enforceable — before it, every register entry
-reported `SKIPPED` and reverting a fix still exited 0. The rest of this document
-is about the block-state half; `xtask/src/tokens.rs` documents the other.
+**None subsumes another.** Block state does not carry inline tokens, a token
+stream has no blocks, and neither reaches inside a fence. The token-stream half
+landed at M1 S7 and is what makes `spec/divergences.json` enforceable — before
+it, every register entry reported `SKIPPED` and reverting a fix still exited 0.
+The span half landed at M3 S3 and is the odd one out in two ways worth naming
+here: its reference engine is **Prism**, not muya, and it was built one commit
+**before** the thing it judges, so it reports `0/297` coverage until the grammar
+interpreter lands. The rest of this document is about the block-state half;
+`xtask/src/tokens.rs` and `xtask/src/highlight.rs` document the other two.
 
 ## Why this is the highest-value test asset in the project
 
@@ -63,10 +75,22 @@ is a function call rather than a process, because `xtask` can depend on
 | Rust side | `xtask/src/tokens.rs::wire_with` | Serializes an `mt_inline::Token` into muya's wire shape. |
 | Comparator | `xtask/src/divergences.rs` | Runs the register's own inputs as a negative control, then the sweep, and reports per-entry `ok`/`STALE` plus any unregistered disagreement. |
 
-## Contracts the two dumpers share
+And the span half, one layer further in — where the reference engine is no
+longer muya at all:
 
-Both must agree on all four of these, or a disagreement stops being
-interpretable:
+| Piece | Where | Role |
+|---|---|---|
+| Reference dumper | `tools/diff/dump-prism-tokens.mjs` | Loads **prismjs 1.30.0** from the clone's `node_modules`, loads all 297 grammars in dependency order, reproduces MarkText's alias table and its two fork patches, and flattens Prism's nested `Token` tree into byte-offset spans. No `tsx`: nothing it loads is TypeScript. |
+| Rust side | `xtask/src/highlight.rs::rust_spans` | The seam. Returns `None` for every language until `mt-highlight` stops being a stub. |
+| Comparator | `xtask/src/highlight.rs` | Collects every `Block::CodeBlock` in `bench/corpus/`, compares, and reports the fence count, the distinct-input count and coverage as `N/297` on separate lines so none can be read as another. |
+
+## Contracts the dumpers share
+
+All of them must agree on these, or a disagreement stops being interpretable.
+The first three are stated for the two muya-backed dumpers; the span dumper's
+equivalent of contract 1 is its **load set** — all 297 grammars, because a
+grammar's content depends on which other grammars have loaded (M3 §5 D14) — and
+it is recorded in that dumper's output envelope rather than assumed.
 
 1. **Options.** `MUYA_DEFAULT_OPTIONS` in the Node script mirrors
    `mt_md::Options::MUYA_DEFAULT`; `SPEC_OPTIONS` mirrors `Options::SPEC`.
@@ -96,6 +120,12 @@ Two things can be missing, and they are reported distinctly:
 - **The TypeScript engine is unavailable** — no marktext clone, or its
   dependencies are not installed (the dumper exits 3).
 
+`dump-prism-tokens.mjs` splits that second case in two, because the two want
+different remediations: a directory with no
+`packages/muya/src/utils/prism/loadLanguage.ts` in it is *"there is no clone
+here"*, and a clone whose `require.resolve('prismjs')` fails is *"run
+`pnpm install`"*. Both exit 3.
+
 Both produce SKIP. That is honest at M0, but it is also the one failure mode
 that could quietly turn this whole investment into a no-op that still reports
 green. So CI passes `--require-ts`, which makes a missing reference engine a
@@ -124,12 +154,23 @@ rather than Node's native type stripping, because `markdownToState.ts` uses a
 constructor parameter property — `constructor(private _options: …)` — which is
 not erasable syntax.
 
+The span dumper needs the same install and no `tsx`: prismjs is
+`packages/muya/package.json`'s dependency, resolved out of the clone with
+`createRequire`. **This repository does not depend on prismjs and must not
+start** — its `node_modules` holds exactly one package.
+
 ## Current status
 
 Every file SKIPs, because `mt_md::dump_state` is a stub. The TypeScript half
 works today and is exercised on every run over the full 22-file corpus, so the
 day `mt-inline` lands the comparison starts happening with no change to any of
 these three pieces.
+
+The span half is in the same shape for the same deliberate reason: Prism
+tokenizes all 2,507 corpus code blocks on every run and 0 of them are compared,
+because `mt-highlight` ports no grammars yet. M3 §6 fixes that order — *"an
+interpreter written first is an interpreter whose first check is the thing it
+was written to satisfy"*.
 
 ## Extending it
 

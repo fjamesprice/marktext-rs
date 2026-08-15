@@ -15,6 +15,7 @@
 //! | `normalize` | `normalizeHtml` vs `spec/runner.ts`'s | M2 §10, owed since M0 |
 //! | `corpus` | Generate `bench/corpus/` | §14 step 4 |
 //! | `layout` | Textual layout goldens for every corpus file × theme | M3 §5 D10 |
+//! | `highlight` | Highlight-span differential against Prism, over every corpus fence | M3 §5 D14/D15 |
 //! | `fuzz-seed` | Write `fuzz/corpus/` from the sweep's inputs | M1 §5 D6 |
 //! | `deps` | Enforce the dependency-direction constraints | §1 |
 //! | `ci` | All of the above, in order | §9 M0 exit gate |
@@ -26,6 +27,7 @@ mod deps;
 mod diff;
 mod divergences;
 mod fuzz;
+mod highlight;
 mod html;
 mod layout;
 mod normalize;
@@ -109,11 +111,20 @@ COMMANDS:
         --measure          Print the would-be full serialization size of every
                            input at both themes. This is the measurement the
                            three digest goldens were cut from.
+    highlight [OPTIONS]  Compare the highlight spans of every bench/corpus/
+                         fenced code block against Prism's own tokenization,
+                         run from the marktext clone (docs/M3.md §5 D14/D15).
+                         Prints the distinct-input count beside the fence count
+                         and coverage as N/297, because a fence total is not a
+                         coverage number.
+        --require-ts       Fail instead of skipping when Prism is unavailable.
+        --only <SUBSTR>    Only fences whose label contains SUBSTR.
+        --verbose          Print every disagreement rather than the first 20.
     fuzz-seed [--check]  Write fuzz/corpus/<target>/ from the differential
                          sweep's inputs (M1 §5 D6). Not part of `ci`.
     deps                 Enforce the §1 dependency-direction constraints.
-    ci                   deps, corpus --check, layout, divergences, conformance,
-                         blocks, normalize, diff — in order.
+    ci                   deps, corpus --check, layout, highlight, divergences,
+                         conformance, blocks, normalize, diff — in order.
 ";
 
 fn main() {
@@ -134,6 +145,7 @@ fn main() {
         "normalize" => normalize::main(&root, rest),
         "corpus" => corpus::main(&root, rest),
         "layout" => layout::main(&root, rest),
+        "highlight" => highlight::main(&root, rest),
         "fuzz-seed" => fuzz::main(&root, rest),
         "deps" => deps::main(&root),
         "ci" => ci(&root, rest),
@@ -189,6 +201,29 @@ fn ci(root: &Path, rest: &[String]) -> Result<i32, String> {
         // early means the expensive step is the second thing that reports,
         // rather than the thing everyone waits for at the end.
         ("layout", Box::new(|| layout::main(root, &[]))),
+        // Immediately after `layout`, and before the three engine-backed
+        // harnesses, for two reasons that pull the same way.
+        //
+        // It reads `bench/corpus/` through the *same* file list and the same
+        // parse options the layout goldens were generated from — literally
+        // `layout::inputs` and `layout::parse_options` — so it inherits that
+        // adjacency to `corpus --check` rather than re-earning it, and a
+        // hand-edited corpus is still reported by the generator check before
+        // either step spends time on it.
+        //
+        // The second reason is why a step that compares **nothing** earns a
+        // slot at all. M3 §6 names the hazard S3 is exposed to: *"a
+        // differential that runs is indistinguishable in a summary from a
+        // differential that was skipped, and both look like a passing stage."*
+        // While `mt-highlight` is a stub this step's entire output is the
+        // negative control — it proves Node ran, Prism loaded all 297 grammars
+        // and spans came back for every fence — and running it on every commit
+        // is what stops the harness from silently rotting in the window between
+        // being built and being used.
+        (
+            "highlight",
+            Box::new(|| highlight::main(root, &engine_flags)),
+        ),
         // Before the two harnesses that will consult it: a malformed register
         // is a register that silently widens what `diff` tolerates, so it
         // should be reported before `diff`'s own output, not after. As of M1 S7
