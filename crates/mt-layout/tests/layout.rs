@@ -969,6 +969,57 @@ fn glyph_run_list(block: &mt_layout::display::BlockDisplay) -> Vec<&mt_layout::d
         .collect()
 }
 
+/// **CSS 2.1 § 10.8's strut.** A line whose every run resolved to a fallback
+/// face still carries the *block's* own font metrics.
+///
+/// The paragraph is entirely Arabic, so nothing on the line is shaped in Open
+/// Sans — which is exactly the state marker hiding put every `## العربية` into.
+/// parley has no strut (`line_break.rs:100-113` says so in its own note), so
+/// without the correction the line is sized by Noto Sans Arabic alone.
+///
+/// The arithmetic, at 16 px and the theme's `line-height: 1.6` → 25.60:
+///
+/// | participant | A → round | D → round | half-leading | over | under |
+/// |---|---|---|---|---|---|
+/// | Noto Sans Arabic (upem 1000, hhea 1374 / −738) | 21.98 → 22 | 11.81 → 12 | (25.60−34)/2 = −4.2 → −5 | **17** | **8.60** |
+/// | strut: Open Sans (upem 2048, 2189 / −600) | 17.10 → 17 | 4.69 → 5 | (25.60−22)/2 = 1.8 → 1 | **18** | **7.60** |
+///
+/// so the line box is `max(17, 18) + max(8.60, 7.60)` = **26.60**, and dropping
+/// the strut gives `17 + 8.60` = 25.60. The Latin control beside it is the
+/// strut's own 18 + 7.60 = 25.60, which is what makes the 1.00 px difference a
+/// measurement of the strut rather than of the paragraph.
+#[test]
+fn a_line_in_a_fallback_face_still_carries_the_blocks_own_strut() {
+    let theme = Theme::muya_default();
+    let mut arabic = Doc::new();
+    let root = arabic.root();
+    // One word and no space: a space resolves to the body stack's own first
+    // family, which would put an Open Sans run on the line and hide the defect.
+    arabic.para(root, "العربية");
+    let mut latin = Doc::new();
+    let root = latin.root();
+    latin.para(root, "plain latin prose");
+
+    let arabic = lay_out(&arabic, &theme);
+    let latin = lay_out(&latin, &theme);
+    // The premise: not one glyph on the Arabic line came from the body stack's
+    // first family. Without this the height below would prove nothing.
+    let body = glyph_run_list(&latin.blocks[0])[0].font;
+    for run in glyph_run_list(&arabic.blocks[0]) {
+        assert_ne!(run.font, body, "the line must be entirely fallback");
+    }
+    assert!(
+        (latin.blocks[0].bounds.height - 25.6).abs() < 1e-3,
+        "the strut alone: got {}",
+        latin.blocks[0].bounds.height
+    );
+    assert!(
+        (arabic.blocks[0].bounds.height - 26.6).abs() < 1e-3,
+        "Noto Sans Arabic's 8.60 under, Open Sans's 18 over: got {}",
+        arabic.blocks[0].bounds.height
+    );
+}
+
 /// **Inline horizontal padding advances; inline vertical padding does not.**
 /// CSS 2.1 § 10.3.2 against § 10.6.1, which is the whole asymmetry of
 /// `code.mu-inline-rule { padding: 0.2em 0.4em }` (`inlineSyntax.css:60-70`).

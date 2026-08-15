@@ -29,6 +29,8 @@
 //! own named exception and is resolved to a [`FontId`](crate::fonts::FontId)
 //! here rather than carried.
 
+use std::collections::HashMap;
+
 use parley::{
     Alignment, AlignmentOptions, BaseDirection as ParleyBaseDirection, FontFamily, FontFamilyName,
     FontStyle, FontWeight, GenericFamily, InlineBox as ParleyInlineBox, Layout, LayoutContext,
@@ -394,6 +396,95 @@ fn glyph_run_text_range(
     }
 }
 
+// ---------------------------------------------------------------------------
+// The strut — CSS 2.1 § 10.8
+// ---------------------------------------------------------------------------
+
+/// The block's own contribution to every one of its line boxes — **CSS 2.1
+/// § 10.8's strut**.
+///
+/// > *"On a block container element whose content is composed of inline-level
+/// > elements, `line-height` specifies the minimal height of line boxes within
+/// > the element. … the minimum height consists of a minimum height above the
+/// > baseline and a minimum depth below it, exactly as if each line box starts
+/// > with a zero-width inline box with the element's first available font."*
+///
+/// Two numbers, because that is what a line box is made of: the extent over the
+/// baseline and the extent under it, each after half-leading. The line box is
+/// the union of the strut's pair and every inline box's pair
+/// (`max` over, `max` under), which is why a line whose every glyph comes from a
+/// fallback face is still at least this tall.
+///
+/// # parley has no strut, and that is why this is here
+///
+/// `parley/src/layout/line_break.rs:100-113` says so in its own note — a line's
+/// extents start at zero and are the maximum over the runs actually on it, with
+/// the comment *"ideally, a line's initial extents should be sourced from the
+/// primary font"*. Until markers were hidden the gap was invisible, because a
+/// heading's `## ` or a paragraph's `**` always put a run in the block's own
+/// face on the line. With them gone, `## العربية` is sized by Noto Sans Arabic
+/// alone and loses Open Sans's metrics entirely.
+///
+/// `mt-layout` owns block geometry, so the correction is applied here rather
+/// than waited on upstream: [`ShapedText`] recomputes each line's extents as
+/// the union with this pair, restacks the lines by parley's own rule, and
+/// shifts every item on a line by the difference. A text whose lines all
+/// already cover the strut is untouched, byte for byte.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Strut {
+    /// Minimum extent over the baseline.
+    over: f32,
+    /// Minimum extent under the baseline.
+    under: f32,
+}
+
+/// One line box's extents from one participant, with parley's quantization.
+///
+/// The arithmetic is CSS 2.1 § 10.8's — half the difference between the used
+/// `line-height` and the font's `ascent + descent` is added above and below —
+/// and the rounding is parley's, so the strut is measured on exactly the same
+/// terms as the runs it is maxed against (`line_break.rs:123-145`):
+///
+/// ```text
+/// ascent  = A.round()      descent = D.round()
+/// half    = (line_height − (ascent + descent)) / 2
+/// over    = ascent + half.floor()
+/// under   = line_height − over        // deliberately not quantized
+/// ```
+///
+/// Following parley's rounding rather than the exact CSS is deliberate: the two
+/// numbers are combined with `max`, and a strut computed unrounded would win by
+/// a fraction of a pixel on lines where the run's own metrics are the right
+/// answer, moving every baseline in the corpus.
+fn quantized_extents(ascent: f32, descent: f32, line_height: f32) -> (f32, f32) {
+    let ascent = ascent.round();
+    let descent = descent.round();
+    let half_leading = (line_height - (ascent + descent)) / 2.0;
+    let over = ascent + half_leading.floor();
+    (over, line_height - over)
+}
+
+/// The text the strut probe is measured on.
+///
+/// A space, because CSS's strut is *"a zero-width inline box with the element's
+/// first available font"* and the first available font is the first family in
+/// the stack that exists — which is the family a space resolves to, since every
+/// face in a text stack has one. Nothing about the glyph is read; only
+/// `Run::font_metrics()`, which is the face's own scaled `ascent`/`descent`.
+const STRUT_PROBE: &str = " ";
+
+/// The strut cache's key: everything [`quantized_extents`] depends on.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct StrutKey {
+    families: Vec<String>,
+    /// `f32` is not `Hash`; the bits are, and two sizes with the same bits are
+    /// the same size.
+    font_size: u32,
+    line_height: u32,
+    weight: u16,
+    italic: bool,
+}
+
 /// A theme's family names as parley's, with CSS generics recognised.
 ///
 /// `sans-serif`, `monospace` and `emoji` become `FontFamilyName::Generic` and
@@ -417,6 +508,13 @@ fn family_list(families: &[String]) -> Vec<FontFamilyName<'static>> {
 /// rather than a global.
 pub struct TextShaper {
     cx: LayoutContext<Brush>,
+    /// Measured struts, keyed by the block style that produced them.
+    ///
+    /// A strut costs one tiny layout of [`STRUT_PROBE`], and a document has a
+    /// handful of distinct block styles and tens of thousands of blocks — the
+    /// 5 MB digest is 54,896 — so this is the difference between one probe per
+    /// theme and one per block.
+    struts: HashMap<StrutKey, Option<Strut>>,
 }
 
 impl Default for TextShaper {
@@ -436,7 +534,64 @@ impl TextShaper {
     pub fn new() -> TextShaper {
         TextShaper {
             cx: LayoutContext::new(),
+            struts: HashMap::new(),
         }
+    }
+
+    /// The strut for a request's **block-level** style — CSS 2.1 § 10.8.
+    ///
+    /// The request's scalar fields and not any [`StyleRun`]'s: a `0.8em` code
+    /// span inside a paragraph gets its own line box contribution as a run, and
+    /// the strut is the paragraph's. A heading's strut is therefore the heading's
+    /// size and the theme's *heading* line-height, both of which arrive here on
+    /// the request already resolved.
+    ///
+    /// `None` when the stack resolves to no face at all — a collection with
+    /// nothing registered — in which case there is no correction to make and
+    /// parley's answer stands.
+    fn strut(&mut self, fonts: &mut Fonts, request: &TextRequest<'_>) -> Option<Strut> {
+        let key = StrutKey {
+            families: request.families.to_vec(),
+            font_size: request.font_size.to_bits(),
+            line_height: request.line_height.to_bits(),
+            weight: request.weight,
+            italic: request.italic,
+        };
+        if let Some(hit) = self.struts.get(&key) {
+            return *hit;
+        }
+        let measured = self.measure_strut(fonts, request);
+        self.struts.insert(key, measured);
+        measured
+    }
+
+    fn measure_strut(&mut self, fonts: &mut Fonts, request: &TextRequest<'_>) -> Option<Strut> {
+        let mut builder = self
+            .cx
+            .ranged_builder(fonts.context_mut(), STRUT_PROBE, 1.0, true);
+        builder.push_default(StyleProperty::FontFamily(FontFamily::List(
+            family_list(request.families).into(),
+        )));
+        builder.push_default(StyleProperty::FontSize(request.font_size));
+        builder.push_default(StyleProperty::FontWeight(FontWeight::new(f32::from(
+            request.weight,
+        ))));
+        builder.push_default(StyleProperty::FontStyle(if request.italic {
+            FontStyle::Italic
+        } else {
+            FontStyle::Normal
+        }));
+        let mut layout = builder.build(STRUT_PROBE);
+        layout.break_all_lines(None);
+        let metrics = *layout.lines().next()?.runs().next()?.font_metrics();
+        // The used `line-height`, which is CSS's unitless number times the
+        // block's own font size — the same resolution parley performs for a run
+        // (`layout/data.rs:290-303`, `LineHeight::FontSizeRelative`). It is
+        // *not* read off the probe layout, which was built without a line
+        // height so that this stays the one place the number is computed.
+        let line_height = request.line_height * request.font_size;
+        let (over, under) = quantized_extents(metrics.ascent, metrics.descent, line_height);
+        Some(Strut { over, under })
     }
 
     /// Shape and break one request.
@@ -572,11 +727,17 @@ impl TextShaper {
             },
             AlignmentOptions::default(),
         );
-        ShapedText {
+        let strut = self.strut(fonts, request);
+        let mut shaped = ShapedText {
             layout,
             grounds: request.grounds.to_vec(),
             spacing_ids,
-        }
+            strut,
+            line_shifts: Vec::new(),
+            height: 0.0,
+        };
+        shaped.apply_strut();
+        shaped
     }
 }
 
@@ -653,6 +814,14 @@ pub struct ShapedText {
     /// The ids of the boxes that are [`InlineSpacing`]s rather than replaced
     /// elements, ascending. Filtered out of [`ShapedText::emit`].
     spacing_ids: Vec<u64>,
+    /// The block's strut, or `None` when its stack resolved to no face.
+    strut: Option<Strut>,
+    /// Per line, how far [`ShapedText::emit`] moves that line's items down to
+    /// make room for the strut. All zeroes — and never consulted — for a text
+    /// whose lines already cover it.
+    line_shifts: Vec<f32>,
+    /// The layout's height with the strut applied.
+    height: f32,
 }
 
 impl std::fmt::Debug for ShapedText {
@@ -666,14 +835,86 @@ impl std::fmt::Debug for ShapedText {
 }
 
 impl ShapedText {
+    /// Re-run CSS 2.1 § 10.8 over the broken lines with the strut included.
+    ///
+    /// For each line parley has already answered with an `over` (its baseline
+    /// minus the top of its line box) and an `under` (the rest of its line
+    /// height), both being the maximum over the runs and boxes that landed on
+    /// it. The strut is one more participant in exactly those two maxima:
+    ///
+    /// ```text
+    /// over'  = max(over,  strut.over)
+    /// under' = max(under, strut.under)
+    /// ```
+    ///
+    /// The lines are then restacked by parley's own rule — the top of each line
+    /// is the running total of the *exact* line heights, rounded for painting,
+    /// and the baseline is that top plus `over'` (`line_break.rs:1295-1300`) —
+    /// and each line's items move by the difference between its new baseline
+    /// and its old one.
+    ///
+    /// **A text that already covers its strut is left exactly as parley left
+    /// it**: every `max` is a no-op, the recurrence reproduces parley's own
+    /// `line_y`, every shift is zero and [`Self::height`] is
+    /// `Layout::height()` unchanged rather than a re-derived value that might
+    /// differ in its last bit.
+    fn apply_strut(&mut self) {
+        self.line_shifts.clear();
+        self.height = self.layout.height();
+        let Some(strut) = self.strut else {
+            return;
+        };
+        let mut shifts = Vec::with_capacity(self.layout.lines().count());
+        let mut grown = false;
+        // parley accumulates in `f64` because `f32` loses the exact line height
+        // over a long document (`line_break.rs:262`), so this does too.
+        let mut y = 0.0f64;
+        let mut total = 0.0f64;
+        let mut last: Option<(f32, bool)> = None;
+        for line in self.layout.lines() {
+            let metrics = line.metrics();
+            let over = metrics.baseline - metrics.block_min_coord;
+            let under = metrics.line_height - over;
+            let over = over.max(strut.over);
+            let under = under.max(strut.under);
+            let line_height = over + under;
+            grown |= line_height != metrics.line_height;
+            let top = y.round() as f32;
+            shifts.push(top + over - metrics.baseline);
+            y += f64::from(line_height);
+            total += f64::from(line_height);
+            last = Some((line_height, line.items().next().is_none()));
+        }
+        // parley drops the last line's height when that line holds nothing —
+        // the empty line a layout ending in a newline produces
+        // (`line_break.rs:1346-1351`). Dropping it here too is what keeps this
+        // an adjustment of parley's answer rather than a second opinion.
+        if let Some((line_height, empty)) = last
+            && empty
+        {
+            total -= f64::from(line_height);
+        }
+        if grown || shifts.iter().any(|&s| s != 0.0) {
+            self.height = total as f32;
+            self.line_shifts = shifts;
+        }
+    }
+
+    /// How far line `index`'s items move for the strut. Zero unless
+    /// [`Self::apply_strut`] found the block's own font taller than the line.
+    fn line_shift(&self, index: usize) -> f32 {
+        self.line_shifts.get(index).copied().unwrap_or(0.0)
+    }
+
     /// The widest line's advance. Not the column it was broken at.
     pub fn width(&self) -> f32 {
         self.layout.width()
     }
 
-    /// Total height of every line.
+    /// Total height of every line, including the block's strut — CSS 2.1
+    /// § 10.8. See [`Self::apply_strut`].
     pub fn height(&self) -> f32 {
-        self.layout.height()
+        self.height
     }
 
     /// How many lines the text broke into.
@@ -745,7 +986,7 @@ impl ShapedText {
         self.layout
             .lines()
             .next()
-            .map(|line| line.metrics().baseline)
+            .map(|line| line.metrics().baseline + self.line_shift(0))
             .unwrap_or(0.0)
     }
 
@@ -763,6 +1004,8 @@ impl ShapedText {
             },
             AlignmentOptions::default(),
         );
+        // The lines are different lines now, so their extents are too.
+        self.apply_strut();
     }
 
     /// **The walk.** Append this text's positioned items, translated so the
@@ -803,7 +1046,11 @@ impl ShapedText {
         origin_y: f32,
         out: &mut Vec<DisplayItem>,
     ) -> Result<(), FontError> {
-        for line in self.layout.lines() {
+        for (line_index, line) in self.layout.lines().enumerate() {
+            // Every `y` below is measured from this line's baseline, so the
+            // strut correction is one addend applied to the origin rather than
+            // to each item. See `apply_strut`.
+            let origin_y = origin_y + self.line_shift(line_index);
             // Grounds first, because `BlockDisplay::items` is paint order and a
             // ground is by definition behind the glyphs it belongs to.
             //
