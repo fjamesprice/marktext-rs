@@ -262,6 +262,36 @@ serde = { version = "1", default-features = false, features = ["std", "derive"] 
 serde_json = "1"
 toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
 
+# **M3 S4, and D1 is why it is one line rather than three.** §12.2 and the M0
+# stubs planned a two-backend renderer — `vello` on `wgpu` by default with
+# `tiny-skia` as the CPU fallback — and §4 struck both halves before any of it
+# was written: C2, because `tiny-skia`'s own README puts text rendering out of
+# scope and a backend that cannot draw a character is not a fallback; C1/D1,
+# because E2 measured `wgpu` + `vello` at **+4,317,696 B** of `dist` on top of
+# a 2,481,664 B binary that already draws everything M3 needs. So `vello_cpu`
+# is the whole graphics stack, and neither `wgpu` nor `tiny-skia` appears in
+# the M3 dependency graph at all.
+#
+# Default features, deliberately: `std`, `png`, `text` and `u8_pipeline`.
+# `text` is what `RenderContext::glyph_run` lives behind, and `png` is what
+# makes D19's pixel goldens cost **zero** new dependencies — `Pixmap::into_png`
+# and `Pixmap::from_png` both arrive with it. `multithreading` is *not* a
+# default and is not enabled: D17 fixes a frame as `num_threads: 0`, and a
+# frame rate quoted without the thread count is two measurements wearing one
+# label.
+#
+# It brings `vello_common`, and with it `peniko` and `kurbo` — which is exactly
+# the boundary `display.rs`'s module doc says sits at the `mt-layout` →
+# `mt-render` seam. `mt-render` names no parley type and takes no parley
+# dependency (D16); the font handle it draws with is `peniko::FontData`,
+# re-exported through `vello_cpu` itself, so the seam costs no second line.
+#
+# `cargo xtask deps` is unaffected: its `FORBIDDEN_THIRD_PARTY` list is
+# enforced against the four HEADLESS crates only, and it compares dependency
+# names for **equality**, so `vello_cpu` is not `vello`. `mt-render` is the
+# first crate in the graph permitted to rasterize, and it is not headless.
+vello_cpu = "0.2"
+
 # **Dev-only, and only `mt-layout`'s.** An oracle's whole value is
 # independence: S2's gate asks for the *visual order* of a bidi line to be
 # asserted, and expectations transcribed from parley's own output would make

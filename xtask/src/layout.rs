@@ -1890,4 +1890,142 @@ mod tests {
         );
         assert!(themes_must_differ(&produced).is_empty());
     }
+
+    // -----------------------------------------------------------------------
+    // M3 S4 — the smoke render
+    // -----------------------------------------------------------------------
+
+    /// The margin the smoke render frames the content column in, in px.
+    ///
+    /// Purely the *caller's* framing choice — a viewport origin is a scroll
+    /// offset and picking one is what a shell does. `mt-render` derives no
+    /// coordinate from it beyond D18's translate.
+    const SMOKE_MARGIN: f32 = 24.0;
+
+    /// Render `bench/corpus/block-kinds.md` at both themes to PNG, for a human
+    /// to look at.
+    ///
+    /// # Why this is a gated test and not `cargo xtask render`
+    ///
+    /// D19's instrument — one image per (block kind × theme), cropped to the
+    /// block's `bounds`, compared for **exact** equality first — is a later
+    /// phase of S4 with its own format, its own three-platform question and its
+    /// own pre-flight assertions. Building it now would freeze a golden before
+    /// the paint it shows has been cross-checked against the theme and the
+    /// reference, which is precisely the ordering M3-R6 says loses: *a golden
+    /// freezes whatever it is shown.*
+    ///
+    /// What S4 needs first is for somebody to **look at a frame**. So: set
+    /// `MT_RENDER_PNG_DIR` to a directory and this writes
+    /// `block-kinds.<theme>.png` into it. Unset — which is every CI run and
+    /// every ordinary `cargo test` — it asserts the harness still assembles and
+    /// writes nothing.
+    ///
+    /// # D16's mitigation is the first thing it does
+    ///
+    /// *"Two orderings that drift is exactly the failure `fonts.rs:751-771`
+    /// prevents on one side and nothing prevents on the other."* So the table
+    /// is built from the same [`Provenance::face_list`] in the same order
+    /// [`build_collection`] used, and then **asserted** against
+    /// `Fonts::file_name` index by index before a pixel is drawn. A wrong face
+    /// produces a perfectly well-formed PNG, which is
+    /// [`assert_corpus_fully_covered`]'s argument pointed at a second artifact.
+    #[test]
+    fn block_kinds_renders_to_a_png_a_human_can_look_at() {
+        use mt_render::{Frame, FrameStats, Pixels, Renderer};
+
+        let repo_root = root();
+        let provenance = Provenance::read(&repo_root).expect("provenance");
+        let mut fonts = build_collection(&repo_root, &provenance).expect("collection");
+
+        // D16's table, built beside the collection rather than from it.
+        let font_dir = repo_root.join("assets").join("fonts");
+        let mut table = mt_render::FontTable::new();
+        for face in &provenance.face_list.faces {
+            let bytes = std::fs::read(font_dir.join(&face.file)).expect("face file");
+            // Index 0: every one of the twelve bundled faces is a single-font
+            // file. A `.ttc` would need the index its family was registered
+            // under, which is the number `Fonts` keyed on.
+            let id = table.push(mt_render::FontData::new(bytes.into(), 0));
+            assert_eq!(
+                fonts.file_name(id),
+                Some(face.file.as_str()),
+                "D16: the font table and the Fonts collection have drifted at {id}"
+            );
+        }
+        assert_eq!(
+            table.len(),
+            fonts.len(),
+            "D16: the table must be exactly as long as the collection"
+        );
+
+        let name = "block-kinds.md";
+        let text = std::fs::read_to_string(repo_root.join("bench").join("corpus").join(name))
+            .expect("the corpus input")
+            .replace("\r\n", "\n");
+        let (parse_opts, _) = parse_options(name);
+        let parsed = mt_md::parse(&text, parse_opts);
+        let options = layout_options(&parse_opts, parsed.labels.clone(), &parsed.document);
+
+        let out_dir = std::env::var_os("MT_RENDER_PNG_DIR").map(PathBuf::from);
+        let mut shaper = TextShaper::new();
+        let mut renderer = mt_render::VelloCpuRenderer::new(table);
+
+        for theme in &themes() {
+            let list = layout_with(
+                &parsed.document,
+                theme,
+                f32::INFINITY,
+                &mut fonts,
+                &mut shaper,
+                &options,
+            )
+            .expect("layout");
+
+            let viewport = mt_layout::Rect::new(
+                -SMOKE_MARGIN,
+                -SMOKE_MARGIN,
+                list.width + 2.0 * SMOKE_MARGIN,
+                list.height + 2.0 * SMOKE_MARGIN,
+            );
+            let width = viewport.width.ceil() as u16;
+            let height = viewport.height.ceil() as u16;
+            let frame = Frame {
+                viewport,
+                background: Brush::resolve(theme.colors.editor_bg, Brush::default()),
+            };
+            let mut target = Pixels::new(width, height);
+            let stats: FrameStats = renderer.render(&list, &frame, &mut target).expect("render");
+
+            // The whole document is in the viewport, so culling must have kept
+            // every block. This is the half of D18 a smoke render can check.
+            assert_eq!(stats.blocks_total, list.blocks.len());
+            assert_eq!(
+                stats.blocks_drawn, stats.blocks_total,
+                "the viewport contains the whole list, so nothing may be culled"
+            );
+            assert!(stats.items_drawn > 0, "a blank frame is not a smoke render");
+            assert!(
+                !target.is_blank(),
+                "{} at {} painted no pixel",
+                name,
+                theme.name
+            );
+
+            let Some(dir) = out_dir.as_ref() else {
+                continue;
+            };
+            let png = target.to_png().expect("encode");
+            let path = dir.join(format!("block-kinds.{}.png", theme.name));
+            std::fs::write(&path, &png).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            println!(
+                "wrote   {} ({width}x{height}, {} B) — {} blocks, {} items, {} clipped",
+                path.display(),
+                png.len(),
+                stats.blocks_drawn,
+                stats.items_drawn,
+                stats.blocks_clipped,
+            );
+        }
+    }
 }

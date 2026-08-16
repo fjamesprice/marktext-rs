@@ -1,6 +1,6 @@
 [package]
 name = "mt-render"
-description = "Display list to pixels: GPU (vello/wgpu) with a CPU (tiny-skia) fallback."
+description = "Display list to pixels, on vello_cpu alone."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,3 +9,23 @@ repository.workspace = true
 
 [dependencies]
 mt-layout.workspace = true
+# The whole graphics stack — see the workspace dependency's own note for why
+# `wgpu`, `vello` and `tiny-skia` are all absent (M3 §4 C1/C2, §5 D1). It also
+# carries `peniko` and `kurbo` by re-export, which is what lets D16's font
+# table be typed without a parley dependency.
+vello_cpu.workspace = true
+
+# **Dev-only, and it buys one thing: a `NodeId`.** `BlockDisplay::node` is
+# typed `mt_doc::NodeId` (D8) and that type has no public constructor — it is a
+# generational arena slot and `mt-doc` is the only crate entitled to mint one.
+# So a unit test here cannot build a `BlockDisplay` at all without this line,
+# and the block-level halves of S4's gate — *a block clips to its bounds*,
+# *culling excludes a block outside the viewport* — are block-level assertions.
+#
+# It costs nothing that is not already paid: `mt-doc` is the bottom of the
+# workspace and is already compiled as a dependency of `mt-layout`, it carries
+# no third-party code of its own that this crate does not already build, and
+# being a dev-dependency it is not in the shipped graph. The same edge, for the
+# same reason, is recorded in `xtask/Cargo.toml`.
+[dev-dependencies]
+mt-doc.workspace = true

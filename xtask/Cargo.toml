@@ -65,3 +65,18 @@ mt-highlight.workspace = true
 # and now `mt-highlight`, so this line names an existing edge rather than adding
 # one.
 fancy-regex.workspace = true
+
+# **M3 S4, and dev-only on purpose.** `cargo xtask render` — D19's pixel
+# goldens, with their own format and their own pre-flight assertions — is a
+# later phase of this stage. What exists now is the smoke render in
+# `layout::tests::block_kinds_renders_to_a_png_a_human_can_look_at`, gated
+# behind `MT_RENDER_PNG_DIR` so that it writes nothing on an ordinary
+# `cargo test` and nothing lands in the repository.
+#
+# It is a `[dev-dependencies]` line rather than a `[dependencies]` one because
+# nothing in `xtask`'s command surface renders yet, and a dependency declared
+# before the command that needs it is how a subcommand gets built by accident.
+# It costs one crate: `mt-render`'s own dependency is `vello_cpu`, which
+# nothing else here pulls in, and `mt-layout` is already above.
+[dev-dependencies]
+mt-render.workspace = true
