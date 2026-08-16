@@ -66,17 +66,32 @@ mt-highlight.workspace = true
 # one.
 fancy-regex.workspace = true
 
-# **M3 S4, and dev-only on purpose.** `cargo xtask render` — D19's pixel
-# goldens, with their own format and their own pre-flight assertions — is a
-# later phase of this stage. What exists now is the smoke render in
-# `layout::tests::block_kinds_renders_to_a_png_a_human_can_look_at`, gated
-# behind `MT_RENDER_PNG_DIR` so that it writes nothing on an ordinary
-# `cargo test` and nothing lands in the repository.
+# **M3 S4.** This started the same day as a `[dev-dependencies]` line, on the
+# rule that *a dependency declared before the command that needs it is how a
+# subcommand gets built by accident*. `cargo xtask frames` is that command:
+# D17's scroll measurement (`src/frames.rs`) renders `bench/corpus/5mb.md`
+# through `mt_render::Renderer` at nine scroll offsets, and D1's verdict is read
+# off its output. So the edge moves up here, having earned it, rather than
+# having been anticipated.
 #
-# It is a `[dev-dependencies]` line rather than a `[dependencies]` one because
-# nothing in `xtask`'s command surface renders yet, and a dependency declared
-# before the command that needs it is how a subcommand gets built by accident.
-# It costs one crate: `mt-render`'s own dependency is `vello_cpu`, which
-# nothing else here pulls in, and `mt-layout` is already above.
-[dev-dependencies]
+# **Why the measurement lives in `xtask` and not in `crates/mt-render/benches/`,
+# which is where `crates/mt-inline/benches/tokenizer.rs` sets the precedent.**
+# A frame must be timed over *the display list the goldens describe*, and
+# building that one takes five things `xtask` already has and `mt-render` has
+# none of: `Provenance::read` + `build_collection` (the sha256-verified twelve
+# faces, registered in `faces.toml` order, which is what makes a `FontId` mean
+# anything), `parse_options`, and `layout_options` — which carries D15's
+# highlight spans, so without it `5mb.md`'s 1,954 fences lay out as *fewer,
+# longer, uncoloured glyph runs* and the frame timed is a frame over a different
+# document. A bench target on `mt-render` would have to duplicate all of it and
+# take `mt-md` and `mt-highlight` as new dev-dependencies to do so, which is a
+# second opinion about how the corpus is laid out — the one thing a measurement
+# that will be compared against a golden must not have. D17 also expects it
+# here: *"`xtask` has no timing convention to inherit and this is the first
+# one."*
+#
+# It costs one crate: `mt-render`'s own dependency is `vello_cpu`, which nothing
+# else here pulls in, and `mt-layout` is already above. Every `cargo xtask
+# <anything>` now compiles it; that is the price of the command, recorded here
+# rather than discovered.
 mt-render.workspace = true

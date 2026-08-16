@@ -15,6 +15,7 @@
 //! | `normalize` | `normalizeHtml` vs `spec/runner.ts`'s | M2 §10, owed since M0 |
 //! | `corpus` | Generate `bench/corpus/` | §14 step 4 |
 //! | `layout` | Textual layout goldens for every corpus file × theme | M3 §5 D10 |
+//! | `frames` | Scroll frame time on `5mb.md` through `vello_cpu` | M3 §5 D17/D18 |
 //! | `grammars` | Regenerate `mt-highlight`'s grammar tables from a loaded Prism | M3 §5 D14 |
 //! | `highlight` | Highlight-span differential against Prism, over every corpus fence | M3 §5 D14/D15 |
 //! | `fuzz-seed` | Write `fuzz/corpus/` from the sweep's inputs | M1 §5 D6 |
@@ -27,6 +28,7 @@ mod corpus;
 mod deps;
 mod diff;
 mod divergences;
+mod frames;
 mod fuzz;
 mod grammars;
 mod highlight;
@@ -113,6 +115,23 @@ COMMANDS:
         --measure          Print the would-be full serialization size of every
                            input at both themes. This is the measurement the
                            three digest goldens were cut from.
+    frames [OPTIONS]     Time one scroll frame — D18's cull plus the encode
+                         plus vello_cpu's render_with — over a display list
+                         laid out once and reused, at scroll offsets sampled
+                         across the document (docs/M3.md §5 D17/D18). Prints
+                         one key=value line per measurement; aggregate across
+                         N launches outside the process. Refuses to run in a
+                         debug profile. See bench/RENDER.md.
+        --input <NAME>     A bench/corpus/ file. Default: 5mb.md.
+        --theme <NAME>     muya-default | dark. Default: dark.
+        --viewport <WxH>   Default: 1200x800, MarkText's own default editor
+                           window content size.
+        --offsets <N>      Scroll offsets, evenly spaced across the scrollable
+                           range, endpoints included. Default: 9.
+        --passes <N>       Sweeps of the offsets. Pass 1 is the primary; later
+                           passes see a warm glyph cache. Default: 2.
+        --allow-debug      Run in a debug profile anyway. The figure is not
+                           comparable with anything and is not D17's.
     grammars [OPTIONS]   Regenerate crates/mt-highlight/src/generated.rs from a
                          fully-loaded Prism in the marktext clone (docs/M3.md
                          §5 D14). Emits the ported languages of
@@ -157,6 +176,7 @@ fn main() {
         "normalize" => normalize::main(&root, rest),
         "corpus" => corpus::main(&root, rest),
         "layout" => layout::main(&root, rest),
+        "frames" => frames::main(&root, rest),
         "grammars" => grammars::main(&root, rest),
         "highlight" => highlight::main(&root, rest),
         "fuzz-seed" => fuzz::main(&root, rest),

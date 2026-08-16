@@ -232,7 +232,12 @@ pub(crate) fn parse_options(input: &str) -> (mt_md::Options, String) {
 /// `mt-layout` takes no dependency on `mt-highlight`, so spans are computed
 /// here and handed down — see [`code_spans`]. This harness is the shell for
 /// both halves of D15 and is the only one in the repository today.
-fn layout_options(
+///
+/// `pub(crate)` since M3 S4: `crate::frames` must lay `5mb.md` out with the
+/// *same* options this harness laid the golden out with, highlight spans
+/// included. A frame timed over an unhighlighted display list is a frame over
+/// fewer, longer glyph runs than the one the goldens describe.
+pub(crate) fn layout_options(
     parse: &mt_md::Options,
     labels: mt_inline::Labels,
     document: &mt_doc::Document,
@@ -340,7 +345,10 @@ pub(crate) fn inputs(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 /// The two shipped themes, in the order goldens are generated.
-fn themes() -> [Theme; 2] {
+///
+/// `pub(crate)` since M3 S4 — `crate::frames` selects one of these by name so
+/// that `--theme dark` means the same object the `5mb.dark.txt` header does.
+pub(crate) fn themes() -> [Theme; 2] {
     [Theme::muya_default(), Theme::dark()]
 }
 
@@ -709,7 +717,13 @@ fn file_name(path: &Path) -> String {
 /// move. D10's own text says the order of `[[face]]` entries "is a
 /// golden-changing event on the same footing as moving the parley pin"; without
 /// this field that sentence has no artifact behind it.
-struct Provenance {
+///
+/// `pub(crate)` since M3 S4: `crate::frames` needs the same face list, in the
+/// same order, to build D16's font table beside the collection. Reading
+/// `faces.toml` a second time there would give the measurement its own opinion
+/// about which faces are registered under which id, and D16's single failure
+/// mode is exactly two orderings that drifted.
+pub(crate) struct Provenance {
     /// The exact commit `Cargo.lock` resolved parley to.
     parley_rev: String,
     /// SHA-256 of `assets/fonts/faces.toml`, CRLF-normalised.
@@ -717,11 +731,11 @@ struct Provenance {
     /// `[meta] revision` from the face list.
     faces_revision: u32,
     /// The parsed face list, so the collection builder does not re-read it.
-    face_list: mt_layout::FaceList,
+    pub(crate) face_list: mt_layout::FaceList,
 }
 
 impl Provenance {
-    fn read(repo_root: &Path) -> Result<Provenance, String> {
+    pub(crate) fn read(repo_root: &Path) -> Result<Provenance, String> {
         let faces_path = repo_root.join("assets").join("fonts").join("faces.toml");
         let faces_src = std::fs::read_to_string(&faces_path)
             .map_err(|e| format!("cannot read {}: {e}", faces_path.display()))?
@@ -795,7 +809,12 @@ fn parley_rev_from_lock(lock: &str) -> Option<String> {
 /// D7: *"`mt-layout` never enumerates or opens a font."* This function is the
 /// shell that does the I/O, and it is the whole of it — the loop below is the
 /// one `crates/mt-layout/tests/fonts.rs` documents, plus the two gates.
-fn build_collection(repo_root: &Path, provenance: &Provenance) -> Result<Fonts, String> {
+///
+/// `pub(crate)` since M3 S4, for [`Provenance`]'s reason: `crate::frames` lays
+/// `5mb.md` out through this same collection so that the display list it times
+/// a frame over is byte-for-byte the one `bench/layout-goldens/5mb.dark.txt`
+/// describes.
+pub(crate) fn build_collection(repo_root: &Path, provenance: &Provenance) -> Result<Fonts, String> {
     let dir = repo_root.join("assets").join("fonts");
     let mut fonts = Fonts::new();
     let mut declared_total = 0u64;
