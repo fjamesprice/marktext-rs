@@ -8,32 +8,50 @@
 //!
 //! # Which blocks are clipped, and why the answer is not "all of them"
 //!
-//! D18 says *"a renderer must clip to `bounds` rather than assume
-//! containment"*, citing `display.rs:250-256` — a code fence's glyphs carry
+//! `display.rs:250-256` used to say *"a renderer must clip to `bounds` rather
+//! than assume containment"*. **S4 corrected that sentence at its source** —
+//! the rect is [`BlockDisplay::clip`](mt_layout::BlockDisplay::clip), the
+//! content box, because muya's `overflow: auto` sits on a child inside the
+//! padding — and what survives of it is the part this section is about: a code
+//! fence's glyphs carry
 //! coordinates right of `bounds.max_x()` because muya's default is
 //! `wrapCodeBlocks: false`, so a long line **scrolls rather than wraps**.
 //! [`BlockDisplay::overflow_x`](mt_layout::BlockDisplay::overflow_x) is how
 //! much horizontal range that clipping hides.
 //!
-//! **Applied unconditionally, that rule erases things that are not overflow**,
-//! and the display list already in the tree says by how much. Scanning the 24
-//! committed goldens for items that leave their block's `bounds`:
+//! **Applied unconditionally to every block, that rule erases things that are
+//! not overflow**, and the display list already in the tree says by how much.
+//! Counting items whose extent leaves their block's `bounds`, over the **18 of
+//! 24** committed goldens that carry per-item detail — the other six are
+//! `DIGEST_INPUTS` and hold a checksum instead, so every figure here is a floor
+//! and not a total:
 //!
-//! | Items outside `bounds` | Count | `overflow_x` |
-//! |---|---:|---|
-//! | `table.cell` border rects, right and bottom | 3,132 | `0.00` |
-//! | `atx-heading` glyph runs, left | 210 | `0.00` |
-//! | `atx-heading` rects, bottom | 96 | `0.00` |
-//! | `list-item` / `task-list-item` markers, left | 56 | `0.00` |
-//! | `paragraph` glyph runs, right — by 0.08–0.54 px of trailing-space advance | 15 | `0.00` |
-//! | `html-block` glyph runs, right | 2 | **`15.69`, `63.69`** |
+//! | Items outside `bounds` | Count | Worst | `overflow_x` |
+//! |---|---:|---:|---|
+//! | `table.cell` border rects, right and/or bottom | 3,132 | 1.01 px | `0.00` |
+//! | `atx-heading` glyph runs (210) and bottom rects (96) | 306 | 9.00 px | `0.00` |
+//! | `list-item` markers and rects, left | 36 | 30.50 px | `0.00` |
+//! | `task-list-item` rects, left | 20 | 25.00 px | `0.00` |
+//! | `paragraph` glyph runs, right | 15 | 4.16 px | `0.00` |
+//! | `html-block` glyph runs, right | 2 | 49.30 px | **`15.69`, `63.69`** |
+//!
+//! **3,511 items, of which 2 are in a block that declares overflow.** Three of
+//! those rows were wrong when this table was first written and are corrected
+//! here: the ATX excursion was quoted as 7.20 px, which is the h2 case and not
+//! the worst (h1 is 30 px × 0.3 em = 9.00 px); the paragraph row was described
+//! as *"0.08–0.54 px of trailing-space advance"* when 10 of the 15 exceed
+//! 0.54 px and the widest is a 93-glyph run of real text 4.16 px past its
+//! column; and no version of it stated that six goldens were not scanned. The
+//! `table.cell` count is **not** among the corrections — a cell's bottom border
+//! escapes right *and* bottom, so 3,132 is the right answer for items even
+//! though it is the wrong one for excursions.
 //!
 //! A table cell's borders are 1 px *wider* than the cell because collapsed
 //! borders share a pixel — S1's own golden review recorded exactly that — so
 //! its right border sits entirely at `bounds.max_x()` and its bottom border
 //! entirely at `bounds.max_y()`. Clipping every block to its bounds deletes
-//! **both, in every cell of every table**, and deletes 7.20 px from the first
-//! glyph run of every ATX heading. That is a renderer inventing a defect and
+//! **both, in every cell of every table**, and deletes up to 9.00 px from the
+//! first glyph run of every ATX heading. That is a renderer inventing a defect and
 //! then freezing it in a golden that looks deliberate, which is the failure
 //! D18's own sentence is trying to prevent, pointing the other way.
 //!
@@ -46,9 +64,20 @@
 //!
 //! This is a **divergence from D18 as written** and it is recorded here rather
 //! than absorbed. The two other readings were considered and are worse: an
-//! unconditional clip loses 3,494 items the corpus can name, and a right-edge-
+//! unconditional clip loses 3,509 items the corpus can name, and a right-edge-
 //! only clip at `bounds.max_x()` still loses the last column's right border in
 //! every table.
+//!
+//! # One asymmetry, recorded rather than left to be found
+//!
+//! The clip rect is two-dimensional and `overflow_x` is one-dimensional, so a
+//! clipping block's glyphs are cut vertically as well as horizontally. That is
+//! faithful — `overflow: auto` clips both axes — but it means text exceeding
+//! its content box *vertically* would be lost with nothing reporting it.
+//! Neither of the two clipping blocks in the corpus does, so this is latent
+//! rather than a defect; it is written down because the same census shows
+//! items exceeding bounds vertically in other kinds, and the next block to
+//! both clip and do that would fail silently.
 //!
 //! # What is drawn, and what is deliberately not
 //!
@@ -66,11 +95,15 @@
 //! Neither is expressible in the theme model and neither has a MarkText number
 //! to transcribe, so both are named here rather than buried:
 //!
-//! 1. **Dash geometry.** CSS does not specify what `dashed` looks like. This
-//!    uses Blink's own ratio — dash and gap both `3 × width` — since the
-//!    reference *was* Chromium. `dotted` is `width` on, `width` off, with butt
-//!    caps; **no shipped theme uses it**, so the first theme that does is the
-//!    one that gets to argue about round dots.
+//! 1. **Dash geometry.** CSS deliberately leaves `dashed` undefined, so there
+//!    is nothing to transcribe. `3 × width` for dash and gap is **stated as
+//!    Blink's ratio and is unverified from this repository** — no Chromium
+//!    source is vendored here and the value was not measured against a running
+//!    build. It is recorded as an assumption rather than a citation, which is
+//!    the honest form: the number may well be right, and nothing here shows
+//!    that it is. `dotted` is `width` on, `width` off, with butt caps; **no
+//!    shipped theme uses either style**, so the first theme that does is the
+//!    one that gets to settle both.
 //! 2. **Variable-font instances.** `NotoEmoji[wght].ttf` is variable and the
 //!    display list carries no normalized coordinates —
 //!    [`mt_layout::GlyphRun`] has font, size, direction, range,
@@ -108,6 +141,30 @@ const CURVE_TOLERANCE: f64 = 0.1;
 /// time, because *a frame rate quoted without the thread count is two different
 /// measurements wearing one label*.
 pub const NUM_THREADS: u16 = 0;
+
+/// The SIMD level `vello_cpu` rasterizes with, pinned rather than detected.
+///
+/// # Why this is not `Level::new()`
+///
+/// `Level::new()` detects the host CPU's features and returns the best
+/// available — `Neon`, `Avx2`, `Sse4_2` or `Fallback` — and `vello_cpu` picks
+/// its fine-rasterization kernels from it. That makes the chosen kernel a
+/// property of **the machine that happened to pick up the job**, not of the OS.
+///
+/// D19 wants byte-identical PNGs across `windows-latest`, `macos-latest` and
+/// `ubuntu-latest`, and wants that *tested* rather than assumed. Detection
+/// leaves two axes in that experiment instead of one: macOS is a different
+/// architecture, which is expected and interesting — and **two x86-64 runners
+/// can differ from each other** if GitHub's fleet gives one an AVX2 host and
+/// the other not. That second axis is invisible, is not a property of anything
+/// in this repository, and would show up as a golden that passed for months and
+/// then failed with no change in the tree.
+///
+/// `Level::baseline()` is compile-time and `const`, and it is what
+/// `RenderSettings::default()` itself falls back to. Pinning costs nothing here
+/// — S4's frame budget is met 4.7× over at the median — and turns D19's
+/// question into the well-posed one: *does architecture alone change a pixel?*
+pub const RENDER_LEVEL: Level = Level::baseline();
 
 /// D1's backend.
 ///
@@ -153,7 +210,7 @@ impl VelloCpuRenderer {
                 1,
                 1,
                 RenderSettings {
-                    level: Level::new(),
+                    level: RENDER_LEVEL,
                     num_threads: NUM_THREADS,
                 },
             ),

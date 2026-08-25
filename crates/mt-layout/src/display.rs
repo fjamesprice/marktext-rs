@@ -360,8 +360,18 @@ pub struct BlockDisplay {
     /// comparing two images deserves to know which edge is measured and which
     /// is bounded.
     pub paint_bounds: Rect,
-    /// Everything to draw, **in paint order** — backgrounds before borders
-    /// before glyphs.
+    /// Everything to draw, **in paint order**.
+    ///
+    /// Usually that reads backgrounds before borders before glyphs, and a
+    /// renderer replays the order given rather than sorting — but *"backgrounds
+    /// before glyphs"* is a description of the common case and **not an
+    /// invariant this list satisfies**. `10kb.muya-default.txt:300-308` holds a
+    /// paragraph whose image-placeholder ground is emitted after two glyph
+    /// runs. Nothing is hidden there, because the ground and the runs do not
+    /// overlap; the first block where a placeholder *does* land under preceding
+    /// text will paint the ground over it. Recorded at S4 rather than repaired,
+    /// because the repair belongs where the items are emitted and no corpus
+    /// input asks for it yet.
     ///
     /// Paint order here and document order in [`DisplayList::blocks`] is not
     /// an inconsistency: a renderer needs one, incremental relayout needs the

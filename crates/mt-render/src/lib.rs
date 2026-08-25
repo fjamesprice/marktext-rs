@@ -24,7 +24,11 @@
 //! | Where | What | Why it is not layout |
 //! |---|---|---|
 //! | [`cpu`] | `Affine::translate((-viewport.x, -viewport.y))`, set once per frame | D18's named exception: the scroll offset |
-//! | [`cull`] | `Rect::max_x()`/`max_y()` on a block's `bounds` and on the viewport | comparing two rectangles the caller supplied invents no position |
+//! | [`cull`] | `Rect::max_x()`/`max_y()` on a block's `paint_bounds` and on the viewport | comparing two rectangles the caller supplied invents no position |
+//! | [`cpu`] | `Rect::max_x()`/`max_y()` in `to_kurbo` | the same `x + width`, on the way to kurbo's corner-pair form; every rect and every clip passes through here, which is why it is a row of its own rather than covered by the one above |
+//! | [`cpu`] | `Rect::new(0, 0, w, h)` for the ground, from the **target's** size | the ground is the surface, not a `DisplayItem`; no item is placed by it |
+//! | [`cpu`] | `RoundedRect::from_rect` corner arcs, and `to_path`'s flattening | realizing a shape the item asked for, the same class as the dash row below |
+//! | [`cpu`] | `rotation_deg.to_radians()` | a unit conversion of a number already on the item |
 //! | [`cpu`] | `kurbo::Rect::center()`, for [`FilledRect::rotation_deg`](mt_layout::FilledRect::rotation_deg) | the item says *"rotate me about my centre"*; the centre is a reading of the item, not a placement decision |
 //! | [`cpu`] | dash lengths as multiples of [`StrokedLine::width`](mt_layout::StrokedLine::width) | realizing a stroke style, the same class of work as rasterizing a glyph outline |
 //!
