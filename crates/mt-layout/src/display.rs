@@ -181,6 +181,21 @@ impl Rect {
     pub fn translated(&self, dx: f32, dy: f32) -> Rect {
         Rect::new(self.x + dx, self.y + dy, self.width, self.height)
     }
+
+    /// The smallest rectangle containing both.
+    ///
+    /// Added at S4 for [`BlockDisplay::paint_bounds`]. It takes the extremes
+    /// of both rectangles rather than assuming either contains the other,
+    /// because the case it exists for is precisely the one where an item
+    /// escapes its block on the left (a list marker, 30.50 px) as readily as
+    /// on the right.
+    pub fn union(&self, other: Rect) -> Rect {
+        let x = self.x.min(other.x);
+        let y = self.y.min(other.y);
+        let max_x = self.max_x().max(other.max_x());
+        let max_y = self.max_y().max(other.max_y());
+        Rect::new(x, y, max_x - x, max_y - y)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -250,8 +265,12 @@ pub struct BlockDisplay {
     ///
     /// [`bounds`](Self::bounds) is the box and stays the column. The
     /// [`Glyphs`](DisplayItem::Glyphs) inside it really do have coordinates to
-    /// the right of `bounds.max_x()`, and a renderer must therefore **clip to
-    /// `bounds`** rather than assume containment. This field is how much
+    /// the right of `bounds.max_x()`, and a renderer must therefore clip —
+    /// **to [`clip`](Self::clip), which is the content box, and not to
+    /// `bounds`.** Until S4 this sentence said `bounds`, `mt-render`
+    /// implemented it faithfully for a whole stage, and the difference was
+    /// 15.40 px of text painted over the block's own right border. This field
+    /// is how much
     /// horizontal scroll range that clipping hides, so S4 can draw a scrollbar
     /// without re-measuring the items.
     ///
@@ -259,6 +278,88 @@ pub struct BlockDisplay {
     /// word longer than the column overflows in exactly the same way, and
     /// reports it here for the same reason.
     pub overflow_x: f32,
+    /// The rect a renderer must clip this block's **content** to, or `None`
+    /// when nothing overflows.
+    ///
+    /// # Why this is not `bounds`, and the correction it carries
+    ///
+    /// Until S4 this field did not exist and
+    /// [`overflow_x`](Self::overflow_x) told a renderer to *"clip to
+    /// `bounds`"*. That instruction was wrong and `mt-render` implemented it
+    /// faithfully for a whole stage, which is the shape of defect S4's
+    /// cross-check exists to find before a golden freezes it.
+    ///
+    /// muya puts the padding and the border on the outer box and
+    /// `overflow: auto` on a **child** inside that padding
+    /// (`blockSyntax.css:198-215`, `:230-236`). Chromium's clip is therefore
+    /// the child's padding box — which, the child having no padding of its
+    /// own, is this block's **content** box. `bounds` is the *border* box, so
+    /// clipping there leaves `padding_right + border_width` unclipped: 15.40 px
+    /// under `muya-default`, 14.40 px under `dark`. Those pixels were not
+    /// landing on blank paper. Borders precede glyphs in [`items`](Self::items),
+    /// so the overflowing text composited **on top of the block's own right
+    /// border**, which Chromium never overdraws.
+    ///
+    /// # It clips content, not chrome
+    ///
+    /// The background and the four border rects belong to the *outer* box and
+    /// must not be clipped — clipping them to the content box would erase the
+    /// borders outright. In the display list that distinction is exactly
+    /// [`Glyphs`](DisplayItem::Glyphs) against the rest, and it is a rule a
+    /// renderer can follow by matching a variant rather than by computing a
+    /// box, which is what keeps D18 intact.
+    ///
+    /// That the rule is *safe* is not left to be believed:
+    /// `xtask`'s `only_glyphs_leave_the_content_box` asserts, over every corpus
+    /// file in both themes and before any golden is compared, that in a
+    /// clipping block every non-`Glyphs` item is inside `bounds` — so declining
+    /// to clip them changes no pixel. If a block ever falsifies it, the rule has
+    /// to become per-item and the check says so in its own failure message.
+    ///
+    /// # One asymmetry, recorded rather than discovered later
+    ///
+    /// The rect is two-dimensional and `overflow_x` is one-dimensional. That is
+    /// faithful — `overflow: auto` clips both axes — but it means a block whose
+    /// text exceeded its content box *vertically* would lose the excess without
+    /// `overflow_x` ever reporting it. No block in the corpus does.
+    pub clip: Option<Rect>,
+    /// [`bounds`](Self::bounds) united with the extent of every item — what
+    /// this block can actually put on the page.
+    ///
+    /// # `bounds` is not a bound, and that surprises two consumers
+    ///
+    /// A block's items are **not** contained by its `bounds`, by design and in
+    /// quantity: **4,538** items across the 24 committed goldens lie outside
+    /// the block that owns them. A table cell's collapsed right and bottom
+    /// borders sit *on* `max_x`/`max_y` and so extend a pixel past; an ATX
+    /// heading's first run starts `-0.3 em` left of its block
+    /// (`inlineSyntax.css:335-337`), 9.00 px at h1; a list marker sits up to
+    /// 30.50 px left of the item it belongs to.
+    ///
+    /// Two consumers read the wrong rect without this field. **Culling** drops
+    /// a block whose `bounds` miss the viewport while its items reach into it,
+    /// losing a border row at one scroll offset in each 1 px band. And **D19's
+    /// per-kind golden crop** would cut a `list-item` to an image with no
+    /// bullet, and every one of the 1,044 `table.cell`s to two borders instead
+    /// of four — then freeze that as the reference.
+    ///
+    /// It is computed here because `mt-layout` owns geometry (D18), and
+    /// because a pad guessed downstream would be a guess: the excursion is not
+    /// constant within a kind, ranging 13.60 to 30.50 px inside `list-item`
+    /// alone.
+    ///
+    /// # Exact for rects, conservative for glyphs
+    ///
+    /// A [`GlyphRun`] carries an advance and a baseline but no ascent or
+    /// descent, so [`DisplayItem::extent`] takes its vertical span as
+    /// `font_size` above the baseline and 30 % of `font_size` below. That
+    /// over-covers rather than under-covers, which is the safe direction for
+    /// both consumers — culling keeps a block it might have dropped, and a crop
+    /// pads where it might have cut. It is stated here rather than left in the
+    /// helper because a golden's crop rect is derived from it and a reader
+    /// comparing two images deserves to know which edge is measured and which
+    /// is bounded.
+    pub paint_bounds: Rect,
     /// Everything to draw, **in paint order** — backgrounds before borders
     /// before glyphs.
     ///
@@ -297,6 +398,51 @@ pub enum DisplayItem {
     /// A stroked straight line: the thematic break, and any border a theme
     /// gives a style other than `solid`.
     Line(StrokedLine),
+}
+
+impl DisplayItem {
+    /// The rectangle this item can paint inside.
+    ///
+    /// Exact for [`Rect`](Self::Rect), [`Line`](Self::Line) and
+    /// [`InlineBox`](Self::InlineBox); conservative for
+    /// [`Glyphs`](Self::Glyphs), for the reason
+    /// [`BlockDisplay::paint_bounds`] states. Feeding
+    /// [`BlockDisplay::paint_bounds`] is its whole purpose, and D19's crop is
+    /// its second caller.
+    ///
+    /// A rotated [`FilledRect`] reports its **unrotated** rect. Every rotation
+    /// in the corpus is a table-sort caret inside its cell, so this has never
+    /// been the outer edge of anything; a rotation that did escape its block
+    /// would under-report here, and that is a known edge rather than a claim
+    /// it cannot happen.
+    pub fn extent(&self) -> Rect {
+        match self {
+            // Visual order is baked into the positions, so the first glyph's
+            // origin is not necessarily the left edge in an RTL run. Taking
+            // both ends and ordering them is what makes this correct for
+            // `rtl.md` rather than only for the Latin case.
+            DisplayItem::Glyphs(g) => {
+                let (x0, x1) = if g.advance >= 0.0 {
+                    (g.offset, g.offset + g.advance)
+                } else {
+                    (g.offset + g.advance, g.offset)
+                };
+                Rect::new(x0, g.baseline - g.font_size, x1 - x0, g.font_size * 1.3)
+            }
+            DisplayItem::InlineBox(b) => Rect::new(b.x, b.y, b.width, b.height),
+            DisplayItem::Rect(r) => r.rect,
+            DisplayItem::Line(l) => {
+                // A stroke is centred on its path, so it reaches half its
+                // width past each end and each side.
+                let h = l.width / 2.0;
+                let x0 = l.x0.min(l.x1) - h;
+                let y0 = l.y0.min(l.y1) - h;
+                let x1 = l.x0.max(l.x1) + h;
+                let y1 = l.y0.max(l.y1) + h;
+                Rect::new(x0, y0, x1 - x0, y1 - y0)
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

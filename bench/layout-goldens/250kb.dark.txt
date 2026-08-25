@@ -1,4 +1,4 @@
-layout-golden v4
+layout-golden v5
 theme          dark
 theme-width    750.00
 content-width  650.00
@@ -12,8 +12,8 @@ input-bytes    256224
 form           digest
 
 list           width=650.00 height=136905.47 blocks=2686
-full-sha256    59bdfb507a12ebd9b03fcaca075ef437728bb93c14646dfe71073782a0ed1e3d
-full-bytes     1566386
+full-sha256    b52bf13c0e8c0085e964ae6720a803bfb34f89c919871808875604e33f0e2580
+full-bytes     1612983
 count paragraph      962
 count atx-heading    490
 count setext-heading 0

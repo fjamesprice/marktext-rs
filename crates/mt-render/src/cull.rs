@@ -42,23 +42,34 @@ use mt_layout::{BlockDisplay, Rect};
 /// Whether two rectangles overlap, edges included.
 ///
 /// This is the only coordinate comparison in the crate, and every argument to
-/// it comes from either a [`BlockDisplay::bounds`] or the caller's viewport.
+/// it comes from either a [`BlockDisplay::paint_bounds`] or the caller's
+/// viewport.
 pub fn intersects(a: Rect, b: Rect) -> bool {
     a.x <= b.max_x() && b.x <= a.max_x() && a.y <= b.max_y() && b.y <= a.max_y()
 }
 
 /// Whether a block has to be drawn for this viewport — D18's whole content.
 ///
-/// # A note the caller does not have to act on, but a reviewer should read
+/// # It reads `paint_bounds`, and the reason is a defect this comment used to be
 ///
-/// This tests `bounds`, and `display.rs:250-256` says a block's *items* can
-/// reach past `bounds` horizontally. That is not a hole: everything past
-/// `bounds.max_x()` is what [`crate::cpu`] clips away, so an item outside the
-/// bounds of a block outside the viewport is doubly invisible. The direction it
-/// would matter in — an item reaching *into* the viewport from a block whose
-/// bounds do not — is the same case, and it is clipped for the same reason.
+/// Until S4 this tested `bounds` and argued the gap away: a block's items can
+/// reach past `bounds`, but *"everything past `bounds.max_x()` is what
+/// [`crate::cpu`] clips away, so an item outside the bounds of a block outside
+/// the viewport is doubly invisible."*
+///
+/// **The premise was false, and it was false when it was written.** The clip is
+/// conditional — [`crate::cpu`] clips only a block that declares overflow — and
+/// **4,538** items across the 24 committed goldens sit outside the block that
+/// owns them and are never clipped by anything. A table cell's bottom border
+/// lies entirely in `[bounds.max_y(), bounds.max_y() + 1]`, so testing `bounds`
+/// dropped a 1 px row that belonged at the top of the window, once in every 1 px
+/// band of scroll offset.
+///
+/// [`BlockDisplay::paint_bounds`] is the union `mt-layout` computes for exactly
+/// this question, and reading it keeps D18 intact: this crate still compares two
+/// rectangles it was handed and derives neither.
 pub fn is_visible_in(block: &BlockDisplay, viewport: Rect) -> bool {
-    intersects(block.bounds, viewport)
+    intersects(block.paint_bounds, viewport)
 }
 
 #[cfg(test)]

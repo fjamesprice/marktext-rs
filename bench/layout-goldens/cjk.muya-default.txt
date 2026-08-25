@@ -1,4 +1,4 @@
-layout-golden v4
+layout-golden v5
 theme          muya-default
 theme-width    800.00
 content-width  700.00
@@ -32,7 +32,7 @@ count table          1
 count table.row      3
 count footnote       0
 
-block 0 atx-heading bounds=[0.00 0.00 700.00 42.00] items=1
+block 0 atx-heading bounds=[0.00 0.00 700.00 42.00] paint=[-9.00 0.00 709.00 42.00] items=1
   glyphs font=OpenSans-Bold size=30.00 fill=#333333ff rtl=0 text=0..4 origin=[-9.00 32.00] advance=56.76 n=4 seq=c98fdf4f
 block 1 paragraph bounds=[0.00 58.00 700.00 102.40] items=21
   rect [0.00 61.56 48.77 20.02] fill=#00000008 radius=3.00
@@ -56,7 +56,7 @@ block 1 paragraph bounds=[0.00 58.00 700.00 102.40] items=21
   glyphs font=DejaVuSansMono size=12.80 fill=#4d4d4dff rtl=0 text=185..209 origin=[279.98 127.00] advance=184.95 n=24 seq=54afba61
   glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=209..220 origin=[470.05 127.00] advance=85.23 n=11 seq=9192a9b1
   glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=221..278 origin=[0.00 153.00] advance=411.09 n=56 seq=9034a64c
-block 2 atx-heading bounds=[0.00 176.40 700.00 34.60] items=2
+block 2 atx-heading bounds=[0.00 176.40 700.00 34.60] paint=[-7.20 176.40 707.20 34.60] items=2
   glyphs font=OpenSans-Bold size=24.00 fill=#333333ff rtl=0 text=0..1 origin=[-7.20 203.40] advance=6.23 n=1 seq=75c77f38
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=24.00 fill=#333333ff rtl=0 text=1..13 origin=[-0.97 203.40] advance=96.00 n=4 seq=2bec61e8
 block 3 paragraph bounds=[0.00 227.00 700.00 26.60] items=9
@@ -78,7 +78,7 @@ block 4 paragraph bounds=[0.00 261.60 700.00 26.60] items=8
   glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=57..58 origin=[304.00 280.60] advance=4.16 n=1 seq=3c0f7f14
   glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=58..71 origin=[308.16 280.60] advance=91.55 n=12 seq=ce6cc1e1
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=71..89 origin=[399.71 280.60] advance=96.00 n=6 seq=ef4444ed
-block 5 atx-heading bounds=[0.00 304.20 700.00 34.60] items=2
+block 5 atx-heading bounds=[0.00 304.20 700.00 34.60] paint=[-7.20 304.20 707.20 34.60] items=2
   glyphs font=OpenSans-Bold size=24.00 fill=#333333ff rtl=0 text=0..1 origin=[-7.20 331.20] advance=6.23 n=1 seq=a5e14079
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=24.00 fill=#333333ff rtl=0 text=1..13 origin=[-0.97 331.20] advance=96.00 n=4 seq=d082e42b
 block 6 paragraph bounds=[0.00 354.80 700.00 110.80] items=9
@@ -91,7 +91,7 @@ block 6 paragraph bounds=[0.00 354.80 700.00 110.80] items=9
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=49..52 origin=[0.00 457.80] advance=16.00 n=1 seq=74cedf1e
   rect [0.00 381.80 700.00 50.00] fill=#00000008 radius=2.00
   rect [15.00 396.80 20.00 20.00] fill=#6b737bff
-block 7 atx-heading bounds=[0.00 481.60 700.00 34.60] items=2
+block 7 atx-heading bounds=[0.00 481.60 700.00 34.60] paint=[-7.20 481.60 707.20 34.60] items=2
   glyphs font=OpenSans-Bold size=24.00 fill=#333333ff rtl=0 text=0..1 origin=[-7.20 508.60] advance=6.23 n=1 seq=8693b71e
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=24.00 fill=#333333ff rtl=0 text=1..10 origin=[-0.97 508.60] advance=72.00 n=3 seq=04816bbb
 block 8 paragraph bounds=[0.00 532.20 700.00 26.60] items=14
@@ -123,7 +123,7 @@ block 9 paragraph bounds=[0.00 566.80 700.00 26.60] items=13
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=88..94 origin=[479.91 585.80] advance=32.00 n=2 seq=c90d1580
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=94..97 origin=[511.91 585.80] advance=16.00 n=1 seq=00b72c8f
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=97..115 origin=[527.91 585.80] advance=96.00 n=6 seq=47376fa4
-block 10 atx-heading bounds=[0.00 609.40 700.00 34.60] items=2
+block 10 atx-heading bounds=[0.00 609.40 700.00 34.60] paint=[-7.20 609.40 707.20 34.60] items=2
   glyphs font=OpenSans-Bold size=24.00 fill=#333333ff rtl=0 text=0..1 origin=[-7.20 636.40] advance=6.23 n=1 seq=c123d656
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=24.00 fill=#333333ff rtl=0 text=1..10 origin=[-0.97 636.40] advance=66.24 n=3 seq=12a326c3
 block 11 paragraph bounds=[0.00 660.00 700.00 26.60] items=17
@@ -145,7 +145,7 @@ block 11 paragraph bounds=[0.00 660.00 700.00 26.60] items=17
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=68..83 origin=[332.03 679.00] advance=73.60 n=5 seq=685799fa
   glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=83..84 origin=[405.63 679.00] advance=4.20 n=1 seq=452071e8
 block 12 bullet-list bounds=[0.00 694.60 700.00 79.80] items=0
-block 13 list-item bounds=[30.00 694.60 670.00 26.60] items=1
+block 13 list-item bounds=[30.00 694.60 670.00 26.60] paint=[16.40 694.60 683.60 26.60] items=1
   rect [16.40 704.60 5.60 5.60] fill=#4d4d4dff radius=2.80
 block 14 paragraph bounds=[30.00 694.60 670.00 26.60] items=5
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=0..3 origin=[30.00 713.60] advance=14.72 n=1 seq=7fc8c35e
@@ -153,7 +153,7 @@ block 14 paragraph bounds=[30.00 694.60 670.00 26.60] items=5
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=4..10 origin=[48.88 713.60] advance=29.44 n=2 seq=f350cabe
   glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=10..11 origin=[78.32 713.60] advance=4.16 n=1 seq=91e67ca4
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=11..17 origin=[82.47 713.60] advance=29.44 n=2 seq=f7c4c601
-block 15 list-item bounds=[30.00 721.20 670.00 26.60] items=1
+block 15 list-item bounds=[30.00 721.20 670.00 26.60] paint=[16.40 721.20 683.60 26.60] items=1
   rect [16.40 731.20 5.60 5.60] fill=#4d4d4dff radius=2.80
 block 16 paragraph bounds=[30.00 721.20 670.00 26.60] items=5
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=0..3 origin=[30.00 740.20] advance=14.72 n=1 seq=44c6d886
@@ -161,7 +161,7 @@ block 16 paragraph bounds=[30.00 721.20 670.00 26.60] items=5
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=4..10 origin=[48.88 740.20] advance=29.44 n=2 seq=8101dec3
   glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=10..11 origin=[78.32 740.20] advance=4.16 n=1 seq=80ea919c
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=11..17 origin=[82.47 740.20] advance=29.44 n=2 seq=8a38d2fc
-block 17 list-item bounds=[30.00 747.80 670.00 26.60] items=1
+block 17 list-item bounds=[30.00 747.80 670.00 26.60] paint=[16.40 747.80 683.60 26.60] items=1
   rect [16.40 757.80 5.60 5.60] fill=#4d4d4dff radius=2.80
 block 18 paragraph bounds=[30.00 747.80 670.00 26.60] items=5
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=0..3 origin=[30.00 766.80] advance=14.72 n=1 seq=d91d15d7
@@ -169,7 +169,7 @@ block 18 paragraph bounds=[30.00 747.80 670.00 26.60] items=5
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=4..10 origin=[48.88 766.80] advance=29.44 n=2 seq=f8bfcc6b
   glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=10..11 origin=[78.32 766.80] advance=4.16 n=1 seq=725b4d25
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=11..17 origin=[82.47 766.80] advance=29.44 n=2 seq=f904bbdb
-block 19 atx-heading bounds=[0.00 790.40 700.00 33.60] items=1
+block 19 atx-heading bounds=[0.00 790.40 700.00 33.60] paint=[-7.20 790.40 707.20 33.60] items=1
   glyphs font=OpenSans-Bold size=24.00 fill=#333333ff rtl=0 text=0..14 origin=[-7.20 816.40] advance=169.61 n=14 seq=82e138ad
 block 20 paragraph bounds=[0.00 840.00 700.00 26.60] items=5
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=0..48 origin=[0.00 859.00] advance=256.00 n=16 seq=2712a879
@@ -179,57 +179,57 @@ block 20 paragraph bounds=[0.00 840.00 700.00 26.60] items=5
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=59..122 origin=[345.49 859.00] advance=336.00 n=21 seq=9dca62e5
 block 21 table bounds=[0.00 874.60 700.00 147.80] items=0
 block 22 table.row bounds=[0.00 890.60 202.16 38.60] items=0
-block 23 table.cell bounds=[0.00 890.60 58.00 38.60] items=5
+block 23 table.cell bounds=[0.00 890.60 58.00 38.60] paint=[0.00 890.60 59.00 39.60] items=5
   rect [0.00 890.60 59.00 1.00] fill=#e5e5e5ff
   rect [0.00 929.20 59.00 1.00] fill=#e5e5e5ff
   rect [0.00 891.60 1.00 37.60] fill=#e5e5e5ff
   rect [58.00 891.60 1.00 37.60] fill=#e5e5e5ff
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=0..6 origin=[13.00 915.60] advance=32.00 n=2 seq=f4ba57a5
-block 24 table.cell bounds=[58.00 890.60 74.00 38.60] items=5
+block 24 table.cell bounds=[58.00 890.60 74.00 38.60] paint=[58.00 890.60 75.00 39.60] items=5
   rect [58.00 890.60 75.00 1.00] fill=#e5e5e5ff
   rect [58.00 929.20 75.00 1.00] fill=#e5e5e5ff
   rect [58.00 891.60 1.00 37.60] fill=#e5e5e5ff
   rect [132.00 891.60 1.00 37.60] fill=#e5e5e5ff
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=0..6 origin=[79.00 915.60] advance=32.00 n=2 seq=7e9b5d05
-block 25 table.cell bounds=[132.00 890.60 70.16 38.60] items=5
+block 25 table.cell bounds=[132.00 890.60 70.16 38.60] paint=[132.00 890.60 71.16 39.60] items=5
   rect [132.00 890.60 71.16 1.00] fill=#e5e5e5ff
   rect [132.00 929.20 71.16 1.00] fill=#e5e5e5ff
   rect [132.00 891.60 1.00 37.60] fill=#e5e5e5ff
   rect [202.16 891.60 1.00 37.60] fill=#e5e5e5ff
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=0..6 origin=[157.16 915.60] advance=32.00 n=2 seq=742348cf
 block 26 table.row bounds=[0.00 929.20 202.16 38.60] items=0
-block 27 table.cell bounds=[0.00 929.20 58.00 38.60] items=5
+block 27 table.cell bounds=[0.00 929.20 58.00 38.60] paint=[0.00 929.20 59.00 39.60] items=5
   rect [0.00 929.20 59.00 1.00] fill=#e5e5e5ff
   rect [0.00 967.80 59.00 1.00] fill=#e5e5e5ff
   rect [0.00 930.20 1.00 37.60] fill=#e5e5e5ff
   rect [58.00 930.20 1.00 37.60] fill=#e5e5e5ff
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=0..6 origin=[13.00 954.20] advance=32.00 n=2 seq=95e49992
-block 28 table.cell bounds=[58.00 929.20 74.00 38.60] items=5
+block 28 table.cell bounds=[58.00 929.20 74.00 38.60] paint=[58.00 929.20 75.00 39.60] items=5
   rect [58.00 929.20 75.00 1.00] fill=#e5e5e5ff
   rect [58.00 967.80 75.00 1.00] fill=#e5e5e5ff
   rect [58.00 930.20 1.00 37.60] fill=#e5e5e5ff
   rect [132.00 930.20 1.00 37.60] fill=#e5e5e5ff
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=0..9 origin=[71.00 954.20] advance=48.00 n=3 seq=a89d8c52
-block 29 table.cell bounds=[132.00 929.20 70.16 38.60] items=5
+block 29 table.cell bounds=[132.00 929.20 70.16 38.60] paint=[132.00 929.20 71.16 39.60] items=5
   rect [132.00 929.20 71.16 1.00] fill=#e5e5e5ff
   rect [132.00 967.80 71.16 1.00] fill=#e5e5e5ff
   rect [132.00 930.20 1.00 37.60] fill=#e5e5e5ff
   rect [202.16 930.20 1.00 37.60] fill=#e5e5e5ff
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=0..9 origin=[145.00 954.20] advance=44.16 n=3 seq=edd13cf3
 block 30 table.row bounds=[0.00 967.80 202.16 38.60] items=0
-block 31 table.cell bounds=[0.00 967.80 58.00 38.60] items=5
+block 31 table.cell bounds=[0.00 967.80 58.00 38.60] paint=[0.00 967.80 59.00 39.60] items=5
   rect [0.00 967.80 59.00 1.00] fill=#e5e5e5ff
   rect [0.00 1006.40 59.00 1.00] fill=#e5e5e5ff
   rect [0.00 968.80 1.00 37.60] fill=#e5e5e5ff
   rect [58.00 968.80 1.00 37.60] fill=#e5e5e5ff
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=0..3 origin=[13.00 992.80] advance=16.00 n=1 seq=505560ea
-block 32 table.cell bounds=[58.00 967.80 74.00 38.60] items=5
+block 32 table.cell bounds=[58.00 967.80 74.00 38.60] paint=[58.00 967.80 75.00 39.60] items=5
   rect [58.00 967.80 75.00 1.00] fill=#e5e5e5ff
   rect [58.00 1006.40 75.00 1.00] fill=#e5e5e5ff
   rect [58.00 968.80 1.00 37.60] fill=#e5e5e5ff
   rect [132.00 968.80 1.00 37.60] fill=#e5e5e5ff
   glyphs font=NotoSansCJKsc-Regular-corpus-subset size=16.00 fill=#4d4d4dff rtl=0 text=0..3 origin=[87.00 992.80] advance=16.00 n=1 seq=afcb4a32
-block 33 table.cell bounds=[132.00 967.80 70.16 38.60] items=5
+block 33 table.cell bounds=[132.00 967.80 70.16 38.60] paint=[132.00 967.80 71.16 39.60] items=5
   rect [132.00 967.80 71.16 1.00] fill=#e5e5e5ff
   rect [132.00 1006.40 71.16 1.00] fill=#e5e5e5ff
   rect [132.00 968.80 1.00 37.60] fill=#e5e5e5ff

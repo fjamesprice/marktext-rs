@@ -275,14 +275,42 @@ impl Renderer for VelloCpuRenderer {
 
             // See this module's doc for why this is a predicate and not an
             // unconditional push.
-            let clipped = block.overflow_x > 0.0;
-            if clipped {
-                self.ctx
-                    .push_clip_layer(&to_kurbo(block.bounds).to_path(CURVE_TOLERANCE));
+            //
+            // **The rect is `clip`, not `bounds`, and that is S4's correction.**
+            // `bounds` is the border box; muya's `overflow: auto` sits on a
+            // child inside the padding, so the browser clips at the *content*
+            // box. Clipping at `bounds` left `padding_right + border_width`
+            // — 15.40 px under `muya-default` — painted over the block's own
+            // right border. `mt-layout` hands the rect over precisely so that
+            // this crate does not derive it (D18).
+            let clip = block.clip;
+            if clip.is_some() {
                 stats.blocks_clipped += 1;
             }
+            let mut clip_open = false;
 
             for item in &block.items {
+                // The clip covers **content, not chrome**. The background and
+                // the four borders belong to the outer box, and clipping them
+                // to the content box would erase them outright; in this list
+                // that distinction is exactly `Glyphs` against the rest, which
+                // is a variant match and not a computed box.
+                //
+                // Toggling on contiguous runs costs one push and one pop for a
+                // code block rather than one per glyph run, and is correct in
+                // whatever order the items arrive — which matters, because
+                // `items`' documented paint order is not one the corpus
+                // strictly satisfies.
+                let wants_clip = clip.is_some() && matches!(item, DisplayItem::Glyphs(_));
+                if wants_clip != clip_open {
+                    if let Some(rect) = clip.filter(|_| wants_clip) {
+                        self.ctx
+                            .push_clip_layer(&to_kurbo(rect).to_path(CURVE_TOLERANCE));
+                    } else {
+                        self.ctx.pop_layer();
+                    }
+                    clip_open = wants_clip;
+                }
                 match item {
                     DisplayItem::Glyphs(run) => {
                         if !run.brush.is_visible() || run.glyphs.is_empty() {
@@ -317,7 +345,7 @@ impl Renderer for VelloCpuRenderer {
                 }
             }
 
-            if clipped {
+            if clip_open {
                 self.ctx.pop_layer();
             }
         }
@@ -441,14 +469,48 @@ mod tests {
     }
 
     fn block(bounds: Rect, items: Vec<DisplayItem>) -> BlockDisplay {
+        // `paint_bounds` is derived here the same way `mt-layout` derives it,
+        // rather than being set to `bounds`. A helper that quietly made every
+        // test block self-contained would make the culling tests pass for a
+        // reason production never enjoys.
+        let paint_bounds = items
+            .iter()
+            .fold(bounds, |acc, item| acc.union(item.extent()));
         BlockDisplay {
             node: a_node(),
             kind: BlockKind::Paragraph,
             bounds,
             language: None,
             overflow_x: 0.0,
+            clip: None,
+            paint_bounds,
             items,
             text_map: None,
+        }
+    }
+
+    /// The face `assets/fonts/` ships, loaded into a one-entry table.
+    fn mono_table() -> (FontTable, mt_layout::FontId) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/fonts/DejaVuSansMono.ttf");
+        let bytes = std::fs::read(&path).expect("the bundled face is committed");
+        let mut table = FontTable::new();
+        let id = table.push(FontData::new(bytes.into(), 0));
+        (table, id)
+    }
+
+    /// Glyph 40 in DejaVu Sans Mono is `A` — any id with ink would do.
+    fn an_a(font: mt_layout::FontId, x: f32) -> GlyphRun {
+        GlyphRun {
+            font,
+            font_size: 16.0,
+            is_rtl: false,
+            text_range: 0..1,
+            baseline: 16.0,
+            offset: x,
+            advance: 9.6,
+            brush: RED,
+            glyphs: vec![Glyph { id: 40, x, y: 16.0 }],
         }
     }
 
@@ -880,28 +942,75 @@ mod tests {
         assert_eq!(b.painted_pixels(), 16);
     }
 
-    /// The obligation `display.rs:250-256` puts on a renderer: a block that
-    /// declares overflow has its items cut at `bounds`.
+    /// **S4's correction, in the two halves that make it a correction.** A
+    /// clipping block cuts its *content* at [`BlockDisplay::clip`] — the
+    /// content box — and leaves its *chrome* alone. The old version of this
+    /// test asserted the opposite of the second half: it clipped a `Rect` at
+    /// `bounds` and called that the contract, which is how 15.40 px of text
+    /// came to be painted over a border for a whole stage.
     #[test]
-    fn a_block_that_declares_overflow_clips_its_items_to_its_bounds() {
-        let wide = DisplayItem::Rect(FilledRect::new(Rect::new(0.0, 4.0, 20.0, 4.0), RED));
-        let mut overflowing = block(Rect::new(0.0, 0.0, 10.0, 20.0), vec![wide.clone()]);
-        overflowing.overflow_x = 10.0;
-        let contained = block(Rect::new(0.0, 0.0, 10.0, 20.0), vec![wide]);
+    fn a_clipping_block_cuts_its_glyphs_and_not_its_chrome() {
+        let (table, font) = mono_table();
 
-        let (clipped, stats) = draw(&list(vec![overflowing]));
+        // Chrome: a rect spanning the whole block, in a block whose clip is
+        // half as wide. It must survive in full — a border lives on the outer
+        // box and the browser never clips it.
+        let chrome = DisplayItem::Rect(FilledRect::new(Rect::new(0.0, 4.0, 20.0, 4.0), RED));
+        let mut b = block(Rect::new(0.0, 0.0, 20.0, 20.0), vec![chrome]);
+        b.overflow_x = 10.0;
+        b.clip = Some(Rect::new(0.0, 0.0, 10.0, 20.0));
+
+        let mut renderer = VelloCpuRenderer::new(table);
+        let mut target = Pixels::new(20, 20);
+        let stats = renderer
+            .render(&list(vec![b]), &frame(Brush::TRANSPARENT), &mut target)
+            .expect("no glyphs");
         assert_eq!(stats.blocks_clipped, 1);
-        assert_eq!(clipped.pixel(5, 5), [255, 0, 0, 255], "inside the bounds");
-        assert_eq!(clipped.pixel(15, 5), [0, 0, 0, 0], "past bounds.max_x()");
-        assert_eq!(clipped.painted_pixels(), 40);
-
-        let (unclipped, stats) = draw(&list(vec![contained]));
         assert_eq!(
-            stats.blocks_clipped, 0,
-            "a block with overflow_x == 0 is not clipped — see this module's doc"
+            target.pixel(15, 5),
+            [255, 0, 0, 255],
+            "chrome is not clipped: this pixel is past the clip and must survive"
         );
-        assert_eq!(unclipped.pixel(15, 5), [255, 0, 0, 255]);
-        assert_eq!(unclipped.painted_pixels(), 80);
+        assert_eq!(target.painted_pixels(), 80);
+
+        // Content: a glyph entirely to the right of the clip disappears.
+        let (table, font2) = mono_table();
+        assert_eq!(font, font2);
+        let mut b = block(
+            Rect::new(0.0, 0.0, 20.0, 20.0),
+            vec![DisplayItem::Glyphs(an_a(font2, 12.0))],
+        );
+        b.overflow_x = 10.0;
+        b.clip = Some(Rect::new(0.0, 0.0, 10.0, 20.0));
+
+        let mut renderer = VelloCpuRenderer::new(table);
+        let mut target = Pixels::new(20, 20);
+        renderer
+            .render(&list(vec![b]), &frame(Brush::TRANSPARENT), &mut target)
+            .expect("the face is in the table");
+        assert_eq!(
+            target.painted_pixels(),
+            0,
+            "a glyph wholly right of the clip is content, and content is cut"
+        );
+    }
+
+    /// The control for the test above: the same glyph, no clip, really does ink.
+    /// Without this, a clip that silently drew nothing at all would pass.
+    #[test]
+    fn the_same_glyph_unclipped_does_paint() {
+        let (table, font) = mono_table();
+        let b = block(
+            Rect::new(0.0, 0.0, 20.0, 20.0),
+            vec![DisplayItem::Glyphs(an_a(font, 12.0))],
+        );
+        let mut renderer = VelloCpuRenderer::new(table);
+        let mut target = Pixels::new(20, 20);
+        let stats = renderer
+            .render(&list(vec![b]), &frame(Brush::TRANSPARENT), &mut target)
+            .expect("the face is in the table");
+        assert_eq!(stats.blocks_clipped, 0);
+        assert!(target.painted_pixels() > 5);
     }
 
     // -- degenerate targets -------------------------------------------------

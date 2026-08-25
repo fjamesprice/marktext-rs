@@ -570,6 +570,22 @@ impl Planned {
         self.bounds.y + self.edges.top()
     }
 
+    /// The content box — `bounds` inset by border and padding.
+    ///
+    /// This is the rect [`BlockDisplay::clip`] carries, and it is the browser's
+    /// clip rather than an invention of this crate: muya's `overflow: auto`
+    /// sits on a child inside the outer box's padding, so Chromium clips at the
+    /// child's padding box, which is this.
+    fn content_box(&self) -> Rect {
+        let y = self.content_y();
+        Rect::new(
+            self.content_x,
+            y,
+            self.content_width,
+            (self.bounds.max_y() - self.edges.bottom() - y).max(0.0),
+        )
+    }
+
     /// How far the laid-out text runs past the content box's right edge.
     ///
     /// Non-zero for an unwrapped code block (`wrapCodeBlocks: false`, the muya
@@ -1696,12 +1712,24 @@ impl LayoutTree {
             }
         }
 
+        let overflow_x = b.overflow_x();
+
+        // Both of S4's seam fields, and both computed here because this crate
+        // owns geometry and the two consumers that need them (D18's renderer
+        // and D19's crop) are forbidden to derive them.
+        let clip = (overflow_x > 0.0).then(|| b.content_box());
+        let paint_bounds = items
+            .iter()
+            .fold(b.bounds, |acc, item| acc.union(item.extent()));
+
         Ok(BlockDisplay {
             node: b.node,
             kind: b.kind,
             bounds: b.bounds,
             language: b.language.clone(),
-            overflow_x: b.overflow_x(),
+            overflow_x,
+            clip,
+            paint_bounds,
             items,
             text_map: b.map.clone(),
         })

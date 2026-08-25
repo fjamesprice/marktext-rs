@@ -132,7 +132,7 @@ const DIGEST_INPUTS: [&str; 3] = ["250kb.md", "1mb.md", "5mb.md"];
 /// parley revision and the face digest, for exactly the reason D10 property 3
 /// puts those there. It also moves when a grammar is ported, which is the
 /// behaviour wanted: `mt-highlight`'s tables are an input to these goldens now.
-const FORMAT_VERSION: &str = "layout-golden v4";
+const FORMAT_VERSION: &str = "layout-golden v5";
 
 // ---------------------------------------------------------------------------
 // Parse options — per input, and visible in the header
@@ -544,6 +544,8 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
                 );
                 continue;
             }
+
+            only_glyphs_leave_the_content_box(&list, name, &theme.name)?;
 
             let digest = DIGEST_INPUTS.contains(&name.as_str());
             let detail = if digest {
@@ -969,6 +971,68 @@ fn assert_corpus_fully_covered(
     ))
 }
 
+/// **The rule `mt-render` leans on, checked instead of believed.**
+///
+/// `BlockDisplay::clip` is the content box, and a renderer applies it to
+/// `Glyphs` and to nothing else — because the background and the four border
+/// rects belong to the *outer* box, and clipping those to the content box would
+/// erase the block's own borders.
+///
+/// That is only safe if a clipping block's non-`Glyphs` items never needed the
+/// clip in the first place, i.e. if they are all inside `bounds`. Two blocks in
+/// the corpus clip, so this is a cheap check over a small set — and it is
+/// exactly the kind of assumption that was wrong last time: the sentence this
+/// replaces said a renderer must *"clip to `bounds`"* and was believed for a
+/// whole stage.
+///
+/// Fails rather than warns, and before any golden is compared, for the tofu
+/// check's reason: a wrongly clipped border makes a perfectly valid-looking
+/// golden.
+fn only_glyphs_leave_the_content_box(
+    list: &DisplayList,
+    input: &str,
+    theme: &str,
+) -> Result<(), String> {
+    for (i, block) in list.blocks.iter().enumerate() {
+        if block.clip.is_none() {
+            continue;
+        }
+        for (j, item) in block.items.iter().enumerate() {
+            if matches!(item, DisplayItem::Glyphs(_)) {
+                continue;
+            }
+            let e = item.extent();
+            let b = block.bounds;
+            let inside = e.x >= b.x - EPS
+                && e.y >= b.y - EPS
+                && e.max_x() <= b.max_x() + EPS
+                && e.max_y() <= b.max_y() + EPS;
+            if !inside {
+                return Err(format!(
+                    "{input} ({theme}): block {i} declares a clip and its non-glyph item {j}                      escapes `bounds`.
+  item   [{} {} {} {}]
+  bounds [{} {} {} {}]
+
+                     `mt-render` clips `Glyphs` and leaves everything else alone, on the                      grounds that chrome is inside `bounds` and so does not need clipping.                      This item falsifies that, which means either the item is misplaced or                      the renderer's rule has to become per-item rather than per-variant.",
+                    f2(e.x),
+                    f2(e.y),
+                    f2(e.width),
+                    f2(e.height),
+                    f2(b.x),
+                    f2(b.y),
+                    f2(b.width),
+                    f2(b.height),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Half a hundredth of a pixel — below what `f2` can print, so a violation this
+/// tolerance hides is one no golden could show.
+const EPS: f32 = 0.005;
+
 // ---------------------------------------------------------------------------
 // Serialization
 // ---------------------------------------------------------------------------
@@ -1145,6 +1209,33 @@ fn blocks_section(list: &DisplayList, detail: Detail, fonts: &Fonts) -> String {
         }
         if block.overflow_x != 0.0 {
             let _ = write!(out, " overflow={}", f2(block.overflow_x));
+        }
+        // **S4's two seam fields.** `clip=` is the rect a renderer cuts content
+        // at — the content box, not `bounds` — and appears only for a block
+        // that overflows. `paint=` appears only when it differs from `bounds`,
+        // which is the whole reason it exists: a block's items are not
+        // contained by it, and until S4 no golden said so. Printing it on
+        // difference keeps D10's property — a text diff names the block that
+        // moved — while making the excursion itself reviewable.
+        if let Some(clip) = block.clip {
+            let _ = write!(
+                out,
+                " clip=[{} {} {} {}]",
+                f2(clip.x),
+                f2(clip.y),
+                f2(clip.width),
+                f2(clip.height)
+            );
+        }
+        if block.paint_bounds != block.bounds {
+            let _ = write!(
+                out,
+                " paint=[{} {} {} {}]",
+                f2(block.paint_bounds.x),
+                f2(block.paint_bounds.y),
+                f2(block.paint_bounds.width),
+                f2(block.paint_bounds.height)
+            );
         }
         let _ = writeln!(out, " items={}", block.items.len());
 

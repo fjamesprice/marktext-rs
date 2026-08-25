@@ -1,4 +1,4 @@
-layout-golden v4
+layout-golden v5
 theme          muya-default
 theme-width    800.00
 content-width  700.00
@@ -32,7 +32,7 @@ count table          0
 count table.row      0
 count footnote       0
 
-block 0 atx-heading bounds=[0.00 0.00 700.00 42.00] items=1
+block 0 atx-heading bounds=[0.00 0.00 700.00 42.00] paint=[-9.00 0.00 709.00 42.00] items=1
   glyphs font=OpenSans-Bold size=30.00 fill=#333333ff rtl=0 text=0..22 origin=[-9.00 32.00] advance=334.22 n=22 seq=61308706
 block 1 paragraph bounds=[0.00 58.00 700.00 51.20] items=6
   glyphs font=OpenSans-Regular size=16.00 fill=#4d4d4dff rtl=0 text=0..17 origin=[0.00 76.00] advance=117.55 n=17 seq=f92fa7bc
