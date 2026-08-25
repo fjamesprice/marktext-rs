@@ -1,0 +1,57 @@
+render-golden v1
+parley         a0752c7bdc3ad88dac19fc194d2b8e57e59bea2e
+faces          ce47b2244a2ee54b2189d04641b5381824cfa80b6872d656931c5127437f7f58 rev 1
+level          Fallback(Fallback { fallback: Fallback { _private: () } })
+threads        0
+images         46
+
+# Every image is one block of one kind, cropped to that block's `paint_bounds` —
+# NOT to `bounds`, which would cut a list marker and half a table cell's borders.
+# The four whole-input images carry what a per-kind crop cannot show.
+
+50-code-fences.dark.png            50-code-fences.md    dark           whole      crop=[0.00 0.00 650.00 6754.91] bytes=409611 sha256=e80d34537b37e97a77b178e7d4d1bacfdbce5df2a407fa9a4773d2ec0a040afe
+50-code-fences.muya-default.png    50-code-fences.md    muya-default   whole      crop=[0.00 0.00 700.00 6823.03] bytes=352152 sha256=94ad00d7b4a2d3db361cd0aee0a3cf25eff1537e7eb15a8e296d332d8fefaab7
+atx-heading.dark.png               cjk.md               dark           block 2    crop=[-7.20 176.40 657.20 34.60] bytes=2692 sha256=8268a3e37e7bbf22ab1db7cf7a371c4156636bf1da0ab1138ac14919cf2e5cfe
+atx-heading.muya-default.png       cjk.md               muya-default   block 2    crop=[-7.20 176.40 707.20 34.60] bytes=2443 sha256=daaa99ea5af11c6eb668a2eff23093117825e0a6230b6e7c7b7abd4317574e03
+block-quote.dark.png               rtl.md               dark           block 13   crop=[0.00 441.60 650.00 25.60] bytes=232 sha256=76d05c7492ed2f20f8462aa9c49d3985457f47cf7054be0d1e2cd8b9247d3b9c
+block-quote.muya-default.png       rtl.md               muya-default   block 13   crop=[0.00 441.60 700.00 25.60] bytes=231 sha256=79dacd737a09d7649079790d0ca7d18cfba357c574afb1fbad6b8217b8df1c5d
+bullet-list.dark.png               cjk.md               dark           block 12   crop=[0.00 694.60 650.00 79.80] bytes=436 sha256=a7b48a5380109374af2275e7bec22067fcd82fe481bcd860b7d771b4503bbe4b
+bullet-list.muya-default.png       cjk.md               muya-default   block 12   crop=[0.00 694.60 700.00 79.80] bytes=463 sha256=e9bf192fd64fd58d681ba8d6048e7274d6c64ac306e0269b56826339922074bc
+cjk.dark.png                       cjk.md               dark           whole      crop=[0.00 0.00 650.00 1149.00] bytes=112789 sha256=3e864e103115b1c68d6c9b9373f596acecaf9c8b886d33bfec909782aa5c2540
+cjk.muya-default.png               cjk.md               muya-default   whole      crop=[0.00 0.00 700.00 1122.40] bytes=96923 sha256=dac0e5ebe6838c5e3505d14e92ec2826f4a65578a8d6d895f143b58cd3e5bc00
+code-block.dark.png                50-code-fences.md    dark           block 87   crop=[0.00 5557.28 650.00 74.88] bytes=5342 sha256=21fa140b76f2c1acd76f5847bded6e382d47506d2e1cabd90fdc556e69a7d029
+code-block.muya-default.png        50-code-fences.md    muya-default   block 87   crop=[0.00 5607.40 700.00 76.88] bytes=5001 sha256=c8b29f594f56630f86bb3fa8ef3316f6f8e4cd8d586217e4334a3af2732dcc08
+diagram.dark.png                   block-kinds.md       dark           block 9    crop=[0.00 743.12 650.00 97.92] bytes=5627 sha256=704db9c2cc95671b718689a8d1b7241a70f47757e87f11d0ccbab2328582da9e
+diagram.muya-default.png           block-kinds.md       muya-default   block 9    crop=[0.00 747.12 700.00 99.92] bytes=4673 sha256=ece1ede037c3b13e1a86878cc71f571e0fb3eb23d3f4a427fc794e4546098494
+emoji.dark.png                     emoji.md             dark           whole      crop=[0.00 0.00 650.00 1059.20] bytes=125890 sha256=fadae65e52c44e6ac7935c40703ead77c6637a84135a7b2863b2afb2e420b69a
+emoji.muya-default.png             emoji.md             muya-default   whole      crop=[0.00 0.00 700.00 1059.20] bytes=110134 sha256=9ac9efc1a2ab7bd3fbe18fcad80a0b30a038dba99dd3b2af0d2cc34b8834ac41
+footnote.dark.png                  block-kinds.md       dark           block 16   crop=[0.00 1410.32 650.00 49.28] bytes=1182 sha256=54fabbf26acea20c4af2f48be8e518be489933e49b66ed6770b6961771df41c2
+footnote.muya-default.png          block-kinds.md       muya-default   block 16   crop=[0.00 1424.32 700.00 49.28] bytes=1188 sha256=e1fc197ee3cc78060cc9166aa748cd687d7b88742b821d194a4d6f308720d83f
+frontmatter.dark.png               block-kinds.md       dark           block 0    crop=[0.00 0.00 650.00 97.92] bytes=6531 sha256=26adbb23a3bba85ecec230601685c2c9a4b6364dfd750c597ce1f47b7cedab95
+frontmatter.muya-default.png       block-kinds.md       muya-default   block 0    crop=[0.00 0.00 700.00 99.92] bytes=5942 sha256=0adf0599db35031f5a37cd96932845354e374adeb00fe0e2dbf8726f27a8fe7c
+html-block.dark.png                block-kinds.md       dark           block 5    crop=[0.00 395.12 699.29 144.00] bytes=22633 sha256=0f57f93f5013bbedc273a4473124501a1d87750d399298d6e56b339bbbd03702
+html-block.muya-default.png        block-kinds.md       muya-default   block 5    crop=[0.00 397.12 700.29 146.00] bytes=20165 sha256=1fd4f899523ff081e2beefc26ab6189b95a0c27ca1e4514eeb9ad7fc6e4ef44f
+list-item.dark.png                 cjk.md               dark           block 13   crop=[16.40 694.60 633.60 26.60] bytes=340 sha256=1ba7764bbadc5a43837f56f1baf99d86fdb412cc3fe14e4cbb6bb1da8c1af9a7
+list-item.muya-default.png         cjk.md               muya-default   block 13   crop=[16.40 694.60 683.60 26.60] bytes=334 sha256=dbb45b50e916d479a97dc68de6b20c2c9ece469141a55477d4d0fd7bd5b8b36b
+math-block.dark.png                100-inline-math.md   dark           block 2    crop=[0.00 130.80 650.00 51.84] bytes=6281 sha256=eed773e605cc3e3325b634557ede015a144288d277ba9210368575781231fcd1
+math-block.muya-default.png        100-inline-math.md   muya-default   block 2    crop=[0.00 130.80 700.00 53.84] bytes=4912 sha256=4548db9105283cff7d93c40ddef2315da1337834bc90b956c6c7815ec8ee948d
+order-list.dark.png                10kb.md              dark           block 12   crop=[0.00 1117.44 650.00 460.80] bytes=2103 sha256=ac36cce272e6bbf3dc206dcc2571b2ea8fc189b1afcac92cd265c16816cebef1
+order-list.muya-default.png        10kb.md              muya-default   block 12   crop=[0.00 1068.24 700.00 460.80] bytes=2273 sha256=e15eb31aa837f103316f5141475e9e88be1506821a5c2a19310b0399efff7599
+paragraph.dark.png                 cjk.md               dark           block 1    crop=[0.00 58.00 650.00 102.40] bytes=26730 sha256=30c75e7bf9d12b5cb17e7c278513672faec738393fe8da2bd4b054cda26da22d
+paragraph.muya-default.png         cjk.md               muya-default   block 1    crop=[0.00 58.00 700.00 102.40] bytes=22277 sha256=e4f75769ec2336e6bd272c9c2f0fe41daa4cbb003e5eda43996acf0b5ce04e38
+rtl.dark.png                       rtl.md               dark           whole      crop=[0.00 0.00 650.00 1042.80] bytes=107878 sha256=768e7807392a4685c0ca01275f8785455c2ded089345753b32594d370156263e
+rtl.muya-default.png               rtl.md               muya-default   whole      crop=[0.00 0.00 700.00 1042.80] bytes=95099 sha256=b9e4a299ded96fe63bb94392e82e996a41366167741883ac0c3c187d4169e50d
+setext-heading.dark.png            block-kinds.md       dark           block 1    crop=[0.00 113.92 650.00 42.00] bytes=6567 sha256=d51206cabf798bbd6b6dd094e835b7bc6119e0f4c918000eef133925ac05e5ba
+setext-heading.muya-default.png    block-kinds.md       muya-default   block 1    crop=[0.00 115.92 700.00 42.00] bytes=5740 sha256=c739f8c175e508ef5eb3d2ff6c177cb0ede481a066422c5743fa9fa5f0aa9ec0
+table.cell.dark.png                cjk.md               dark           block 23   crop=[0.00 917.20 59.00 39.60] bytes=680 sha256=98f1d4654c5e28d282921142725c495f77a74c7ffc23269729ede4b93d198489
+table.cell.muya-default.png        cjk.md               muya-default   block 23   crop=[0.00 890.60 59.00 39.60] bytes=650 sha256=48524448793ecc682bef08a8c2a05b8474b6725fa239f429b793686e83f49df2
+table.dark.png                     cjk.md               dark           block 21   crop=[0.00 901.20 650.00 147.80] bytes=734 sha256=fbda9ec14b6656ad5ea4711489280f8f31dbbbbb7ad6b7718e3939a12e0b97c2
+table.muya-default.png             cjk.md               muya-default   block 21   crop=[0.00 874.60 700.00 147.80] bytes=786 sha256=569b3a1bf5a91eab4c1d02b8b82e1708d5028932d5d92f3f4ad6b001be8943e8
+table.row.dark.png                 cjk.md               dark           block 22   crop=[0.00 917.20 202.16 38.60] bytes=184 sha256=6b7923e223c87e2f21bc07be82307ed7100549d4bd7f039cba3731656df93aec
+table.row.muya-default.png         cjk.md               muya-default   block 22   crop=[0.00 890.60 202.16 38.60] bytes=182 sha256=a0ff33b4f8f4b966fd58745965871c5f65a26b621db4876dd13d75037ee80d20
+task-list-item.dark.png            10kb.md              dark           block 38   crop=[5.00 1586.24 645.00 25.60] bytes=763 sha256=442338fed8a5f12d0c99879f080b7f14b54cbe87cb1482b1c3001e5a88ca9c04
+task-list-item.muya-default.png    10kb.md              muya-default   block 38   crop=[5.00 1537.04 695.00 25.60] bytes=794 sha256=2e865f96f8cd08622bd0e3ecfc7d9ea2cc0e28ff1f6cb265d06513454ec83cee
+task-list.dark.png                 10kb.md              dark           block 37   crop=[0.00 1586.24 650.00 76.80] bytes=423 sha256=3bb49f812683b179734c2845b0b6a9dca3d886a95c4c1bca84345e54dde24c31
+task-list.muya-default.png         10kb.md              muya-default   block 37   crop=[0.00 1537.04 700.00 76.80] bytes=449 sha256=42d42ce36fe0b80e936d2867afa1e9dde12073cbc92449f8bab6146f3effe33f
+thematic-break.dark.png            10kb.md              dark           block 65   crop=[-1.00 2079.04 652.00 25.60] bytes=277 sha256=cbc627c82186981fdb1625425497cf8412b72fcbbd4a88eaebaa708d0e213a05
+thematic-break.muya-default.png    10kb.md              muya-default   block 65   crop=[-1.00 2029.84 702.00 25.60] bytes=276 sha256=d821218052cb295d6dba1f46236e64dcc31bf4ab66a7bd7c3a5678da42860e52

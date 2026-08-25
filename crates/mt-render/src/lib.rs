@@ -194,7 +194,7 @@ pub mod cull;
 pub mod fonts;
 
 pub use backend::{Frame, FrameStats, Pixels, RenderError, Renderer};
-pub use cpu::{NUM_THREADS, VelloCpuRenderer};
+pub use cpu::{NUM_THREADS, RENDER_LEVEL, VelloCpuRenderer};
 pub use cull::{intersects, is_visible_in};
 pub use fonts::FontTable;
 

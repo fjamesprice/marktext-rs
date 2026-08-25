@@ -695,7 +695,7 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
     Ok(1)
 }
 
-fn file_name(path: &Path) -> String {
+pub(crate) fn file_name(path: &Path) -> String {
     path.file_name()
         .unwrap_or_default()
         .to_string_lossy()
@@ -727,11 +727,11 @@ fn file_name(path: &Path) -> String {
 /// mode is exactly two orderings that drifted.
 pub(crate) struct Provenance {
     /// The exact commit `Cargo.lock` resolved parley to.
-    parley_rev: String,
+    pub(crate) parley_rev: String,
     /// SHA-256 of `assets/fonts/faces.toml`, CRLF-normalised.
-    faces_sha256: String,
+    pub(crate) faces_sha256: String,
     /// `[meta] revision` from the face list.
-    faces_revision: u32,
+    pub(crate) faces_revision: u32,
     /// The parsed face list, so the collection builder does not re-read it.
     pub(crate) face_list: mt_layout::FaceList,
 }
@@ -988,6 +988,44 @@ fn assert_corpus_fully_covered(
 /// Fails rather than warns, and before any golden is compared, for the tofu
 /// check's reason: a wrongly clipped border makes a perfectly valid-looking
 /// golden.
+/// D16's font table, built from the same face list the collection was, and
+/// **asserted equal to it index by index**.
+///
+/// # Why this is an assertion and not a construction
+///
+/// `mt-render` indexes a `FontId` straight into a `Vec` and never names a blob,
+/// so a table one entry out of step draws a **perfectly well-formed image with
+/// the wrong faces in it** — no error, no tofu, no clue in the output. There is
+/// nothing downstream that can catch it, which is why it is caught here.
+///
+/// This was `frames.rs`'s loop, inline. S4's cross-check asked whether the
+/// obligation D16's docs put on the shell existed anywhere, concluded it did
+/// not, and was wrong — it existed once, in the one command that renders. It is
+/// lifted here so that the second such command inherits it rather than
+/// reproducing it, which is the only reliable way for a third to have it too.
+pub(crate) fn build_font_table(
+    repo_root: &Path,
+    provenance: &Provenance,
+    fonts: &Fonts,
+) -> Result<mt_render::FontTable, String> {
+    let font_dir = repo_root.join("assets").join("fonts");
+    let mut table = mt_render::FontTable::new();
+    for face in &provenance.face_list.faces {
+        let bytes = std::fs::read(font_dir.join(&face.file))
+            .map_err(|e| format!("cannot read {}: {e}", face.file))?;
+        let id = table.push(mt_render::FontData::new(bytes.into(), 0));
+        if fonts.file_name(id) != Some(face.file.as_str()) {
+            return Err(format!(
+                "D16: the font table and the Fonts collection have drifted at {id}"
+            ));
+        }
+    }
+    if table.len() != fonts.len() {
+        return Err("D16: the table must be exactly as long as the collection".into());
+    }
+    Ok(table)
+}
+
 fn only_glyphs_leave_the_content_box(
     list: &DisplayList,
     input: &str,

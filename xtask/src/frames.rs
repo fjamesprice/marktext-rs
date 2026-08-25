@@ -132,7 +132,9 @@ use std::time::Instant;
 use mt_layout::{Brush, Rect, TextShaper, Theme, layout_with};
 use mt_render::{Frame, Pixels, Renderer};
 
-use crate::layout::{Provenance, build_collection, layout_options, parse_options, themes};
+use crate::layout::{
+    Provenance, build_collection, build_font_table, layout_options, parse_options, themes,
+};
 
 // ---------------------------------------------------------------------------
 // Defaults, and each one is a choice that has to be defensible
@@ -285,21 +287,7 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
     // frame time over a different document.
     let provenance = Provenance::read(repo_root)?;
     let mut fonts = build_collection(repo_root, &provenance)?;
-    let font_dir = repo_root.join("assets").join("fonts");
-    let mut table = mt_render::FontTable::new();
-    for face in &provenance.face_list.faces {
-        let bytes = std::fs::read(font_dir.join(&face.file))
-            .map_err(|e| format!("cannot read {}: {e}", face.file))?;
-        let id = table.push(mt_render::FontData::new(bytes.into(), 0));
-        if fonts.file_name(id) != Some(face.file.as_str()) {
-            return Err(format!(
-                "D16: the font table and the Fonts collection have drifted at {id}"
-            ));
-        }
-    }
-    if table.len() != fonts.len() {
-        return Err("D16: the table must be exactly as long as the collection".into());
-    }
+    let table = build_font_table(repo_root, &provenance, &fonts)?;
 
     let theme: Theme = themes()
         .into_iter()

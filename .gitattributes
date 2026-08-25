@@ -21,3 +21,10 @@ bench/corpus/*.md linguist-generated=true -diff
 # a legible diff. `-diff` because a binary diff in a review is noise.
 assets/fonts/*.ttf binary
 assets/fonts/*.otf binary
+
+# D19's pixel goldens. `text=auto` above already detects these as binary, so
+# this is belt-and-braces of the same kind the font faces get — and for a
+# sharper reason: these are compared on **exact byte equality**, so a single
+# byte rewritten on checkout would fail every image at once, on one platform
+# only, and look exactly like the platform divergence D19 exists to measure.
+bench/render-goldens/*.png binary

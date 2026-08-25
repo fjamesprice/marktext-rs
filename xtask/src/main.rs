@@ -35,6 +35,7 @@ mod highlight;
 mod html;
 mod layout;
 mod normalize;
+mod render;
 mod tokens;
 
 use std::path::{Path, PathBuf};
@@ -115,6 +116,18 @@ COMMANDS:
         --measure          Print the would-be full serialization size of every
                            input at both themes. This is the measurement the
                            three digest goldens were cut from.
+    render [OPTIONS]     Rasterize one block of every BlockKind at both themes,
+                         plus four whole inputs, and compare the PNGs against
+                         bench/render-goldens/ on EXACT byte equality
+                         (docs/M3.md §5 D19). Each per-kind image is cropped to
+                         the block's paint_bounds — not its bounds, which would
+                         cut a list marker and half a table cell's borders.
+        --update           Rewrite the images and MANIFEST.txt. The SOLE
+                           writer. These are pixels: read the manifest diff
+                           first.
+        --only <SUBSTR>    Only images whose file name contains SUBSTR.
+        --verbose          Name every image checked, not only the ones that
+                           differ, and every input skipped.
     frames [OPTIONS]     Time one scroll frame — D18's cull plus the encode
                          plus vello_cpu's render_with — over a display list
                          laid out once and reused, at scroll offsets sampled
@@ -176,6 +189,7 @@ fn main() {
         "normalize" => normalize::main(&root, rest),
         "corpus" => corpus::main(&root, rest),
         "layout" => layout::main(&root, rest),
+        "render" => render::main(&root, rest),
         "frames" => frames::main(&root, rest),
         "grammars" => grammars::main(&root, rest),
         "highlight" => highlight::main(&root, rest),
@@ -234,6 +248,15 @@ fn ci(root: &Path, rest: &[String]) -> Result<i32, String> {
         // early means the expensive step is the second thing that reports,
         // rather than the thing everyone waits for at the end.
         ("layout", Box::new(|| layout::main(root, &[]))),
+        // Immediately after `layout`, because it is the same walk one layer
+        // down: the display lists `layout` just proved byte-identical are the
+        // input to these pixels, so a geometry drift is reported by the step
+        // that can *name the block* before this one reports it as an image that
+        // differs. D19's "per platform" is exactly this slot — one `test` job,
+        // three OSes, `fail-fast: false` — so a `render` step here gets
+        // Windows, macOS and Linux coverage with no new job and no new runner
+        // class, which is the whole of what that clause can mean under D1.
+        ("render", Box::new(|| render::main(root, &[]))),
         // Immediately after `layout`, and before the three engine-backed
         // harnesses, for two reasons that pull the same way.
         //
