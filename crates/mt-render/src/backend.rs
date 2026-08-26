@@ -24,6 +24,8 @@
 //! measurement of the allocator. The caller keeps one [`Pixels`] and hands it
 //! back every frame.
 
+use std::io;
+
 use mt_layout::{DisplayList, FontId, Rect};
 
 // ---------------------------------------------------------------------------
@@ -174,6 +176,36 @@ impl Pixels {
         vello_cpu::Pixmap::from_parts(data, self.width, self.height)
             .into_png()
             .map_err(|e| e.to_string())
+    }
+
+    /// Decode a PNG produced by [`to_png`](Pixels::to_png) back into pixels.
+    ///
+    /// The inverse of `to_png`, and it exists for one caller: `cargo xtask
+    /// render`, which has to say *how far apart* two goldens are once they
+    /// stop being equal. A byte comparison answers `"not equal"` and nothing
+    /// else, and D19's escape hatch is specified in per-channel deltas — a
+    /// number that cannot be computed without decoding both sides.
+    ///
+    /// **This decodes; it does not compare loosely.** The goldens stay
+    /// byte-exact; this runs only after an exact comparison has already
+    /// failed, so that the divergence D19 asks to have *recorded* can be
+    /// recorded as a measurement rather than as an adjective.
+    ///
+    /// No new dependency: `png` is a default feature of `vello_cpu` 0.2.0, so
+    /// `Pixmap::from_png` is already in this crate's graph.
+    pub fn from_png(bytes: &[u8]) -> Result<Pixels, String> {
+        let pixmap =
+            vello_cpu::Pixmap::from_png(io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
+        let (width, height) = (pixmap.width(), pixmap.height());
+        let mut data = Vec::with_capacity(Self::byte_len(width, height));
+        for p in pixmap.data() {
+            data.extend_from_slice(&[p.r, p.g, p.b, p.a]);
+        }
+        Ok(Pixels {
+            width,
+            height,
+            data,
+        })
     }
 
     /// Whether every pixel is fully transparent.

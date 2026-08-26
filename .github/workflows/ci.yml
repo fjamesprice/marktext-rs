@@ -133,7 +133,7 @@ jobs:
         # changes what the conformance ratchet measures.
         run: node tools/vendor-commonmark-spec.mjs --check --marktext marktext
 
-      - name: xtask CI (deps, corpus, layout, highlight, divergences, conformance §11.1, differential §11.2)
+      - name: xtask CI (deps, corpus, layout, render, highlight, divergences, conformance §11.1, differential §11.2)
         env:
           MARKTEXT_DIR: ${{ github.workspace }}/marktext
         # --require-ts turns a missing reference engine into a hard failure

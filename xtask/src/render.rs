@@ -183,21 +183,31 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
         )
     });
 
+    // Which inputs the skip below passed over, so the `blank` line can name
+    // them. A blank golden and an unexamined input are different claims.
+    let mut skipped: Vec<String> = Vec::new();
+
     for theme in themes() {
         let background = Brush::resolve(theme.colors.editor_bg, Brush::default());
         for path in &ordered {
             let name = crate::layout::file_name(path);
             let is_whole = WHOLE_INPUTS.iter().any(|(f, _)| *f == name);
 
-            // Every kind already has an image in this theme and this input owes
-            // no whole-document one, so there is nothing here to find. Skipping
+            // Every kind has been *seen* in this theme and this input owes no
+            // whole-document one, so there is nothing here to find. Skipping
             // the layout is what keeps `5mb.md` out of a command that needs one
-            // block from it.
+            // block from it, and it earns its place: the three large inputs are
+            // the whole cost of this command.
+            //
+            // **The condition is `seen_kinds`, and `seen_kinds` counts blank
+            // fallbacks too** — see the selection rule below, which says what
+            // that costs.
             if !is_whole
                 && BlockKind::ALL.iter().all(|k| {
                     seen_kinds.contains_key(&(k.name().to_string(), theme.name.to_string()))
                 })
             {
+                skipped.push(format!("{name} ({})", theme.name));
                 if opts.verbose {
                     println!(
                         "skip    {name} ({}) — every kind already covered",
@@ -255,6 +265,25 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
             // to its first instance, and the run says out loud which kinds
             // ended up there rather than letting a blank image pass as
             // evidence.
+            //
+            // **The rule this actually implements is narrower than the
+            // paragraph above, and the difference is worth stating.**
+            // `seen_kinds` is inserted for the fallback branch as well as the
+            // painting one, and the skip above fires once every kind has been
+            // *seen*. So the true rule is *"a kind that never finds a painting
+            // block **in the inputs walked before every kind was seen** falls
+            // back to its first instance"* — the walk can stop while a richer
+            // instance is still ahead of it.
+            //
+            // **Inert over today's corpus, and the number is the reason:** all
+            // 406 blocks of the five container kinds across the 24 layout
+            // goldens carry `items=0`, so there is no painting container
+            // anywhere for the skip to hide. It stays a hazard rather than a
+            // defect because the day a container *does* start painting — which
+            // is exactly the change the ten blank goldens exist to catch — the
+            // instrument could report the absence of the thing it was built to
+            // detect. The `blank` line therefore names the inputs that were
+            // never walked, so the claim is checkable rather than assumed.
             for kind in BlockKind::ALL {
                 let key = (kind.name().to_string(), theme.name.to_string());
                 if chosen.contains_key(&key) {
@@ -296,6 +325,14 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
             blank.join(", ")
         );
         println!("        Expected for containers. A leaf kind in this list is a finding.");
+        if !skipped.is_empty() {
+            skipped.sort();
+            skipped.dedup();
+            println!(
+                "        Not walked (every kind already seen): {}",
+                skipped.join(", ")
+            );
+        }
     }
 
     // Rendering is deferred to here so that a block discarded by a later,
@@ -343,6 +380,20 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
     }
 
     images.sort_by(|a, b| a.name.cmp(&b.name));
+
+    // Built from the **unfiltered** set, deliberately before `--only` narrows
+    // it. `manifest_text` is a function of the whole list — it emits `images
+    // {n}` and one row per image — so building it after the filter has two
+    // consequences and both are bugs: `--only <x> --update` overwrites
+    // `MANIFEST.txt` with a manifest describing only the images that matched,
+    // silently discarding the provenance of the other 42; and `--only` in check
+    // mode can never pass, because the filtered manifest never equals the
+    // committed one. `layout.rs:633` guards its whole-set reporting behind
+    // `only.is_none()` for exactly this reason. Nothing is skipped by the
+    // filter anyway — every image is already rasterized above — so the full
+    // manifest is always available to build here.
+    let manifest = manifest_text(&provenance, &images);
+
     if let Some(sub) = &opts.only {
         images.retain(|i| i.name.contains(sub.as_str()));
         println!("only    {} image(s) matching {sub:?}", images.len());
@@ -354,7 +405,6 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
             .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
 
-    let manifest = manifest_text(&provenance, &images);
     let mut drifted: Vec<String> = Vec::new();
     let mut written = 0usize;
 
@@ -393,6 +443,9 @@ pub fn main(repo_root: &Path, args: &[String]) -> Result<i32, String> {
                         bytes.len(),
                         image.png.len()
                     );
+                    for line in describe_divergence(&bytes, &image.png) {
+                        println!("        {line}");
+                    }
                     drifted.push(image.name.clone());
                 }
                 Some(_) => {
@@ -492,8 +545,25 @@ fn render_crop(
     crop: mt_layout::Rect,
     background: Brush,
 ) -> Result<Vec<u8>, String> {
-    let w = crop.width.ceil().max(1.0);
-    let h = crop.height.ceil().max(1.0);
+    // The **lower** bound gets the same treatment as the upper one below, and
+    // for the same reason the upper one gives. `.max(1.0)` would turn a
+    // zero-area, negative or NaN `paint_bounds` into a 1x1 PNG that compares
+    // equal to itself forever — a golden that has quietly stopped testing
+    // anything. The asymmetry was the finding: one line refused a silent cap
+    // and the line above it took one.
+    //
+    // Unreachable over today's corpus — all 46 committed crops have positive
+    // area, and the narrowest display list in the corpus (`empty.md`, one
+    // paragraph at 650.00 x 25.60) is not close. The first block that trips
+    // this is a finding about `paint_bounds`, not a size to round up.
+    if crop.width.is_nan() || crop.height.is_nan() || crop.width <= 0.0 || crop.height <= 0.0 {
+        return Err(format!(
+            "crop {}x{} has no positive area; a sub-pixel, negative or NaN              paint_bounds would raster as a 1x1 image that compares equal to              itself forever, and that is a finding about the display list              rather than a number to round up",
+            crop.width, crop.height
+        ));
+    }
+    let w = crop.width.ceil();
+    let h = crop.height.ceil();
     if w > f32::from(u16::MAX) || h > f32::from(u16::MAX) {
         return Err(format!(
             "crop {w}×{h} exceeds a u16 target; no corpus block does this today, \
@@ -509,6 +579,84 @@ fn render_crop(
         .render(list, &frame, &mut target)
         .map_err(|e| format!("render: {e}"))?;
     target.to_png()
+}
+
+/// How far apart two encoded PNGs are, in pixels and per channel.
+///
+/// `DIFFERS` on its own reports *"not equal"*, and that is precisely the number
+/// D19 refuses to let a threshold be built on: *"a threshold written before the
+/// first divergence is a threshold that will absorb it."* A divergence nobody
+/// has measured is a divergence nobody can argue about, and the decision
+/// requires the first one to be **recorded in `docs/M3.md`** before anything
+/// loosens. This is what makes that record a measurement instead of an
+/// adjective.
+///
+/// **It loosens nothing.** The comparison above stays byte-exact and still
+/// fails; this runs only after it has. The reporting shape is the one
+/// `report_drift` established (`layout.rs:1438-1464`): the count, the worst
+/// case, and the first offenders by position.
+fn describe_divergence(golden: &[u8], measured: &[u8]) -> Vec<String> {
+    /// Enough offenders to see whether a divergence is localized or spread,
+    /// and few enough that a red CI log stays readable.
+    const FIRST_N: usize = 4;
+
+    let (a, b) = match (Pixels::from_png(golden), Pixels::from_png(measured)) {
+        (Ok(a), Ok(b)) => (a, b),
+        _ => return vec!["could not decode both PNGs, so no delta is reported".to_string()],
+    };
+    if a.width() != b.width() || a.height() != b.height() {
+        return vec![format!(
+            "dimensions differ: golden {}x{}, measured {}x{}              — that is a geometry change, not a raster one",
+            a.width(),
+            a.height(),
+            b.width(),
+            b.height()
+        )];
+    }
+
+    let (ga, gb) = (a.data(), b.data());
+    let total = ga.len() / 4;
+    let mut differing = 0usize;
+    let mut max_delta = 0u8;
+    let mut worst = (0u16, 0u16);
+    let mut first: Vec<String> = Vec::new();
+
+    for i in 0..total {
+        let (pa, pb) = (&ga[i * 4..i * 4 + 4], &gb[i * 4..i * 4 + 4]);
+        if pa == pb {
+            continue;
+        }
+        differing += 1;
+        let delta = (0..4).map(|c| pa[c].abs_diff(pb[c])).max().unwrap_or(0);
+        let x = (i % usize::from(a.width())) as u16;
+        let y = (i / usize::from(a.width())) as u16;
+        if delta > max_delta {
+            max_delta = delta;
+            worst = (x, y);
+        }
+        if first.len() < FIRST_N {
+            first.push(format!(
+                "({x},{y}) {:02x}{:02x}{:02x}{:02x} -> {:02x}{:02x}{:02x}{:02x}",
+                pa[0], pa[1], pa[2], pa[3], pb[0], pb[1], pb[2], pb[3]
+            ));
+        }
+    }
+
+    if differing == 0 {
+        // Same pixels, different bytes: the encoder changed, not the raster.
+        return vec![
+            "every pixel is identical — the PNG encoding differs, not the image".to_string(),
+        ];
+    }
+
+    let pct = 100.0 * differing as f64 / total as f64;
+    vec![
+        format!(
+            "{differing} of {total} px differ ({pct:.4}%), max per-channel delta {max_delta} at {:?}",
+            worst
+        ),
+        format!("first {}: {}", first.len(), first.join("  ")),
+    ]
 }
 
 fn manifest_text(provenance: &Provenance, images: &[Image]) -> String {
@@ -566,4 +714,85 @@ fn manifest_text(provenance: &Provenance, images: &[Image]) -> String {
 /// can be compared to a `bounds=` there by eye.
 fn f2(v: f32) -> String {
     format!("{v:.2}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn root() -> std::path::PathBuf {
+        crate::repo_root()
+    }
+
+    /// Every kind and every whole input has exactly two images, and no image is
+    /// orphaned.
+    ///
+    /// **The direction that was missing.** The `missing` check above
+    /// (`BlockKind::ALL` x `themes()`) is exhaustive in the direction of *too
+    /// few produced* — it errors if the walk fails to claim a kind. Nothing was
+    /// exhaustive in the other direction: the compare loop iterates the images
+    /// the run *measured* and opens each expected path, so a PNG sitting in
+    /// `bench/render-goldens/` that the run no longer produces is never opened,
+    /// never named and never failed on. Rename a `BlockKind`, or drop one, and
+    /// the stale image stays in the tree while CI reports green over a smaller
+    /// set — which is the same failure the `missing` check's own comment calls
+    /// *"the failure mode D19 was written to avoid"*, arriving from the side it
+    /// did not guard.
+    ///
+    /// `MANIFEST.txt` narrows the blast radius (it carries `images 46` and is
+    /// compared exactly), but it is regenerated from the same vector, so it
+    /// inherits the same blind spot for a file that exists only on disk.
+    ///
+    /// This is `layout.rs`'s `the_committed_goldens_are_exactly_one_per_input_per_theme`
+    /// ported to the image set, and it is the first test this module has had.
+    #[test]
+    fn the_committed_images_are_exactly_one_per_kind_and_whole_input_per_theme() {
+        let mut expected: Vec<String> = Vec::new();
+        for theme in themes() {
+            for kind in BlockKind::ALL {
+                expected.push(format!("{}.{}.png", kind.name(), theme.name));
+            }
+            for (input, _why) in WHOLE_INPUTS {
+                expected.push(format!(
+                    "{}.{}.png",
+                    input.trim_end_matches(".md"),
+                    theme.name
+                ));
+            }
+        }
+        expected.sort();
+
+        let dir = root().join(GOLDEN_DIR);
+        let mut found: Vec<String> = std::fs::read_dir(&dir)
+            .expect("bench/render-goldens exists")
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".png"))
+            .collect();
+        found.sort();
+        assert_eq!(found, expected);
+    }
+
+    /// The count the gate reports is the count the set actually has.
+    ///
+    /// 19 kinds x 2 themes + 4 whole inputs x 2 themes = 46. Written as the
+    /// arithmetic rather than as `46` so that adding a `BlockKind` moves it.
+    #[test]
+    fn the_image_count_is_the_arithmetic_and_not_a_number_in_prose() {
+        let expected = (BlockKind::ALL.len() + WHOLE_INPUTS.len()) * themes().len();
+        let dir = root().join(GOLDEN_DIR);
+        let found = std::fs::read_dir(&dir)
+            .expect("bench/render-goldens exists")
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".png"))
+            .count();
+        assert_eq!(
+            found,
+            expected,
+            "{} kinds, {} whole inputs, {} themes",
+            BlockKind::ALL.len(),
+            WHOLE_INPUTS.len(),
+            themes().len()
+        );
+    }
 }
