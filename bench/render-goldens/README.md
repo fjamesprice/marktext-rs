@@ -85,3 +85,26 @@ it.*
 The rasterizer's SIMD level is pinned (`mt_render::RENDER_LEVEL`) and threads
 are fixed at 0, so a same-architecture divergence is not expected and would
 itself be the finding.
+
+## One divergence is already known, and `macos-latest` is red because of it
+
+**Do not re-investigate this and do not `--update` to make it go away.**
+
+`cjk.dark.png` and `cjk.muya-default.png` differ on `macos-latest` and match on
+`windows-latest` and `ubuntu-latest`. The cause is architecture, not OS:
+`Level::baseline()` is `const` but per-architecture, so aarch64 rasterizes with
+`Neon` and x86-64 with `Fallback`. `MANIFEST.txt` differs alongside them because
+it faithfully records that level.
+
+The size of it, from CI run 32928851139:
+
+```
+1 of 746850 px differ (0.0001%), max per-channel delta 1 at (350, 279)
+1 of 786100 px differ (0.0001%), max per-channel delta 1 at (350, 279)
+```
+
+**Two pixels, same coordinate in both themes, each off by one part in 255** — on
+the edge of a Latin glyph in `OpenSans-Regular`, not a CJK one. All 24 layout
+goldens match on all three runners, so no geometry is involved. The full record,
+including why no tolerance was written and the three remedies that were
+considered, is S4's close in `docs/M3.md`.
